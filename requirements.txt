@@ -5,3 +5,4 @@ matplotlib
 ccxt
 finance-datareader
 scikit-learn
+tensorflow
