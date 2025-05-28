@@ -2,5 +2,6 @@ streamlit
 pandas
 numpy
 matplotlib
-FinanceDataReader
 ccxt
+finance-datareader
+scikit-learn
