@@ -29,11 +29,51 @@ per_pbr_file_path = os.path.join(root_dir, 'merged_data_monthly_per_pbr.csv')
 try:
     # 수정된 경로를 사용하여 파일을 읽습니다.
     df_fundamental = pd.read_csv(per_pbr_file_path) # <-- 여기에 per_pbr_file_path를 사용합니다.
+     # ↓↓↓↓↓↓ 여기에 디버깅 코드 추가 ↓↓↓↓↓↓
+    st.subheader("🛠️ 데이터 로드 디버깅 정보")
+
+    # 1. 파일이 로드되었는지 확인 (비어있는지 여부)
+    if df_fundamental.empty:
+        st.warning("경고: 불러온 데이터프레임이 비어있습니다. CSV 파일을 확인해주세요!")
+    else:
+        st.success(f"데이터프레임이 성공적으로 로드되었습니다. 총 {len(df_fundamental)}개의 행이 있습니다.")
+
+    # 2. 데이터프레임의 컬럼 확인
+    st.write("데이터프레임 컬럼:")
+    st.dataframe(df_fundamental.columns.to_frame(), use_container_width=True) # 컬럼 목록을 데이터프레임으로 보여주기
+
+    # 3. 'PER'과 'PBR' 컬럼의 존재 여부 확인
+    has_per = 'PER' in df_fundamental.columns
+    has_pbr = 'PBR' in df_fundamental.columns
+
+    if not has_per:
+        st.error("🚨 'PER' 컬럼을 찾을 수 없습니다. 원본 CSV 파일이나 데이터 수집 로직을 확인하세요.")
+    else:
+        st.info("✅ 'PER' 컬럼이 존재합니다.")
+
+    if not has_pbr:
+        st.error("🚨 'PBR' 컬럼을 찾을 수 없습니다. 원본 CSV 파일이나 데이터 수집 로직을 확인하세요.")
+    else:
+        st.info("✅ 'PBR' 컬럼이 존재합니다.")
+
+    # 4. 데이터프레임의 상위 5행과 주요 컬럼 정보 확인
+    st.write("데이터프레임 상위 5행 (head):")
+    st.dataframe(df_fundamental.head())
+
+    st.write("데이터프레임 정보 (info):")
+    # Streamlit에서 st.text로 df.info() 결과를 출력하기 위해 StringIO 사용
+    import io
+    buffer = io.StringIO()
+    df_fundamental.info(buf=buffer)
+    st.text(buffer.getvalue())
+
+    st.markdown("---") # 디버깅 정보와 본문 분리
+    
     df_fundamental['Date'] = pd.to_datetime(df_fundamental['Date'])
     df_fundamental = df_fundamental.dropna(subset=['PER', 'PBR', 'Close'])
     # 성공 메시지에도 수정된 경로를 사용하도록 변경합니다.
     st.success(f"✅ PER/PBR 데이터를 성공적으로 불러왔습니다. (파일: {per_pbr_file_path})")
-
+    
     # 날짜 선택
     min_date_data = df_fundamental['Date'].min().date()
     max_date_data = df_fundamental['Date'].max().date()
