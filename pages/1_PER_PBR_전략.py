@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
+import os
 
 st.set_page_config(layout="wide")
 st.title("📊 PER / PBR 기반 수익률 분석")
@@ -12,14 +13,26 @@ st.markdown("특정 PER/PBR 범위에 해당하는 종목들의 과거 수익률
 # 함수 정의 (필요한 경우 여기에 배치, 또는 utils.py 등으로 분리 가능)
 # 현재 코드에서는 파일 내에 직접 포함
 # --------------------------------------------
+# per_pbr_file = 'merged_data_monthly_per_pbr.csv' # 이 파일은 streamlit_test 폴더에 있어야 함
 
-per_pbr_file = 'merged_data_monthly_per_pbr.csv' # 이 파일은 streamlit_test 폴더에 있어야 함
+# 현재 스크립트 파일(1_PER_PBR_전략.py)의 디렉토리 경로를 가져옵니다.
+current_dir = os.path.dirname(__file__)
+
+# 현재 디렉토리에서 상위 디렉토리(stock/ 루트 폴더)로 이동합니다.
+# '..'는 상위 디렉토리를 의미합니다.
+root_dir = os.path.join(current_dir, '..')
+
+# 루트 디렉토리 안에 있는 CSV 파일의 전체 경로를 만듭니다.
+per_pbr_file_path = os.path.join(root_dir, 'merged_data_monthly_per_pbr.csv')
+# --------------------------------------------
 
 try:
-    df_fundamental = pd.read_csv(per_pbr_file)
+    # 수정된 경로를 사용하여 파일을 읽습니다.
+    df_fundamental = pd.read_csv(per_pbr_file_path) # <-- 여기에 per_pbr_file_path를 사용합니다.
     df_fundamental['Date'] = pd.to_datetime(df_fundamental['Date'])
     df_fundamental = df_fundamental.dropna(subset=['PER', 'PBR', 'Close'])
-    st.success(f"✅ PER/PBR 데이터를 성공적으로 불러왔습니다. (파일: {per_pbr_file})")
+    # 성공 메시지에도 수정된 경로를 사용하도록 변경합니다.
+    st.success(f"✅ PER/PBR 데이터를 성공적으로 불러왔습니다. (파일: {per_pbr_file_path})")
 
     # 날짜 선택
     min_date_data = df_fundamental['Date'].min().date()
