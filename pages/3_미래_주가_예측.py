@@ -100,12 +100,25 @@ def train_and_predict_model(X_train, y_train, X_test, y_test, seq_len, n_feature
 @st.cache_data
 def load_merged_data():
     try:
-        df = pd.read_csv('merged_data_monthly_per_pbr.csv') # 이 파일은 streamlit_test 폴더에 있어야 함
+         # 현재 스크립트 파일(3_미래_주가_예측.py)의 디렉토리 경로를 가져옵니다.
+        current_dir = os.path.dirname(__file__)
+
+        # 현재 디렉토리에서 상위 디렉토리(stock/ 루트 폴더)로 이동합니다.
+        root_dir = os.path.join(current_dir, '..')
+
+        # 루트 디렉토리 안에 있는 CSV 파일의 전체 경로를 만듭니다.
+        per_pbr_file_path = os.path.join(root_dir, 'merged_data_monthly_per_pbr.csv')
+
+        # 수정된 경로를 사용하여 파일을 읽습니다.
+        df = pd.read_csv(per_pbr_file_path) # <-- 여기에 per_pbr_file_path를 사용합니다.
+        # --------------------------------------------
+
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6) # 종목코드 6자리로 채우기
         return df
     except FileNotFoundError:
-        st.error("❌ 'merged_data_monthly_per_pbr.csv' 파일을 찾을 수 없습니다. 프로젝트 루트 디렉토리에 넣어주세요.")
+        # 오류 메시지도 수정된 경로를 반영하도록 변경합니다.
+        st.error(f"❌ 'merged_data_monthly_per_pbr.csv' 파일을 찾을 수 없습니다. 경로: {per_pbr_file_path}")
         return pd.DataFrame()
 
 df_all_data = load_merged_data()
