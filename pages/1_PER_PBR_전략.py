@@ -6,14 +6,6 @@ import matplotlib.pyplot as plt
 import os
 import traceback
 
-try:
-    # 기존 Streamlit 페이지/앱 내용 호출
-    # 예: main(), run_prediction(), 등등
-    from app_core import run_app
-    run_app()
-except Exception as e:
-    st.error("❌ 앱 실행 중 오류 발생:")
-    st.code(traceback.format_exc())  # 전체 traceback 출력
 st.set_page_config(layout="wide")
 st.title("📊 PER / PBR 기반 수익률 분석")
 st.markdown("특정 PER/PBR 범위에 해당하는 종목들의 과거 수익률을 분석합니다.")
