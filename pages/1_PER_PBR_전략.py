@@ -29,6 +29,7 @@ per_pbr_file_path = os.path.join(root_dir, 'merged_data_monthly_per_pbr.csv')
 try:
     # 수정된 경로를 사용하여 파일을 읽습니다.
     df_fundamental = pd.read_csv(per_pbr_file_path) # <-- 여기에 per_pbr_file_path를 사용합니다.
+    df_fundamental.columns = df_fundamental.columns.str.strip()
     df_fundamental['Date'] = pd.to_datetime(df_fundamental['Date'])
     df_fundamental = df_fundamental.dropna(subset=['PER', 'PBR', 'Close'])
     # 성공 메시지에도 수정된 경로를 사용하도록 변경합니다.
