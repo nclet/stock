@@ -125,14 +125,22 @@ def backtest(df, signal_column):
 
 # 기업 리스트 불러오기
 @st.cache_data
-def get_company_list():
-    try:
-        df_companies = pd.read_csv("company_list.csv", dtype={"Code": str})
-        df_companies["label"] = df_companies["Name"] + " (" + df_companies["Code"] + ")"
-        return df_companies
-    except FileNotFoundError:
-        st.error("❌ 'company_list.csv' 파일을 찾을 수 없습니다. 프로젝트 루트 디렉토리에 넣어주세요.")
-        return pd.DataFrame()
+# 파일 경로 설정 (company_list.csv용)
+current_dir = os.path.dirname(__file__)
+root_dir = os.path.join(current_dir, '..')
+company_list_file_path = os.path.join(root_dir, 'company_list.csv') # company_list.csv 파일명
+
+try:
+    # company_list.csv 파일 로드
+    df_company_list = pd.read_csv(company_list_file_path)
+    # df_company_list['Code'] = df_company_list['Code'].astype(str).str.zfill(6) # 필요하다면 코드 포맷팅
+    # code_name_map = df_company_list.set_index('Code')['Name'].to_dict() # 예시: 매핑 딕셔너리 생성
+    st.success(f"✅ 종목 리스트를 성공적으로 불러왔습니다. (파일: {company_list_file_path})")
+
+except FileNotFoundError:
+    st.error(f"❌ 종목 리스트 파일 '{company_list_file_path}'을(를) 찾을 수 없습니다. 경로를 확인해주세요.")
+except Exception as e:
+    st.error(f"종목 리스트 처리 중 오류가 발생했습니다: {e}")
 
 company_df = get_company_list()
 
