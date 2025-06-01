@@ -23,7 +23,7 @@ try:
     df_fundamental.columns = df_fundamental.columns.str.strip()
     df_fundamental['Date'] = pd.to_datetime(df_fundamental['Date'])
     df_fundamental = df_fundamental.dropna(subset=['PER', 'PBR', 'Close'])
-    st.success(f"✅ PER/PBR 데이터를 성공적으로 불러왔습니다. (파일: {per_pbr_file_path})")
+    st.success(f"✅ PER/PBR 데이터를 성공적으로 불러왔습니다. 기간을 설정한 뒤, '전략 분석 시작'을 눌러주세요.")
     
     # 날짜 선택 (기존 코드와 동일)
     min_date_data = df_fundamental['Date'].min().date()
@@ -234,6 +234,7 @@ st.write("### 참고")
 st.write("""
 - **PER/PBR:** 기업의 주가수익비율(PER)과 주가순자산비율(PBR)을 기준으로 저평가된 종목을 선별합니다.
 - **백테스팅 모델의 한계:** 거래 수수료, 슬리피지 등을 고려하지 않은 단순 시뮬레이션입니다.
+- **※추후 PSR, PCR, ROE, F-스코어 등의 팩터를 추가할 예정입니다.
 """)
 
 
