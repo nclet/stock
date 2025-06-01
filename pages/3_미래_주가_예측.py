@@ -128,6 +128,7 @@ df_all_data = load_merged_data()
 
 # 데이터 로드 성공 여부 확인
 if not df_all_data.empty:
+    st.write(f"Loaded DataFrame columns: {df_all_data.columns.tolist()}") # 이 줄을 추가
     if 'PER' not in df_all_data.columns or 'PBR' not in df_all_data.columns:
         st.warning("경고: 데이터 파일에 'PER' 또는 'PBR' 컬럼이 없어 예측에 사용되지 않습니다. 해당 컬럼이 없으면 정확도가 떨어질 수 있습니다.")
     else:
