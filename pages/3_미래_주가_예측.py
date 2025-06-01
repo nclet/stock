@@ -60,9 +60,9 @@ def train_and_predict_model(X_train, y_train, X_test, y_test, seq_len, n_feature
     model = None
 
     if os.path.exists(model_path):
-        st.info("⚠️ 로컬에 모델 파일이 있지만, Streamlit Cloud에서는 매번 재학습될 수 있습니다.")
+        st.info("⚠️딥러닝을 통한 재학습 모델은 파일의 크기가 너무 커서 속도가 느려지는 오류가 있습니다. 이에 데이터를 낮추기 위해 수정 중이니 양해 부탁드립니다. ")
         model = load_model(model_path)
-        st.success("✅ 저장된 모델 로드 완료")
+        st.success("✅로드 완료(주가 예측 모형은 종가를 중심으로 RSI·볼린저밴드·PER·PBR,LSTM를 통해 분석하고 있습니다.)")
     else:
         st.info("모델 학습이 필요합니다. 잠시만 기다려 주세요...")
         model = build_model(input_shape=(seq_len, n_features))
@@ -108,7 +108,7 @@ def load_merged_data():
 
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6)
-        st.success(f"✅데이터를 성공적으로 불러왔습니다.")
+        st.success(f"✅데이터를 성공적으로 수집했습니다.")
 
         return df
     except FileNotFoundError:
@@ -228,5 +228,5 @@ st.write("### 참고")
 st.write("""
 - **LSTM (Long Short-Term Memory):** 시계열 데이터와 같이 순서가 중요한 데이터를 처리하는 데 강점을 가진 딥러닝 모델의 한 종류입니다.
 - **예측의 한계:** 주가 예측은 본질적으로 불확실성이 매우 높습니다. 이 모델은 과거 데이터를 기반으로 학습하므로, 급격한 시장 변화나 예상치 못한 외부 요인을 반영하기 어렵습니다. 참고 자료로만 활용하시기 바랍니다.
-- **모델 재학습:** Streamlit Cloud와 같은 배포 환경에서는 앱이 재시작될 때마다 파일 시스템이 초기화됩니다. 이로 인해 **매번 모델을 처음부터 다시 학습**하게 되며, 이는 **시간이 오래 걸릴 수 있습니다.** 만약 모델 학습 시간을 줄이고 싶다면, 학습된 모델을 Google Drive나 S3와 같은 **외부 스토리지에 저장하고 불러오는 방식**을 고려해야 합니다.
+- **모델 재학습:** 현재모델 재학습 부분은 데이터의 한계가 있어, 여러방법을 통해 테스트중입니다. 양해 부탁드립니다. 
 """)
