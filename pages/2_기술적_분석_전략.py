@@ -133,10 +133,10 @@ def get_company_list():
         # 종목 코드 포맷팅이 필요하다면 아래 주석 해제
         # df_company['Code'] = df_company['Code'].astype(str).str.zfill(6)
         df_company['label'] = df_company['Name'] + ' (' + df_company['Code'] + ')'
-        st.success(f"✅ 종목 리스트를 성공적으로 불러왔습니다. (파일: {company_list_file_path})")
+        st.success(f"✅ 데이터 수집에 성공했습니다. 기간·분석 전략을 선택해주세요.")
         return df_company
     except FileNotFoundError:
-        st.error(f"❌ 종목 리스트 파일 '{company_list_file_path}'을(를) 찾을 수 없습니다. 경로를 확인해주세요.")
+        st.error(f"❌ 데이터 수집에 오류가 발생했습니다. 빠르게 수정하겠습니다.")
         return pd.DataFrame() # 빈 데이터프레임을 반환하여 이후 오류 방지
     except Exception as e:
         st.error(f"종목 리스트 처리 중 오류가 발생했습니다: {e}")
@@ -195,17 +195,17 @@ if not company_df.empty:
                 st.metric("수익률", f"{r_gc:.2f}%")
 
                 fig_gc, ax_gc = plt.subplots(figsize=(12, 6))
-                ax_gc.plot(df_gc.index, df_gc['Close'], label='종가', color='lightgray', linewidth=1)
-                ax_gc.plot(df_gc.index, df_gc['Short_MA'], label='단기 MA (20일)', color='orange', linewidth=1.5)
-                ax_gc.plot(df_gc.index, df_gc['Long_MA'], label='장기 MA (60일)', color='purple', linewidth=1.5)
+                ax_gc.plot(df_gc.index, df_gc['Close'], label='Close', color='lightgray', linewidth=1)
+                ax_gc.plot(df_gc.index, df_gc['Short_MA'], label='short MA (20일)', color='orange', linewidth=1.5)
+                ax_gc.plot(df_gc.index, df_gc['Long_MA'], label='long MA (60일)', color='purple', linewidth=1.5)
 
                 # 매수/매도 신호 시각화
                 buy_signals_gc = df_gc[df_gc['Buy_GC'] == True]
                 sell_signals_gc = df_gc[df_gc['Sell_GC'] == True]
-                ax_gc.scatter(buy_signals_gc.index, buy_signals_gc['Close'], marker='^', color='green', s=100, label='매수 (골든크로스)', zorder=5)
-                ax_gc.scatter(sell_signals_gc.index, sell_signals_gc['Close'], marker='v', color='red', s=100, label='매도 (데드크로스)', zorder=5)
+                ax_gc.scatter(buy_signals_gc.index, buy_signals_gc['Close'], marker='^', color='green', s=100, label='buy(Golden Cross)', zorder=5)
+                ax_gc.scatter(sell_signals_gc.index, sell_signals_gc['Close'], marker='v', color='red', s=100, label='sell(Dead Cross)', zorder=5)
 
-                ax_gc.set_title("골든크로스/데드크로스 전략")
+                ax_gc.set_title("Golden Cross / Dead Cross Strategy")
                 ax_gc.legend()
                 ax_gc.grid(True)
                 st.pyplot(fig_gc)
@@ -227,18 +227,18 @@ if not company_df.empty:
                 st.metric("수익률", f"{r_rsi:.2f}%")
 
                 fig_rsi, ax_rsi = plt.subplots(figsize=(12, 6))
-                ax_rsi.plot(df_rsi.index, df_rsi['Close'], label='종가', color='lightgray', linewidth=1)
+                ax_rsi.plot(df_rsi.index, df_rsi['Close'], label='Close', color='lightgray', linewidth=1)
                 ax_rsi.plot(df_rsi.index, df_rsi['RSI'], label='RSI', color='blue', linewidth=1.5)
-                ax_rsi.axhline(70, color='red', linestyle='--', label='과매수 (70)')
-                ax_rsi.axhline(30, color='green', linestyle='--', label='과매도 (30)')
+                ax_rsi.axhline(70, color='red', linestyle='--', label='overbought(70)')
+                ax_rsi.axhline(30, color='green', linestyle='--', label='oversold(30)')
 
                 # 매수/매도 신호 시각화
                 buy_signals_rsi = df_rsi[df_rsi['Buy_RSI'] == True]
                 sell_signals_rsi = df_rsi[df_rsi['Sell_RSI'] == True]
-                ax_rsi.scatter(buy_signals_rsi.index, buy_signals_rsi['Close'], marker='^', color='green', s=100, label='매수 (RSI)', zorder=5)
-                ax_rsi.scatter(sell_signals_rsi.index, sell_signals_rsi['Close'], marker='v', color='red', s=100, label='매도 (RSI)', zorder=5)
+                ax_rsi.scatter(buy_signals_rsi.index, buy_signals_rsi['Close'], marker='^', color='green', s=100, label='buy(RSI)', zorder=5)
+                ax_rsi.scatter(sell_signals_rsi.index, sell_signals_rsi['Close'], marker='v', color='red', s=100, label='sell(RSI)', zorder=5)
 
-                ax_rsi.set_title("RSI 전략")
+                ax_rsi.set_title("RSI Strategy")
                 ax_rsi.legend()
                 ax_rsi.grid(True)
                 st.pyplot(fig_rsi)
@@ -260,16 +260,16 @@ if not company_df.empty:
                 st.metric("수익률", f"{r_bb:.2f}%")
 
                 fig_bb, ax_bb = plt.subplots(figsize=(12, 6))
-                ax_bb.plot(df_bb.index, df_bb['Close'], label='종가', color='lightgray', linewidth=1)
-                ax_bb.plot(df_bb.index, df_bb['Upper'], label='상한선', color='red', linestyle='--')
-                ax_bb.plot(df_bb.index, df_bb['MA'], label='중간선', color='blue')
-                ax_bb.plot(df_bb.index, df_bb['Lower'], label='하한선', color='green', linestyle='--')
+                ax_bb.plot(df_bb.index, df_bb['Close'], label='Close', color='lightgray', linewidth=1)
+                ax_bb.plot(df_bb.index, df_bb['Upper'], label='upper limit', color='red', linestyle='--')
+                ax_bb.plot(df_bb.index, df_bb['MA'], label='middle line', color='blue')
+                ax_bb.plot(df_bb.index, df_bb['Lower'], label='lower limit', color='green', linestyle='--')
 
                 # 매수/매도 신호 시각화
                 buy_signals_bb = df_bb[df_bb['Buy_BB'] == True]
                 sell_signals_bb = df_bb[df_bb['Sell_BB'] == True]
-                ax_bb.scatter(buy_signals_bb.index, buy_signals_bb['Close'], marker='^', color='green', s=100, label='매수 (BB)', zorder=5)
-                ax_bb.scatter(sell_signals_bb.index, sell_signals_bb['Close'], marker='v', color='red', s=100, label='매도 (BB)', zorder=5)
+                ax_bb.scatter(buy_signals_bb.index, buy_signals_bb['Close'], marker='^', color='green', s=100, label='Buy(BB)', zorder=5)
+                ax_bb.scatter(sell_signals_bb.index, sell_signals_bb['Close'], marker='v', color='red', s=100, label='Sell(BB)', zorder=5)
 
                 ax_bb.set_title("볼린저 밴드 전략")
                 ax_bb.legend()
