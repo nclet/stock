@@ -70,7 +70,7 @@ def train_and_predict_model(X_train, y_train, X_test, y_test, seq_len, n_feature
             model.fit(X_train, y_train, epochs=20, batch_size=16, validation_data=(X_test, y_test),
                       callbacks=[EarlyStopping(patience=5, restore_best_weights=True)], verbose=0)
         model.save(model_path)
-        st.success("✅ 모델 학습 및 저장 완료")
+        st.success("✅로드 완료(주가 예측 모형은 종가를 중심으로 RSI·볼린저밴드·PER·PBR,LSTM를 통해 분석하고 있습니다.)")
 
     def recursive_forecast(model, last_sequence, n_days, scaler, n_features, features_list):
         forecasts = []
@@ -201,14 +201,14 @@ if not df_all_data.empty:
         fig, ax = plt.subplots(figsize=(12, 6))
 
         plot_df = df_processed.tail(365)
-        ax.plot(plot_df.index, plot_df['Close'], label='실제 주가', color='blue')
+        ax.plot(plot_df.index, plot_df['Close'], label='actual stock price', color='blue')
 
-        ax.plot(future_dates, future_preds, label='미래 예측 주가', color='red', linestyle='--')
+        ax.plot(future_dates, future_preds, label='Future Forecast Stock Price', color='red', linestyle='--')
 
-        ax.axvline(last_date, color='gray', linestyle=':', label='예측 기준일')
-        ax.set_title(f"{selected_name} ({selected_code}) 주가 예측")
-        ax.set_xlabel("날짜")
-        ax.set_ylabel("가격 (원)")
+        ax.axvline(last_date, color='gray', linestyle=':', label='base date of forecast')
+        ax.set_title(f"{selected_name} ({selected_code}) Future Stock Price Forecast")
+        ax.set_xlabel("date")
+        ax.set_ylabel("price(₩/won)")
         ax.legend()
         ax.grid(True)
         plt.tight_layout()
