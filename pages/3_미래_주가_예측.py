@@ -60,7 +60,7 @@ def build_model(input_shape):
     model.compile(optimizer='adam', loss='mse')
     return model
 
-@st.cache_resource # 모델 학습 결과를 캐싱 (재실행 시 재학습 방지)
+#@st.cache_resource # 모델 학습 결과를 캐싱 (재실행 시 재학습 방지)
 def train_and_predict_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, scaler):
     model_path = f"model_{selected_code}.h5"
     model = None
