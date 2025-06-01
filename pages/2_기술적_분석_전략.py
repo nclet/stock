@@ -196,8 +196,8 @@ if not company_df.empty:
 
                 fig_gc, ax_gc = plt.subplots(figsize=(12, 6))
                 ax_gc.plot(df_gc.index, df_gc['Close'], label='Close', color='lightgray', linewidth=1)
-                ax_gc.plot(df_gc.index, df_gc['Short_MA'], label='short MA (20일)', color='orange', linewidth=1.5)
-                ax_gc.plot(df_gc.index, df_gc['Long_MA'], label='long MA (60일)', color='purple', linewidth=1.5)
+                ax_gc.plot(df_gc.index, df_gc['Short_MA'], label='short MA (20)', color='orange', linewidth=1.5)
+                ax_gc.plot(df_gc.index, df_gc['Long_MA'], label='long MA (60)', color='purple', linewidth=1.5)
 
                 # 매수/매도 신호 시각화
                 buy_signals_gc = df_gc[df_gc['Buy_GC'] == True]
@@ -271,7 +271,7 @@ if not company_df.empty:
                 ax_bb.scatter(buy_signals_bb.index, buy_signals_bb['Close'], marker='^', color='green', s=100, label='Buy(BB)', zorder=5)
                 ax_bb.scatter(sell_signals_bb.index, sell_signals_bb['Close'], marker='v', color='red', s=100, label='Sell(BB)', zorder=5)
 
-                ax_bb.set_title("볼린저 밴드 전략")
+                ax_bb.set_title("Bollinger band strategy")
                 ax_bb.legend()
                 ax_bb.grid(True)
                 st.pyplot(fig_bb)
