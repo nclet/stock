@@ -108,11 +108,11 @@ def load_merged_data():
 
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6)
-        st.success(f"✅ 'merged_data_monthly_per_pbr.csv' 파일을 성공적으로 불러왔습니다. (경로: {merged_data_file_path})")
+        st.success(f"✅데이터를 성공적으로 불러왔습니다.")
 
         return df
     except FileNotFoundError:
-        st.error(f"❌ 'merged_data_monthly_per_pbr.csv' 파일을 찾을 수 없습니다. 예상 경로: {merged_data_file_path}")
+        st.error(f"❌ 데이터 파일을 찾을 수 없습니다. 죄송합니다. 코드를 수정중입니다.")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
@@ -123,10 +123,10 @@ df_all_data = load_merged_data()
 # 데이터 로드 성공 여부 확인 (기존과 동일)
 if not df_all_data.empty:
     # 이 조건문에서 이제 'PER'과 'PBR'을 제대로 찾을 것입니다.
-    if 'PER' not in df_all_data.columns or 'PBR' not in df_all_data.columns:
-        st.warning("경고: 데이터 파일에 'PER' 또는 'PBR' 컬럼이 없어 예측에 사용되지 않습니다. 해당 컬럼이 없으면 정확도가 떨어질 수 있습니다.")
-    else:
-        st.info("데이터 파일에서 'PER' 및 'PBR' 컬럼을 성공적으로 확인했습니다.")
+    # if 'PER' not in df_all_data.columns or 'PBR' not in df_all_data.columns:
+    #     st.warning("경고: 데이터 파일에 'PER' 또는 'PBR' 컬럼이 없어 예측에 사용되지 않습니다. 해당 컬럼이 없으면 정확도가 떨어질 수 있습니다.")
+    # else:
+    #     st.info("데이터 파일에서 'PER' 및 'PBR' 컬럼을 성공적으로 확인했습니다.")
 
     name_code_dict = df_all_data.drop_duplicates(subset=['Code']).set_index('Name')['Code'].to_dict()
 
