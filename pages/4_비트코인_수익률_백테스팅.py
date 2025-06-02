@@ -332,7 +332,7 @@ if use_rsi:
     ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI buy ({rsi_buy_threshold})') 
     ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI sell ({rsi_sell_threshold})') 
 if use_momentum:
-    ax3.plot(results.index, results['Momentum'], label='모멘텀', color='magenta', linewidth=1) 
+    ax3.plot(results.index, results['Momentum'], label='Momentum', color='magenta', linewidth=1) 
     ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'Momentum buying ({momentum_buy_threshold})') 
     ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'Momentum selling ({momentum_sell_threshold})') 
 
