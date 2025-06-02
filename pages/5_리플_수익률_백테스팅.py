@@ -300,46 +300,46 @@ ax1 = fig.add_subplot(gs[0])
 ax2 = fig.add_subplot(gs[1], sharex=ax1)
 ax3 = fig.add_subplot(gs[2], sharex=ax1)
 
-ax1.plot(results.index, results['Adj Close'], label='리플 가격', color='lightgray', linewidth=1) # 비트코인 -> 리플
+ax1.plot(results.index, results['Adj Close'], label='XRP price', color='lightgray', linewidth=1) # 비트코인 -> 리플
 if use_sma:
-    ax1.plot(results.index, results['SMA_Short'], label=f'단기 이평선 ({short_ma_period}일)', color='orange', linewidth=1.5)
-    ax1.plot(results.index, results['SMA_Long'], label=f'장기 이평선 ({long_ma_period}일)', color='purple', linewidth=1.5)
+    ax1.plot(results.index, results['SMA_Short'], label=f'Short_MA ({short_ma_period}D)', color='orange', linewidth=1.5)
+    ax1.plot(results.index, results['SMA_Long'], label=f'Long_MA ({long_ma_period}D)', color='purple', linewidth=1.5)
 
 buy_signals = results[results['Buy_Signal'] == True]
-ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='매수 신호', zorder=5)
+ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='buy signal', zorder=5)
 
 sell_signals = results[results['Sell_Signal'] == True]
-ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='매도 신호', zorder=5)
+ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='sell signal', zorder=5)
 
-ax1.set_ylabel("가격 (KRW)") # 업비트이므로 KRW로 유지
+ax1.set_ylabel("price(₩KRW)") # 업비트이므로 KRW로 유지
 ax1.legend(loc='upper left')
 ax1.grid(True)
-ax1.set_title("리플 가격, 이동평균선 및 매매 신호") # 비트코인 -> 리플
+ax1.set_title("Ripple Price, Moving Average, and Trading Signals") # 비트코인 -> 리플
 
 
-ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='전략 누적 수익률 (%)', color='blue', linewidth=2)
-ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='매수 후 보유 누적 수익률 (%)', color='green', linestyle='--', linewidth=2)
-ax2.set_ylabel("누적 수익률 (%)")
+ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='Strategic Accumulated Return (%)', color='blue', linewidth=2)
+ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='cumulative return on holdings after purchase (%)', color='green', linestyle='--', linewidth=2)
+ax2.set_ylabel("cumulative return (%)")
 ax2.legend(loc='upper left')
 ax2.grid(True)
-ax2.set_title("누적 수익률 비교")
+ax2.set_title("Comparison of cumulative returns")
 
 
 if use_rsi:
     ax3.plot(results.index, results['RSI'], label='RSI', color='cyan', linewidth=1)
-    ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI 매수 ({rsi_buy_threshold})')
-    ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI 매도 ({rsi_sell_threshold})')
+    ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI buying ({rsi_buy_threshold})')
+    ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI selling ({rsi_sell_threshold})')
 if use_momentum:
-    ax3.plot(results.index, results['Momentum'], label='모멘텀', color='magenta', linewidth=1)
-    ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'모멘텀 매수 ({momentum_buy_threshold})')
-    ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'모멘텀 매도 ({momentum_sell_threshold})')
+    ax3.plot(results.index, results['Momentum'], label='Momentum', color='magenta', linewidth=1)
+    ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'Momentum buying ({momentum_buy_threshold})')
+    ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'Momentum selling ({momentum_sell_threshold})')
 
 
-ax3.set_xlabel("날짜")
-ax3.set_ylabel("지표 값")
+ax3.set_xlabel("Date")
+ax3.set_ylabel("Indicator value")
 ax3.legend(loc='upper left')
 ax3.grid(True)
-ax3.set_title("기술 지표")
+ax3.set_title("Technical indicators")
 
 fig.autofmt_xdate()
 st.pyplot(fig)
@@ -353,10 +353,9 @@ st.metric(label="최종 매수 후 보유 (Buy & Hold) 누적 수익률", value=
 st.write("---")
 st.write("### 📝 참고")
 st.write("""
-- **데이터 출처**: 이 앱은 **업비트(Upbit) XRP/KRW 일봉 데이터**를 기반으로 작동합니다. # BTC -> XRP
+- **데이터 출처**: 이 앱은 **업비트(Upbit) XRP/KRW 일봉 데이터**를 기반으로 작동합니다.
 - **백테스팅 모델의 한계**: 제시된 수익률은 백테스팅 결과이며, 실제 투자 결과와는 다를 수 있습니다. 거래 수수료, 슬리피지(Slippage), 세금, 시스템 지연 등의 실제 거래 환경 요소를 고려하지 않은 단순 시뮬레이션입니다.
 - **면책 조항**: 본 정보는 투자 자문이 아니며, 여기에 제시된 내용은 오직 정보 제공을 목적으로 합니다. 투자 결정은 사용자 본인의 판단과 책임 하에 이루어져야 합니다.
-- **API 키 관리**: 업비트 API는 데이터 조회 시에도 인증이 필요합니다. API 키는 Streamlit Cloud의 Secrets 기능을 통해 안전하게 관리되며, GitHub에는 노출되지 않습니다.
 """)
 st.write("---")
 st.write("### 백테스팅 상세 데이터 (최근 20일)")
