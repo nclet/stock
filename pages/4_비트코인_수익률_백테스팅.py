@@ -36,10 +36,10 @@ elif start_date < min_valid_date_for_upbit_btc:
 def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
     # Streamlit Secrets에서 API 키를 불러옵니다.
     try:
-        upbit_access_key = st.secrets["UPBIT_ACCESS_KEY"]
-        upbit_secret_key = st.secrets["UPBIT_SECRET_KEY"]
+        upbit_access_key = st.secrets["ACCESS_KEY"]
+        upbit_secret_key = st.secrets["SECRET_KEY"]
     except KeyError:
-        st.error("❌ 업비트 API 키(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)가 Streamlit Secrets에 설정되어 있지 않습니다.")
+        st.error("❌ 업비트 API 키(ACCESS_KEY, SECRET_KEY)가 Streamlit Secrets에 설정되어 있지 않습니다.")
         st.info("로컬에서 실행하는 경우 `.streamlit/secrets.toml` 파일에 키를 추가하고, Streamlit Cloud에 배포하는 경우 대시보드에서 Secrets를 설정해야 합니다.")
         return pd.DataFrame() # 오류 발생 시 빈 DataFrame 반환하여 실행 중단
 
