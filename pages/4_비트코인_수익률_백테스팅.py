@@ -50,7 +50,7 @@ def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
         'enableRateLimit': True, # 초당 요청 제한 준수
     })
     
-    st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 가져오는 중...")
+    st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 수집하고 있습니다...")
 
     # 시작 및 종료 날짜를 타임스탬프 (밀리초)로 변환
     # UTC 기준 00:00:00 (시작일) 및 23:59:59 (종료일)
@@ -302,46 +302,46 @@ ax1 = fig.add_subplot(gs[0])
 ax2 = fig.add_subplot(gs[1], sharex=ax1) 
 ax3 = fig.add_subplot(gs[2], sharex=ax1) 
 
-ax1.plot(results.index, results['Adj Close'], label='비트코인 가격', color='lightgray', linewidth=1) 
+ax1.plot(results.index, results['Adj Close'], label='Bitcoin Price', color='lightgray', linewidth=1) 
 if use_sma:
-    ax1.plot(results.index, results['SMA_Short'], label=f'단기 이평선 ({short_ma_period}일)', color='orange', linewidth=1.5) 
-    ax1.plot(results.index, results['SMA_Long'], label=f'장기 이평선 ({long_ma_period}일)', color='purple', linewidth=1.5) 
+    ax1.plot(results.index, results['SMA_Short'], label=f'Short_Ma ({short_ma_period}day)', color='orange', linewidth=1.5) 
+    ax1.plot(results.index, results['SMA_Long'], label=f'Long_Ma ({long_ma_period}day)', color='purple', linewidth=1.5) 
 
 buy_signals = results[results['Buy_Signal'] == True]
-ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='매수 신호', zorder=5) 
+ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='buy signal', zorder=5) 
 
 sell_signals = results[results['Sell_Signal'] == True]
-ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='매도 신호', zorder=5) 
+ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='sell signal', zorder=5) 
 
-ax1.set_ylabel("가격 (KRW)") # 업비트이므로 KRW로 변경
+ax1.set_ylabel("price(₩KRW)") # 업비트이므로 KRW로 변경
 ax1.legend(loc='upper left')
 ax1.grid(True)
-ax1.set_title("비트코인 가격, 이동평균선 및 매매 신호") 
+ax1.set_title("Bitcoin Price, Moving Average Trading Signal") 
 
 
-ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='전략 누적 수익률 (%)', color='blue', linewidth=2) 
-ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='매수 후 보유 누적 수익률 (%)', color='green', linestyle='--', linewidth=2) 
-ax2.set_ylabel("누적 수익률 (%)") 
+ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='Strategic Accumulated Return (%)', color='blue', linewidth=2) 
+ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='cumulative returns after buying (%)', color='green', linestyle='--', linewidth=2) 
+ax2.set_ylabel("cumulative return (%)") 
 ax2.legend(loc='upper left')
 ax2.grid(True)
-ax2.set_title("누적 수익률 비교") 
+ax2.set_title("Comparison of cumulative returns") 
 
 
 if use_rsi:
     ax3.plot(results.index, results['RSI'], label='RSI', color='cyan', linewidth=1)
-    ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI 매수 ({rsi_buy_threshold})') 
-    ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI 매도 ({rsi_sell_threshold})') 
+    ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI buy ({rsi_buy_threshold})') 
+    ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI sell ({rsi_sell_threshold})') 
 if use_momentum:
     ax3.plot(results.index, results['Momentum'], label='모멘텀', color='magenta', linewidth=1) 
-    ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'모멘텀 매수 ({momentum_buy_threshold})') 
-    ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'모멘텀 매도 ({momentum_sell_threshold})') 
+    ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'Momentum buying ({momentum_buy_threshold})') 
+    ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'Momentum selling ({momentum_sell_threshold})') 
 
 
-ax3.set_xlabel("날짜") 
-ax3.set_ylabel("지표 값")
+ax3.set_xlabel("Date") 
+ax3.set_ylabel("Indicator value")
 ax3.legend(loc='upper left')
 ax3.grid(True)
-ax3.set_title("기술 지표") 
+ax3.set_title("Technical indicators") 
 
 fig.autofmt_xdate()
 st.pyplot(fig)
