@@ -1,4 +1,3 @@
-# pages/6_bitcoin_advanced_backtest.py
 import streamlit as st
 import ccxt
 import pandas as pd
@@ -358,7 +357,6 @@ st.write("""
 - **데이터 출처**: 이 앱은 **업비트(Upbit) BTC/KRW 일봉 데이터**를 기반으로 작동합니다.
 - **백테스팅 모델의 한계**: 제시된 수익률은 백테스팅 결과이며, 실제 투자 결과와는 다를 수 있습니다. 거래 수수료, 슬리피지(Slippage), 세금, 시스템 지연 등의 실제 거래 환경 요소를 고려하지 않은 단순 시뮬레이션입니다.
 - **면책 조항**: 본 정보는 투자 자문이 아니며, 여기에 제시된 내용은 오직 정보 제공을 목적으로 합니다. 투자 결정은 사용자 본인의 판단과 책임 하에 이루어져야 합니다.
-- **API 키 관리**: 업비트 API는 데이터 조회 시에도 인증이 필요합니다. API 키는 Streamlit Cloud의 Secrets 기능을 통해 안전하게 관리되며, GitHub에는 노출되지 않습니다.
 """)
 st.write("---")
 st.write("### 백테스팅 상세 데이터 (최근 20일)") 
