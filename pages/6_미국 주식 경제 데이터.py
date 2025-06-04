@@ -27,7 +27,7 @@ def load_yield_data(start_date, end_date):
     errors = []
 
     # 1. 미국 10년물 국채 금리 (일별)
-    st.info("🔄 미국 10년물 국채 금리 데이터를 불러오는 중...")
+    #st.info("🔄 미국 10년물 국채 금리 데이터를 불러오는 중...")
     try:
         us_10y = fred.get_series('GS10', start_date, end_date)
         if us_10y is None or us_10y.empty:
@@ -39,7 +39,7 @@ def load_yield_data(start_date, end_date):
 
 
     # 2. 일본 10년물 국채 금리 (월별) - FRED에서 가져오도록 수정
-    st.info("🔄 일본 10년물 국채 금리 데이터를 불러오는 중... (FRED: 월별 데이터)")
+    #st.info("🔄 일본 10년물 국채 금리 데이터를 불러오는 중... (FRED: 월별 데이터)")
     try:
         # 'IRLTLT01JPM156N': OECD Long-Term Interest Rate: 10-Year Government Bonds for Japan, Monthly
         jgb_10y = fred.get_series('IRLTLT01JPM156N', start_date, end_date) 
@@ -88,7 +88,7 @@ def load_economic_indicators(start_date, end_date):
     econ_errors = []
 
     # 1. 소비자물가지수 (CPIAUCSL) - 월별
-    st.info("🔄 소비자물가지수(CPI) 데이터를 불러오는 중... (FRED: 월별 데이터)")
+    #st.info("🔄 소비자물가지수(CPI) 데이터를 불러오는 중... (FRED: 월별 데이터)")
     try:
         cpi = fred.get_series('CPIAUCSL', start_date, end_date)
         if cpi is None or cpi.empty:
@@ -99,7 +99,7 @@ def load_economic_indicators(start_date, end_date):
         econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}. Traceback: {traceback.format_exc()}")
 
     # 2. 실업률 (UNRATE) - 월별
-    st.info("🔄 실업률 데이터를 불러오는 중... (FRED: 월별 데이터)")
+    #st.info("🔄 실업률 데이터를 불러오는 중... (FRED: 월별 데이터)")
     try:
         unemployment_rate = fred.get_series('UNRATE', start_date, end_date)
         if unemployment_rate is None or unemployment_rate.empty:
@@ -110,7 +110,7 @@ def load_economic_indicators(start_date, end_date):
         econ_errors.append(f"❌ 실업률 로드 중 오류 발생: {e}. Traceback: {traceback.format_exc()}")
 
     # 3. 비농업 고용자 수 (PAYEMS) - 월별
-    st.info("🔄 비농업 고용자 수 데이터를 불러오는 중... (FRED: 월별 데이터)")
+    #st.info("🔄 비농업 고용자 수 데이터를 불러오는 중... (FRED: 월별 데이터)")
     try:
         nonfarm_payrolls = fred.get_series('PAYEMS', start_date, end_date)
         if nonfarm_payrolls is None or nonfarm_payrolls.empty:
@@ -230,8 +230,8 @@ if not df_econ.empty:
     st.subheader("1. 소비자물가지수 (CPI) 추이")
     fig3, ax3 = plt.subplots(figsize=(12, 6))
     df_econ["CPI"].plot(ax=ax3, color="orange", linewidth=2)
-    ax3.set_ylabel("지수 (1982-84=100)")
-    ax3.set_title("미국 소비자물가지수 (CPI, SA)")
+    ax3.set_ylabel("Index (1982-84=100)")
+    ax3.set_title("U.S. Consumer Price Index (CPI)")
     ax3.grid(True, linestyle='--', alpha=0.7)
     st.pyplot(fig3)
     st.info("CPI는 소비자들이 구매하는 상품과 서비스의 평균 가격 변동을 측정합니다. 높은 CPI는 인플레이션 압력을 시사하며, 이는 연준의 금리 인상 가능성을 높여 주식 시장에 부정적일 수 있습니다.")
@@ -240,12 +240,12 @@ if not df_econ.empty:
     st.subheader("2. 실업률 추이")
     fig4, ax4 = plt.subplots(figsize=(12, 6))
     df_econ["Unemployment_Rate"].plot(ax=ax4, color="purple", linewidth=2)
-    ax4.set_ylabel("실업률 (%)")
-    ax4.set_title("미국 실업률")
+    ax4.set_ylabel("unemployment rate (%)")
+    ax4.set_title("U.S unemployment rate")
     ax4.grid(True, linestyle='--', alpha=0.7)
     # 실업률이 특정 수준 이하일 때 (예: 4% 이하) 경고 표시
     if df_econ["Unemployment_Rate"].min() < 4.0:
-        ax4.axhspan(0, 4.0, color='red', alpha=0.1, label='낮은 실업률 (인플레이션 압력)')
+        ax4.axhspan(0, 4.0, color='red', alpha=0.1, label='Low unemployment (inflationary pressure)')
         ax4.legend()
     st.pyplot(fig4)
     st.info("실업률은 경제 활동의 강도를 나타내는 핵심 지표입니다. 낮은 실업률은 경제가 건강하다는 신호이지만, 너무 낮으면 임금 상승과 인플레이션 압력으로 이어질 수 있습니다.")
@@ -257,8 +257,8 @@ if not df_econ.empty:
     
     fig5, ax5 = plt.subplots(figsize=(12, 6))
     df_econ['Nonfarm_Payrolls_MoM_Change'].plot(ax=ax5, color="blue", linewidth=2)
-    ax5.set_ylabel("월별 변화 (천 명)")
-    ax5.set_title("미국 비농업 고용자 수 월별 변화")
+    ax5.set_ylabel("Monthly Changes (Thousands)")
+    ax5.set_title("Monthly Changes in the Number of Nonfarm Employees in the U.S")
     ax5.axhline(0, color="gray", linestyle="--", alpha=0.7) # 0선 표시
     ax5.grid(True, linestyle='--', alpha=0.7)
     st.pyplot(fig5)
