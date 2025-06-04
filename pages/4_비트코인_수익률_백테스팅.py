@@ -41,15 +41,46 @@ def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
         st.error(f"❌ 업비트 API 키({e})가 Streamlit Secrets에 설정되어 있지 않습니다.")
         st.info("Streamlit Cloud 대시보드의 Settings -> Secrets 메뉴에서 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 설정해야 합니다.")
         return pd.DataFrame()
-    
+
+    @st.cache_data(ttl=3600) # 데이터를 1시간(3600초) 동안 캐시
+def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
+    # --- 업비트 API 키 로드 ---
+    try:
+        upbit_access_key = st.secrets["UPBIT_ACCESS_KEY"]
+        upbit_secret_key = st.secrets["UPBIT_SECRET_KEY"]
+    except KeyError as e:
+        st.error(f"❌ 업비트 API 키({e})가 Streamlit Secrets에 설정되어 있지 않습니다.")
+        st.info("Streamlit Cloud 대시보드의 Settings -> Secrets 메뉴에서 UPBIT_ACCESS_KEY와 UPBIT_SECRET_KEY를 설정해야 합니다.")
+        return pd.DataFrame()
+
     # --- CCXT Upbit 초기화 ---
     exchange = ccxt.upbit({
         'apiKey': upbit_access_key,
         'secret': upbit_secret_key,
         'enableRateLimit': True, # 초당 요청 제한 준수
+        'options': {
+            'createMarketAutomatically': False, # 이 부분을 추가해주세요!
+        },
     })
+
+    # 명시적으로 시장 정보 로드 (추가)
+    try:
+        st.info("🔄 업비트 시장 정보를 로드하는 중...")
+        exchange.load_markets()
+        st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 수집하고 있습니다...")
+    except Exception as e:
+        st.error(f"❌ 업비트 시장 정보를 로드하는 중 오류가 발생했습니다: {e}")
+        st.info("API 키를 확인하거나 잠시 후 다시 시도해보세요. Traceback: " + traceback.format_exc())
+        return pd.DataFrame()
+
+    # # --- CCXT Upbit 초기화 ---
+    # exchange = ccxt.upbit({
+    #     'apiKey': upbit_access_key,
+    #     'secret': upbit_secret_key,
+    #     'enableRateLimit': True, # 초당 요청 제한 준수
+    # })
     
-    st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 수집하고 있습니다...")
+    # st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 수집하고 있습니다...")
 
     # 시작 및 종료 날짜를 타임스탬프 (밀리초)로 변환
     # UTC 기준 00:00:00 (시작일) 및 23:59:59 (종료일)
