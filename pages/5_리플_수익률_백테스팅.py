@@ -32,7 +32,7 @@ elif start_date < min_valid_date_for_upbit_xrp: # 최소 유효 날짜 경고 �
     st.sidebar.warning(f"⚠️ 업비트 XRP/KRW 데이터는 {min_valid_date_for_upbit_xrp} 이후부터 존재합니다. 해당 날짜 이후로 설정하시면 더 많은 데이터를 얻을 수 있습니다.")
 
 
-@st.cache_data(ttl=3600) # 데이터를 1시간(3600초) 동안 캐시
+@st.cache_data(ttl=3600)  # 데이터를 1시간(3600초) 동안 캐시
 def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
     # --- 업비트 API 키 로드 ---
     try:
@@ -47,11 +47,20 @@ def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
     exchange = ccxt.upbit({
         'apiKey': upbit_access_key,
         'secret': upbit_secret_key,
-        'enableRateLimit': True, # 초당 요청 제한 준수
+        'enableRateLimit': True,  # 초당 요청 제한 준수
     })
+
+    # ✅ cachedCurrencies 문제 해결
+    try:
+        exchange.options['cachedCurrencies'] = None
+        exchange.load_markets()
+    except Exception as e:
+        st.error(f"❌ 업비트 시장 정보를 로드하는 중 오류가 발생했습니다: {e}")
+        return pd.DataFrame()
 
     st.info(f"🔄 업비트에서 **{symbol}** ({timeframe}) 데이터를 가져오는 중...")
 
+    # 이후에 symbol에 해당하는 OHLCV 데이터 불러오는 코드 이어지면 됩니다.
     # 시작 및 종료 날짜를 타임스탬프 (밀리초)로 변환
     # UTC 기준 00:00:00 (시작일) 및 23:59:59 (종료일)
     start_timestamp_ms = exchange.parse8601(start_date_obj.isoformat() + 'T00:00:00Z')
