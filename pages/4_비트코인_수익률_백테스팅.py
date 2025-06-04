@@ -51,7 +51,7 @@ def load_crypto_data(symbol, timeframe, start_date_obj, end_date_obj):
             'createMarketAutomatically': False, # 이 부분을 추가해주세요!
         },
     })
-
+    exchange.options['cachedCurrencies'] = None
     # 명시적으로 시장 정보 로드 (추가)
     try:
         st.info("🔄 업비트 시장 정보를 로드하는 중...")
