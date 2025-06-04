@@ -146,12 +146,13 @@ def load_economic_indicators(start_date, end_date):
     return econ_df
 
 # --- 날짜 선택 ---
-st.sidebar.title("📅 기간 선택")
+st.sidebar.title("📅 국채 금리 설정")
 start_date_bond = st.sidebar.date_input("금리 데이터 시작일", datetime.today() - timedelta(days=365 * 5), key='bond_start') # 기본 기간을 5년으로 늘림
 end_date_bond = st.sidebar.date_input("금리 데이터 종료일", datetime.today(), key='bond_end')
 
 st.sidebar.markdown("---") # 구분선 추가
 
+st.sidebar.title("📅 CPI, 실업률, 고용률 기간 설정")
 start_date_econ = st.sidebar.date_input("경제 지표 시작일", datetime.today() - timedelta(days=365 * 10), key='econ_start') # 기본 기간을 10년으로 설정
 end_date_econ = st.sidebar.date_input("경제 지표 종료일", datetime.today(), key='econ_end')
 
