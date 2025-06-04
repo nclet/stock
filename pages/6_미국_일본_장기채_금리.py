@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from fredapi import Fred
-import yfinance as yf
+# yfinance는 더 이상 사용하지 않으므로 제거합니다.
 from datetime import datetime, timedelta
 import traceback # 오류 스택 추적을 위해 임포트
 
 # --- 설정 ---
-st.set_page_config(page_title="미국-일본 금리차 대시보드", layout="wide")
+st.set_page_config(page_title="미국-일본 10년물 금리차 대시보드", layout="wide")
 
 # FRED API 키를 st.secrets에서 불러옵니다.
 # secrets.toml 파일에 FRED_API_KEY = "YOUR_KEY" 형태로 저장되어 있어야 합니다.
@@ -50,21 +50,8 @@ def load_yield_data(start_date, end_date):
             data['JP_10Y'] = jgb_10y.rename("JP_10Y")
     except Exception as e:
         errors.append(f"❌ 일본 10년물 금리 데이터 로드 중 오류 발생: {e}. Traceback: {traceback.format_exc()}")
-
-    # (선택 사항) S&P 500 지수 데이터 추가 (이전 대화에서 문제가 있었으므로 참고용으로 포함)
-    st.info("🔄 (선택 사항) S&P 500 지수 데이터를 불러오는 중...")
-    sp500_ticker = "^GSPC" # S&P 500 티커
-    try:
-        start_date_str = start_date.strftime('%Y-%m-%d')
-        end_date_str = end_date.strftime('%Y-%m-%d')
-        sp500_data = yf.download(sp500_ticker, start=start_date_str, end=end_date_str)["Close"]
-        if sp500_data.empty:
-            errors.append(f"❌ S&P 500 지수 데이터 로드 실패: '{sp500_ticker}' (데이터 없음). 티커 또는 기간을 확인하세요.")
-        else:
-            data['SP500'] = sp500_data.rename("SP500")
-    except Exception as e:
-        errors.append(f"❌ S&P 500 지수 데이터 로드 중 오류 발생: {e}. YFinance 문제일 수 있습니다. Traceback: {traceback.format_exc()}")
-
+    
+    # S&P 500 지수 데이터 수집 부분은 완전히 제거되었습니다.
 
     if errors:
         for err in errors:
@@ -85,14 +72,7 @@ def load_yield_data(start_date, end_date):
     df["Spread"] = df["US_10Y"] - df["JP_10Y"]
     
     # 최종적으로 필요한 컬럼만 남기고 NaN 값 제거
-    # S&P 500을 포함할 경우 ['US_10Y', 'JP_10Y', 'Spread', 'SP500']
-    # S&P 500을 제외할 경우 ['US_10Y', 'JP_10Y', 'Spread']
-    # 여기서는 S&P 500이 필수는 아니므로, 스프레드 계산에 필요한 금리 데이터만 있어도 진행하도록 변경
-    if 'SP500' in df.columns:
-        df = df.dropna(subset=['US_10Y', 'JP_10Y', 'Spread', 'SP500'], how='any')
-    else:
-        df = df.dropna(subset=['US_10Y', 'JP_10Y', 'Spread'], how='any')
-
+    df = df.dropna(subset=['US_10Y', 'JP_10Y', 'Spread'], how='any')
 
     if df.empty:
         st.warning("선택된 기간에 유효한 데이터를 충분히 불러오지 못했습니다. 날짜 범위를 조정해 보세요.")
@@ -107,7 +87,7 @@ start_date = st.sidebar.date_input("시작일", datetime.today() - timedelta(day
 end_date = st.sidebar.date_input("종료일", datetime.today())
 
 # --- 데이터 불러오기 ---
-with st.spinner("📊 데이터를 불러오는 중... (FRED 및 YFinance 사용)"):
+with st.spinner("📊 데이터를 불러오는 중... (FRED 사용)"): # YFinance 사용 문구 제거
     df = load_yield_data(start_date, end_date)
 
 # --- 시각화 ---
@@ -136,34 +116,7 @@ if not df.empty:
         ax2.grid(True, linestyle='--', alpha=0.7) # 그리드 추가
         st.pyplot(fig2)
     
-    # S&P 500 데이터가 있는 경우 시각화 추가
-    if 'SP500' in df.columns and not df['SP500'].empty:
-        st.subheader("🇺🇸-🇯🇵 금리 스프레드와 S&P 500 지수")
-        fig3, ax3_primary = plt.subplots(figsize=(12, 7))
-
-        color_spread = 'tab:green'
-        ax3_primary.set_xlabel('날짜')
-        ax3_primary.set_ylabel('금리 스프레드 (%)', color=color_spread)
-        ax3_primary.plot(df.index, df["Spread"], label="미국-일본 10Y 금리 스프레드", color=color_spread, linewidth=2)
-        ax3_primary.tick_params(axis='y', labelcolor=color_spread)
-        ax3_primary.axhline(0, color="gray", linestyle="--", alpha=0.7) # 0% 스프레드 라인
-        ax3_primary.legend(loc='upper left')
-        
-        # S&P 500을 위한 보조 y축
-        ax3_secondary = ax3_primary.twinx()
-        color_sp500 = 'tab:purple'
-        ax3_secondary.set_ylabel('S&P 500 지수', color=color_sp500)
-        ax3_secondary.plot(df.index, df["SP500"], label="S&P 500 지수", color=color_sp500, linestyle='--', linewidth=1.5)
-        ax3_secondary.tick_params(axis='y', labelcolor=color_sp500)
-        ax3_secondary.legend(loc='upper right')
-
-        ax3_primary.set_title("미국-일본 10년물 금리 스프레드와 S&P 500 지수")
-        ax3_primary.grid(True, linestyle='--', alpha=0.7)
-        fig3.tight_layout() # 레이아웃 자동 조정
-        st.pyplot(fig3)
-    else:
-        st.warning("S&P 500 지수 데이터를 불러오지 못했거나 유효한 데이터가 없어 해당 그래프는 표시되지 않습니다.")
-
+    # S&P 500 관련 시각화는 완전히 제거되었습니다.
 
 else:
     st.warning("데이터를 불러오지 못했거나 선택된 기간에 유효한 데이터가 없습니다. 날짜 범위를 조정해 보세요.")
@@ -171,13 +124,25 @@ else:
 # --- 해석 도움말 ---
 with st.expander("📖 금리 스프레드 해석 가이드"):
     st.markdown("""
-    - **금리 차이 확대(↑)**: 일본 금리는 여전히 낮고, 미국 금리는 높음 → 엔캐리 트레이드 유지 → 미국 증시 **안정적**
-    - **금리 차이 축소(↓)**: 일본 금리 상승 또는 미국 금리 하락 → 캐리 트레이드 축소 → 미국 증시 **조정 가능성 증가**
-    - 특히 **스프레드가 1% 이하로 줄어들면** 리스크 자산 회피 신호로 볼 수 있음
+    - **엔캐리 트레이드(Yen Carry Trade)**: 일본의 낮은 금리(낮은 대출 비용)를 활용하여 엔화를 빌린 후, 이 자금으로 미국 등 금리가 높은 국가의 자산(주식, 채권)에 투자하여 금리 차이(스프레드)만큼 수익을 추구하는 전략입니다.
+
+    - **금리 차이 확대 (스프레드 상승):**
+        - 미국 금리 > 일본 금리 (금리 차이 확대)
+        - 엔캐리 트레이드 유지 또는 활성화 → 엔화 매도, 달러/미국 자산 매수 → 미국 증시 **긍정적** 영향
+        - 그래프에서 **초록색 선(스프레드)이 상승**하는 시기.
+
+    - **금리 차이 축소 (스프레드 하락):**
+        - 일본 금리 상승 또는 미국 금리 하락 (금리 차이 축소)
+        - 엔캐리 트레이드의 수익성이 줄어들거나 손실 위험 → 엔화를 되갚기 위해 미국 자산 매도 → 엔화 매수 → 미국 증시 **조정 또는 하락 압력**
+        - 그래프에서 **초록색 선(스프레드)이 하락**하는 시기. 특히 0% 또는 그 이하로 근접하면 엔캐리 트레이드의 청산(unwind)이 가속화될 수 있다는 신호로 해석되기도 합니다.
+    - ※요약:
+        - **금리 차이 확대(↑)**: 일본 금리는 여전히 낮고, 미국 금리는 높음 → 엔캐리 트레이드 유지 → 미국 증시 **안정적**
+        - **금리 차이 축소(↓)**: 일본 금리 상승 또는 미국 금리 하락 → 캐리 트레이드 축소 → 미국 증시 **조정 가능성 증가**
+        - 특히 **스프레드가 1% 이하로 줄어들면** 리스크 자산 회피 신호로 볼 수 있음
 
     ---
     **⚠️ 데이터 빈도 참고사항:**
-    - 미국 10년물 국채 금리 및 S&P 500 지수는 **일별(Daily) 데이터**입니다.
+    - 미국 10년물 국채 금리는 **일별(Daily) 데이터**입니다.
     - 일본 10년물 국채 금리 데이터는 FRED에서 **월별(Monthly) 기준**으로 제공됩니다.
     - 따라서 그래프 상에서 일본 금리 데이터는 해당 월의 첫 영업일에만 업데이트되는 것처럼 보일 수 있으며, 금리 스프레드 역시 월별 데이터가 존재하는 날짜에만 계산됩니다.
     """)
