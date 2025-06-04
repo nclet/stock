@@ -2,7 +2,7 @@ streamlit
 pandas
 numpy==1.26.4  # TensorFlow 2.14.0과 호환되는 NumPy 1.x 버전으로 명시
 matplotlib
-ccxt
+ccxt==4.4.87
 finance-datareader
 scikit-learn
 tensorflow==2.14.0 # 명시적으로 버전을 지정해두는 것이 좋음
