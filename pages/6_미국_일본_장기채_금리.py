@@ -92,16 +92,16 @@ with st.spinner("📊 데이터를 불러오는 중... (FRED 사용)"): # YFinan
 
 # --- 시각화 ---
 if not df.empty:
-    st.title("🇺🇸 미국 vs 🇯🇵 일본 10년 국채 금리 및 금리차")
+    st.title("미국·일본 10년 국채 금리 및 스프레드")
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("미국 vs 일본 10년물 금리")
         fig1, ax1 = plt.subplots(figsize=(10, 6)) # figsize 추가
-        df["US_10Y"].plot(ax=ax1, label="미국 10Y", color="blue", linewidth=1.5)
-        df["JP_10Y"].plot(ax=ax1, label="일본 10Y (월별)", color="red", linewidth=1.5) # 월별임을 명시
-        ax1.set_ylabel("금리 (%)")
-        ax1.set_title("미국 vs 일본 10년물 국채 금리 추이") # 제목 추가
+        df["US_10Y"].plot(ax=ax1, label="AMERICA 10Y", color="blue", linewidth=1.5)
+        df["JP_10Y"].plot(ax=ax1, label="JAPAN 10Y", color="red", linewidth=1.5) # 월별임을 명시
+        ax1.set_ylabel("Interest rate(%)")
+        ax1.set_title("U.S, Japan 10-year bond spread") # 제목 추가
         ax1.legend()
         ax1.grid(True, linestyle='--', alpha=0.7) # 그리드 추가
         st.pyplot(fig1)
@@ -111,12 +111,11 @@ if not df.empty:
         fig2, ax2 = plt.subplots(figsize=(10, 6)) # figsize 추가
         df["Spread"].plot(ax=ax2, color="green", linewidth=2)
         ax2.axhline(0, color="gray", linestyle="--", alpha=0.7)
-        ax2.set_ylabel("금리차 (%)")
-        ax2.set_title("미국 - 일본 10년물 금리 스프레드") # 제목 추가
+        ax2.set_ylabel("Interest rate(%)")
+        ax2.set_title("U.S.-Japan 10-year interest rate spread") # 제목 추가
         ax2.grid(True, linestyle='--', alpha=0.7) # 그리드 추가
         st.pyplot(fig2)
     
-    # S&P 500 관련 시각화는 완전히 제거되었습니다.
 
 else:
     st.warning("데이터를 불러오지 못했거나 선택된 기간에 유효한 데이터가 없습니다. 날짜 범위를 조정해 보세요.")
