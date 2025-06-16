@@ -31,7 +31,7 @@ st.set_page_config(layout="wide")
 
 st.title("🔮 주가 예측 대시보드")
 st.markdown("과거 주가 데이터, 기술적/펀더멘털 지표, 그리고 딥러닝/머신러닝 모델을 활용하여 미래 주가 및 수익률을 예측합니다.")
-
+st.markdown("방대한 데이터로 인해 시간이 다소 오랫동안 소요될 수 있습니다.")
 # --- 기술적 지표 계산 함수 ---
 @st.cache_data
 def calculate_bollinger_bands_pred(prices, window=20, num_std=2):
@@ -78,7 +78,6 @@ def build_lstm_model(input_shape):
     model.compile(optimizer='adam', loss=tf.keras.losses.MeanSquaredError()) 
     return model
 
-# st.cache_resource에 hash_funcs 인자 제거. scaler 인자를 _scaler로 변경
 @st.cache_resource 
 def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, _scaler, features, n_monte_carlo_runs=100):
     """
@@ -284,10 +283,10 @@ if not df_all_data.empty:
                 ax_lstm.plot(future_dates, mean_future_preds, label='미래 예측 주가 (평균)', color='red', linestyle='--')
                 ax_lstm.fill_between(future_dates, lower_bound_preds, upper_bound_preds, color='red', alpha=0.2, label='95% 신뢰 구간')
 
-                ax_lstm.axvline(last_date, color='gray', linestyle=':', label='예측 기준일')
-                ax_lstm.set_title(f"{selected_name} ({selected_code}) 미래 주가 예측 (LSTM 기반)")
-                ax_lstm.set_xlabel("날짜")
-                ax_lstm.set_ylabel("가격(₩/원)")
+                ax_lstm.axvline(last_date, color='gray', linestyle=':', label='base date of forecast')
+                ax_lstm.set_title(f"{selected_name} ({selected_code}) Future Stock Price Forecast(LSTM)")
+                ax_lstm.set_xlabel("Date")
+                ax_lstm.set_ylabel("Price(₩/won)")
                 ax_lstm.legend()
                 ax_lstm.grid(True)
                 plt.tight_layout()
@@ -348,19 +347,19 @@ if not df_all_data.empty:
                 last_data_ml = X_ml_scaled[-1].reshape(1, -1)
                 next_day_return_pred_ml = rf_model.predict(last_data_ml)[0]
 
-                st.subheader("📈 **RandomForest 다음 거래일 수익률 예측**")
-                st.metric(label="예측된 다음 거래일 수익률", value=f"{next_day_return_pred_ml:.2f}%")
+                st.subheader("📈 **RandomForest 결과**")
+                st.metric(label="예측된 수익률", value=f"{next_day_return_pred_ml:.2f}%")
 
                 if next_day_return_pred_ml > 0.5:
-                    st.success("✨ RandomForest 모델은 다음 거래일에 **강력한 상승**을 예측합니다!")
+                    st.success("✨ RandomForest 모델은 **강력한 상승**을 예측합니다!")
                 elif next_day_return_pred_ml > 0:
-                    st.info("⬆️ RandomForest 모델은 다음 거래일에 **소폭 상승**을 예측합니다.")
+                    st.info("⬆️ RandomForest 모델은 **소폭 상승**을 예측합니다.")
                 elif next_day_return_pred_ml < -0.5:
-                    st.error("🚨 RandomForest 모델은 다음 거래일에 **강력한 하락**을 예측합니다!")
+                    st.error("🚨 RandomForest 모델은 **강력한 하락**을 예측합니다!")
                 elif next_day_return_pred_ml < 0:
-                    st.warning("⬇️ RandomForest 모델은 다음 거래일에 **소폭 하락**을 예측합니다.")
+                    st.warning("⬇️ RandomForest 모델은 **소폭 하락**을 예측합니다.")
                 else:
-                    st.write("➖ RandomForest 모델은 다음 거래일에 **큰 변동 없음**을 예측합니다.")
+                    st.write("➖ RandomForest 모델은 **큰 변동 없음**을 예측합니다.")
 
 else:
     st.info("데이터 로드 중 문제가 발생했습니다. 페이지 상단의 오류 메시지를 확인해주세요.")
