@@ -13,17 +13,15 @@ try:
     from sklearn.model_selection import train_test_split
 except ImportError:
     st.error("""
-    **필수 라이브러리가 설치되지 않았습니다!**
-    아래 명령어를 실행하여 필요한 라이브러리를 설치해주세요:
-    `pip install scikit-learn pandas matplotlib streamlit`
+    죄송합니다. 라이브러리 오류입니다. 나중에 다시 시도해주세요.
     """)
     st.stop()
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(layout="wide")
 
-st.title("🚀 주가 수익률 예측 대시보드 (RandomForest)")
-st.markdown("로컬 CSV 데이터를 기반으로 RandomForest 모델을 사용하여 **다음 거래일의 수익률**을 예측합니다.")
+st.title("🚀 주가 수익률 머신러닝 예측")
+st.markdown("데이터를 통해 랜덤포레스트(RandomForest)모델을 사용하여 **단기 주가 수익률**을 예측합니다.")
 
 # --- 기술적 지표 계산 함수 ---
 @st.cache_data
@@ -62,7 +60,7 @@ def load_merged_data():
 
         if not os.path.exists(merged_data_file_path):
             st.error(f"❌ 데이터 파일을 찾을 수 없습니다: '{merged_data_file_path}'")
-            st.info("데이터 파일(`merged_data_monthly_per_pbr.csv`)이 Streamlit 앱 파일과 같은 디렉토리 또는 상위 디렉토리에 있는지 확인해주세요.")
+            st.info("죄송합니다. 데이터 파일이 소실되어 있는 상태입니다.")
             return pd.DataFrame()
 
         df = pd.read_csv(merged_data_file_path)
@@ -71,7 +69,7 @@ def load_merged_data():
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6) # 종목코드 6자리로 통일
         
-        st.success(f"✅ 'merged_data_monthly_per_pbr.csv' 데이터를 성공적으로 로드했습니다. (총 {len(df)}개 데이터 포인트)")
+        st.success(f"✅데이터를 성공적으로 로드했습니다. (총 {len(df)}개 데이터 포인트)")
         return df
     except Exception as e:
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
@@ -114,10 +112,10 @@ def train_and_predict_random_forest(selected_code, df_stock_data, ml_features):
             st.error("모델 학습을 위한 데이터가 충분하지 않습니다. 파일의 데이터를 확인해주세요.")
             return None, None, None, None, None
 
-    st.info("RandomForest 모델 학습 중...")
+    st.info("랜덤포레스트 모델 학습 중...")
     # RandomForestRegressor 모델 초기화 및 학습
     rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1) # n_jobs=-1로 모든 코어 사용
-    with st.spinner(f"🔄 {selected_code} RandomForest 모델 학습 중 (CSV 기반)..."):
+    with st.spinner(f"🔄 {selected_code} 랜덤포레스트 모델 학습 중..."):
         rf_model.fit(X_train_ml, y_train_ml)
     st.success("✅ RandomForest 모델 학습 완료!")
 
@@ -155,10 +153,10 @@ selected_name = st.selectbox("🔮 **예측할 종목을 선택하세요**", sor
 selected_code = name_code_dict[selected_name]
 
 st.markdown("---")
-st.subheader("🤖 **RandomForest 모델 예측 설정**")
-st.info("RandomForest 모델은 과거 주가와 기술적 지표를 기반으로 다음 거래일의 수익률을 예측합니다.")
+st.subheader("🤖 **랜덤포레스트 주가 예측**")
+st.info("RandomForest 모델은 과거 주가와 기술적 지표를 기반으로 단기 수익률을 예측합니다.")
 
-if st.button("🚀 **예측 시작!**"):
+if st.button("🚀 **수익률 예측 시작하기**"):
     with st.spinner(f"'{selected_name}' 데이터 준비 및 RandomForest 모델 예측 중..."):
         # 선택된 종목의 데이터만 필터링
         df_stock = df_all_data[df_all_data['Code'] == selected_code].copy()
@@ -184,36 +182,36 @@ if st.button("🚀 **예측 시작!**"):
         if rf_model is None: # 모델 학습/예측 실패 시
             st.stop()
 
-        st.subheader("📊 **RandomForest 모델 성능 평가 (테스트 데이터)**")
+        st.subheader("📊 **랜덤포레스트 모델 성능 평가**")
         st.write(f"**평균 제곱 오차 (MSE)**: {mean_squared_error(y_test_ml, y_pred_ml):.2f}")
         st.write(f"**결정 계수 (R² Score)**: {r2_score(y_test_ml, y_pred_ml):.2f}")
         st.write(f"테스트 데이터의 **평균 실제 수익률**: {np.mean(y_test_ml):.2f}%")
         st.write(f"테스트 데이터의 **평균 예측 수익률**: {np.mean(y_pred_ml):.2f}%")
 
-        st.subheader("📈 **RandomForest 다음 거래일 수익률 예측**")
-        st.metric(label="예측된 다음 거래일 수익률", value=f"{next_day_return_pred_ml:.2f}%")
+        st.subheader("📈 **RandomForest 단기 수익률 예측**")
+        st.metric(label="예측된 수익률", value=f"{next_day_return_pred_ml:.2f}%")
 
         if next_day_return_pred_ml > 0.5:
-            st.success("✨ RandomForest 모델은 다음 거래일에 **강력한 상승**을 예측합니다!")
+            st.success("✨ RandomForest 모델이 **강력한 상승**을 예측합니다!")
         elif next_day_return_pred_ml > 0:
-            st.info("⬆️ RandomForest 모델은 다음 거래일에 **소폭 상승**을 예측합니다.")
+            st.info("⬆️ RandomForest 모델이 **소폭 상승**을 예측합니다.")
         elif next_day_return_pred_ml < -0.5:
-            st.error("🚨 RandomForest 모델은 다음 거래일에 **강력한 하락**을 예측합니다!")
+            st.error("🚨 RandomForest 모델이 **강력한 하락**을 예측합니다!")
         elif next_day_return_pred_ml < 0:
-            st.warning("⬇️ RandomForest 모델은 다음 거래일에 **소폭 하락**을 예측합니다.")
+            st.warning("⬇️ RandomForest 모델이 **소폭 하락**을 예측합니다.")
         else:
-            st.write("➖ RandomForest 모델은 **큰 변동 없음**을 예측합니다.")
+            st.write("➖ RandomForest 모델이 **큰 변동 없음**을 예측합니다.")
 
         # 예측 시각화 (실제 수익률과 예측 수익률 비교)
         st.markdown("---")
-        st.subheader("📉 **RandomForest 모델 예측 vs. 실제 수익률 (테스트 데이터)**")
+        st.subheader("📉 **RandomForest 모델 예측 vs. 실제 수익률**")
         
         fig_rf, ax_rf = plt.subplots(figsize=(12, 6))
-        ax_rf.plot(y_test_ml, label='실제 수익률', color='blue', marker='o', linestyle='None', alpha=0.6)
-        ax_rf.plot(y_pred_ml, label='예측 수익률', color='red', marker='x', linestyle='None', alpha=0.6)
-        ax_rf.set_title(f"{selected_name} ({selected_code}) RandomForest 예측 수익률")
-        ax_rf.set_xlabel("데이터 포인트 인덱스 (테스트셋)")
-        ax_rf.set_ylabel("수익률 (%)")
+        ax_rf.plot(y_test_ml, label='actual rate of return', color='blue', marker='o', linestyle='None', alpha=0.6)
+        ax_rf.plot(y_pred_ml, label='forecasted rate of return', color='red', marker='x', linestyle='None', alpha=0.6)
+        ax_rf.set_title(f"{selected_name} ({selected_code}) RandomForest forecasted rate of return")
+        ax_rf.set_xlabel("Data Point Index")
+        ax_rf.set_ylabel("the rate of return(%)")
         ax_rf.legend()
         ax_rf.grid(True)
         plt.tight_layout()
