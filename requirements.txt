@@ -10,3 +10,5 @@ yfinance
 fredapi
 seaborn
 xmltodict
+pandas-datareader
+requests
