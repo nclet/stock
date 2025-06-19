@@ -8,3 +8,4 @@ scikit-learn
 tensorflow==2.14.0 # 명시적으로 버전을 지정해두는 것이 좋음
 yfinance
 fredapi
+seaborn
