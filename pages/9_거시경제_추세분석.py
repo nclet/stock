@@ -7,16 +7,16 @@ from datetime import datetime, timedelta
 import os
 import requests
 import xmltodict
-import financedatareader as fdr
-# FinanceDataReader 라이브러리 추가 (KOSPI 데이터용)
-# try:
-#     import FinanceDataReader as fdr
-# except ImportError:
-#     st.error("""
-#     FinanceDataReader 라이브러리가 설치되지 않았습니다!
-#     `pip install FinanceDataReader` 명령어를 실행해주세요.
-#     """)
-#     st.stop()
+# import financedatareader as fdr
+FinanceDataReader 라이브러리 추가 (KOSPI 데이터용)
+try:
+    import FinanceDataReader as fdr
+except ImportError:
+    st.error("""
+    FinanceDataReader 라이브러리가 설치되지 않았습니다!
+    `pip install FinanceDataReader` 명령어를 실행해주세요.
+    """)
+    st.stop()
 
 
 # FRED 및 ECOS API 키 로드 (secrets.toml에서)
