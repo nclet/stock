@@ -385,9 +385,9 @@ def define_market_regime(df):
     def classify_regime(row):
         # GDP가 제거되었으므로, 시장 국면은 물가 추세에만 의존하여 분류합니다.
         if row['Inflation_Trend']:
-            return "물가 상승 국면 (Inflationary Period)"
+            return "Inflationary Period"
         else:
-            return "물가 하락 국면 (Disinflationary Period)"
+            return "Disinflationary Period"
 
     df_regime['Market_Regime'] = df_regime.apply(classify_regime, axis=1)
     
