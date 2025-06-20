@@ -8,7 +8,7 @@ import os
 import requests
 import xmltodict
 # import financedatareader as fdr
-FinanceDataReader 라이브러리 추가 (KOSPI 데이터용)
+# FinanceDataReader 라이브러리 추가 (KOSPI 데이터용)
 try:
     import FinanceDataReader as fdr
 except ImportError:
