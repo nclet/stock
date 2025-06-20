@@ -7,7 +7,9 @@ from datetime import datetime, timedelta
 import os
 import requests
 import xmltodict
-# import financedatareader as fdr
+import time # 시간 지연을 위해 추가
+import random # 무작위 시간 지연을 위해 추가
+
 # FinanceDataReader 라이브러리 추가 (KOSPI 데이터용)
 try:
     import FinanceDataReader as fdr
@@ -63,13 +65,26 @@ def get_fred_data(api_key):
     }
 
     df_fred = pd.DataFrame()
+    max_fred_retries = 3
+    initial_fred_delay = 1 # 초
+
     for name, code in fred_codes.items():
-        try:
-            temp_df = web.DataReader(code, 'fred', start_date, end_date, api_key=api_key)
-            df_fred = pd.concat([df_fred, temp_df], axis=1)
-        except Exception as e:
-            st.warning(f"FRED 데이터 로드 오류 ({name}, {code}): {e}")
-            continue
+        for attempt in range(max_fred_retries):
+            try:
+                temp_df = web.DataReader(code, 'fred', start_date, end_date, api_key=api_key)
+                df_fred = pd.concat([df_fred, temp_df], axis=1)
+                st.info(f"✅ FRED 데이터 로드 성공: {name}")
+                break # 성공하면 재시도 루프 탈출
+            except Exception as e:
+                if attempt < max_fred_retries - 1:
+                    sleep_time = initial_fred_delay * (2 ** attempt) + random.uniform(0, 1)
+                    st.warning(f"FRED 데이터 로드 오류 ({name}, {code}): {e}. {sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_fred_retries})")
+                    time.sleep(sleep_time)
+                else:
+                    st.error(f"❌ FRED 데이터 로드 최종 실패: {name}, {code}. 오류: {e}")
+                    # 최종 실패 시 해당 컬럼은 NaN으로 남을 수 있음
+                    
+        time.sleep(random.uniform(0.3, 0.8)) # 각 지표 호출 후 무작위 지연
     
     df_fred.columns = fred_codes.keys()
     df_fred = df_fred.resample('ME').last().ffill() # 모든 지표를 월말 기준으로 리샘플링하고, 결측치는 이전 값으로 채움
@@ -91,76 +106,91 @@ def get_ecos_data(api_key):
 
     df_ecos = pd.DataFrame()
     
-    # 데이터 시작일과 종료일 설정 (충분한 과거 데이터 확보를 위해 2010년부터 시작)
-    # 현재 날짜를 기준으로 ECOS API 기간을 설정
     now = datetime.now()
-    
-    # 월별 데이터 포맷:YYYYMM
     start_date_str_month = datetime(2010, 1, 1).strftime('%Y%m') 
-    end_date_str_month = (now + timedelta(days=30)).strftime('%Y%m') # 넉넉하게 현재 날짜의 다음 달까지
+    end_date_str_month = (now + timedelta(days=30)).strftime('%Y%m')
+
+    max_ecos_retries = 3
+    initial_ecos_delay = 1 # 초
 
     for name, info in ecos_codes_info.items():
-        try:
-            stat_code, item_code = info['code'].split('/')
-            freq = info['freq']
-            
-            # 주기에 따라 start_date와 end_date 형식 조정
-            if freq == 'M':
-                current_start_date_str = start_date_str_month
-                current_end_date_str = end_date_str_month
-            elif freq == 'D': # ECOS에 일별 데이터가 있다면
-                current_start_date_str = datetime(2010, 1, 1).strftime('%Y%m%d')
-                current_end_date_str = (now + timedelta(days=30)).strftime('%Y%m%d')
-            elif freq == 'A': # ECOS에 연간 데이터가 있다면
-                current_start_date_str = "2010"
-                current_end_date_str = str(now.year)
-            else: # 현재 코드에서는 M, D, A 외의 주기는 없으므로 추가 필요 시 확장
-                st.warning(f"ECOS API 호출에서 지원하지 않는 주기 형식입니다: {freq} for {name}")
-                continue
+        stat_code, item_code = info['code'].split('/')
+        freq = info['freq']
+        
+        current_start_date_str = start_date_str_month
+        current_end_date_str = end_date_str_month
+
+        url = f"{base_url}{api_key}/json/kr/1/1000/{stat_code}/{freq}/{current_start_date_str}/{current_end_date_str}/{item_code}"
+        
+        for attempt in range(max_ecos_retries):
+            try:
+                response = requests.get(url, timeout=10) # 타임아웃 10초 설정
+                data = response.json()
                 
-            # ECOS API는 한 번에 최대 1000건의 데이터를 반환
-            url = f"{base_url}{api_key}/json/kr/1/1000/{stat_code}/{freq}/{current_start_date_str}/{current_end_date_str}/{item_code}"
-            
-            response = requests.get(url)
-            data = response.json()
-            
-            if 'StatisticSearch' in data and 'row' in data['StatisticSearch']:
-                rows = data['StatisticSearch']['row']
-                temp_df = pd.DataFrame(rows)
-                
-                if 'TIME' in temp_df.columns and 'DATA_VALUE' in temp_df.columns:
-                    # ECOS 주기별 날짜 포맷 변환 및 월말 날짜 설정
-                    if freq == 'M': # 월별 데이터 (YYYYMM -> YYYY-MM-DD 월말)
-                        temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y%m', errors='coerce') + pd.offsets.MonthEnd(0) # 월말 날짜로 변경
-                    elif freq == 'D': # 일별 데이터 (YYYYMMDD -> YYYY-MM-DD)
-                        temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y%m%d', errors='coerce')
-                    elif freq == 'A': # 연간 데이터 (YYYY -> YYYY-12-31)
-                        temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y', errors='coerce') + pd.offsets.YearEnd(0)
-                    else: # 이 부분은 위에 처리되겠지만, 혹시 모를 경우를 대비
-                        st.warning(f"알 수 없는 ECOS 주기 형식: {freq} for {name}")
-                        continue
+                if 'StatisticSearch' in data and 'row' in data['StatisticSearch']:
+                    rows = data['StatisticSearch']['row']
+                    temp_df = pd.DataFrame(rows)
                     
-                    temp_df.dropna(subset=['TIME'], inplace=True) # 날짜 변환 실패한 행 제거
-                    temp_df.drop_duplicates(subset=['TIME'], inplace=True) # 중복 날짜 제거
-                    temp_df.set_index('TIME', inplace=True)
-                    
-                    temp_df[name] = pd.to_numeric(temp_df['DATA_VALUE'], errors='coerce') # 데이터 값 숫자로 변환
-                    
-                    if df_ecos.empty:
-                        df_ecos = temp_df[[name]]
+                    if 'TIME' in temp_df.columns and 'DATA_VALUE' in temp_df.columns:
+                        if freq == 'M':
+                            temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y%m', errors='coerce') + pd.offsets.MonthEnd(0)
+                        elif freq == 'D':
+                            temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y%m%d', errors='coerce')
+                        elif freq == 'A':
+                            temp_df['TIME'] = pd.to_datetime(temp_df['TIME'], format='%Y', errors='coerce') + pd.offsets.YearEnd(0)
+                        
+                        temp_df.dropna(subset=['TIME'], inplace=True)
+                        temp_df.drop_duplicates(subset=['TIME'], inplace=True)
+                        temp_df.set_index('TIME', inplace=True)
+                        
+                        temp_df[name] = pd.to_numeric(temp_df['DATA_VALUE'], errors='coerce')
+                        
+                        if df_ecos.empty:
+                            df_ecos = temp_df[[name]]
+                        else:
+                            df_ecos = pd.merge(df_ecos, temp_df[[name]], left_index=True, right_index=True, how='outer')
+                        
+                        st.info(f"✅ ECOS 데이터 로드 성공: {name}")
+                        break # 성공하면 재시도 루프 탈출
                     else:
-                        df_ecos = pd.merge(df_ecos, temp_df[[name]], left_index=True, right_index=True, how='outer')
+                        st.warning(f"ECOS 응답 형식 오류: '{name}'에 예상 컬럼 없음. 재시도... ({attempt + 1}/{max_ecos_retries})")
+                        if attempt == max_ecos_retries - 1:
+                            st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. 예상 컬럼 없음.")
+                        time.sleep(initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1))
+                elif 'RESULT' in data and data['RESULT']['CODE'] != 'INFO-000':
+                        st.warning(f"ECOS API 호출 오류 ({name}, {info['code']}): {data['RESULT']['CODE']} - {data['RESULT']['MESSAGE']}. 재시도... ({attempt + 1}/{max_ecos_retries})")
+                        if attempt == max_ecos_retries - 1:
+                            st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. API 오류: {data['RESULT']['CODE']}")
+                        time.sleep(initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1))
                 else:
-                    st.warning(f"ECOS 응답 형식 오류: '{name}'에 예상 컬럼 'TIME' 또는 'DATA_VALUE' 없음. 실제 응답 컬럼: {temp_df.columns.tolist()}")
-            elif 'RESULT' in data and data['RESULT']['CODE'] != 'INFO-000':
-                    # ECOS API에서 오류 메시지가 왔을 때 출력
-                    st.warning(f"ECOS API 호출 오류 ({name}, {info['code']}): {data['RESULT']['CODE']} - {data['RESULT']['MESSAGE']}")
-            else:
-                st.warning(f"ECOS 데이터 오류 또는 응답 없음: {name}, {info['code']}. 응답: {data}")
-                
-        except Exception as e:
-            st.warning(f"ECOS 데이터 로드 중 예상치 못한 오류 ({name}, {info['code']}): {e}")
-            continue
+                    st.warning(f"ECOS 데이터 오류 또는 응답 없음: {name}. 재시도... ({attempt + 1}/{max_ecos_retries})")
+                    if attempt == max_ecos_retries - 1:
+                        st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. 응답 없음.")
+                    time.sleep(initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1))
+                    
+            except requests.exceptions.Timeout:
+                st.warning(f"ECOS API 호출 타임아웃 ({name}, {info['code']}). 재시도... ({attempt + 1}/{max_ecos_retries})")
+                if attempt == max_ecos_retries - 1:
+                    st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. 타임아웃.")
+                time.sleep(initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1))
+            except requests.exceptions.JSONDecodeError as e:
+                # JSON 디코딩 오류 발생 시 응답 내용 확인
+                st.warning(f"ECOS 응답 JSON 디코딩 오류 ({name}, {info['code']}): {e}")
+                st.warning(f"수신된 응답의 상태 코드: {response.status_code if 'response' in locals() else 'N/A'}")
+                st.warning(f"수신된 응답 내용 (디코딩 실패): {response.text[:500] if 'response' in locals() else 'N/A'}")
+                if attempt < max_ecos_retries - 1:
+                    sleep_time = initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1)
+                    st.info(f"{sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_ecos_retries})")
+                    time.sleep(sleep_time)
+                else:
+                    st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. JSON 디코딩 오류.")
+            except Exception as e:
+                st.warning(f"ECOS 데이터 로드 중 예상치 못한 오류 ({name}, {info['code']}): {e}. 재시도... ({attempt + 1}/{max_ecos_retries})")
+                if attempt == max_ecos_retries - 1:
+                    st.error(f"❌ ECOS 데이터 로드 최종 실패: {name}. 알 수 없는 오류.")
+                time.sleep(initial_ecos_delay * (2 ** attempt) + random.uniform(0, 1))
+        
+        time.sleep(random.uniform(0.3, 0.8)) # 각 지표 호출 후 무작위 지연
     
     if not df_ecos.empty:
         df_ecos = df_ecos.resample('ME').last().ffill() # 월말 기준으로 리샘플링
@@ -179,31 +209,64 @@ def get_stock_data():
     
     df_stocks = pd.DataFrame()
 
-    # KOSPI 데이터 로드
-    try:
-        df_kospi = fdr.DataReader('KS11', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
-        if 'Close' in df_kospi.columns:
-            df_kospi_monthly = df_kospi['Close'].resample('ME').last().ffill().to_frame(name='KOSPI_Close')
-            df_stocks = pd.concat([df_stocks, df_kospi_monthly], axis=1)
-            st.success("✅ KOSPI 지수 데이터 수집 완료!")
-        else:
-            st.warning("KOSPI 데이터에 'Close' 컬럼이 없습니다.")
+    max_stock_retries = 5 # 주식 데이터는 특히 더 많은 재시도를 설정 (KRX가 까다로울 수 있음)
+    initial_stock_delay = 2 # 초 (KRX는 좀 더 긴 지연이 필요할 수 있음)
 
-    except Exception as e:
-        st.error(f"❌ KOSPI 지수 데이터 로드 중 오류 발생: {e}. FinanceDataReader 문제일 수 있습니다.")
+    # KOSPI 데이터 로드
+    for attempt in range(max_stock_retries):
+        try:
+            df_kospi = fdr.DataReader('KS11', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+            
+            if 'Close' in df_kospi.columns:
+                df_kospi_monthly = df_kospi['Close'].resample('ME').last().ffill().to_frame(name='KOSPI_Close')
+                df_stocks = pd.concat([df_stocks, df_kospi_monthly], axis=1)
+                st.success("✅ KOSPI 지수 데이터 수집 완료!")
+                break # 성공하면 재시도 루프 탈출
+            else:
+                st.warning("KOSPI 데이터에 'Close' 컬럼이 없습니다. 재시도... (FinanceDataReader 컬럼 문제일 수 있음)")
+                if attempt < max_stock_retries - 1:
+                    sleep_time = initial_stock_delay * (2 ** attempt) + random.uniform(0, 2) # 더 긴 랜덤 지연
+                    st.info(f"{sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_stock_retries})")
+                    time.sleep(sleep_time)
+                else:
+                    st.error("❌ KOSPI 데이터 로드 최종 실패: 'Close' 컬럼 없음.")
+
+        except Exception as e:
+            if attempt < max_stock_retries - 1:
+                sleep_time = initial_stock_delay * (2 ** attempt) + random.uniform(0, 2) # 더 긴 랜덤 지연
+                st.warning(f"❌ KOSPI 지수 데이터 로드 중 오류 발생: {e}. {sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_stock_retries})")
+                time.sleep(sleep_time)
+            else:
+                st.error(f"❌ KOSPI 지수 데이터 로드 최종 오류 발생: {e}. FinanceDataReader 문제일 수 있습니다.")
+                # 최종 실패하더라도 SPY 데이터는 시도할 수 있도록 처리
+
+    time.sleep(random.uniform(0.5, 1.5)) # KOSPI 로드 후 SPY 로드 전 지연
 
     # S&P 500 ETF (SPY) 데이터 로드
-    try:
-        df_spy = fdr.DataReader('SPY', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
-        if 'Close' in df_spy.columns:
-            df_spy_monthly = df_spy['Close'].resample('ME').last().ffill().to_frame(name='US_Stock_Close')
-            df_stocks = pd.concat([df_stocks, df_spy_monthly], axis=1)
-            st.success("✅ S&P 500 ETF (SPY) 데이터 수집 완료!")
-        else:
-            st.warning("S&P 500 데이터에 'Close' 컬럼이 없습니다.")
-    except Exception as e:
-        st.error(f"❌ S&P 500 ETF (SPY) 데이터 로드 중 오류 발생: {e}. FinanceDataReader 문제일 수 있습니다.")
-    
+    for attempt in range(max_stock_retries): # SPY도 재시도 로직 적용
+        try:
+            df_spy = fdr.DataReader('SPY', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+            if 'Close' in df_spy.columns:
+                df_spy_monthly = df_spy['Close'].resample('ME').last().ffill().to_frame(name='US_Stock_Close')
+                df_stocks = pd.concat([df_stocks, df_spy_monthly], axis=1)
+                st.success("✅ S&P 500 ETF (SPY) 데이터 수집 완료!")
+                break # 성공하면 재시도 루프 탈출
+            else:
+                st.warning("S&P 500 데이터에 'Close' 컬럼이 없습니다. 재시도... (FinanceDataReader 컬럼 문제일 수 있음)")
+                if attempt < max_stock_retries - 1:
+                    sleep_time = initial_stock_delay * (2 ** attempt) + random.uniform(0, 2)
+                    st.info(f"{sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_stock_retries})")
+                    time.sleep(sleep_time)
+                else:
+                    st.error("❌ S&P 500 ETF (SPY) 데이터 로드 최종 실패: 'Close' 컬럼 없음.")
+        except Exception as e:
+            if attempt < max_stock_retries - 1:
+                sleep_time = initial_stock_delay * (2 ** attempt) + random.uniform(0, 2)
+                st.warning(f"❌ S&P 500 ETF (SPY) 데이터 로드 중 오류 발생: {e}. {sleep_time:.2f}초 후 재시도... ({attempt + 1}/{max_stock_retries})")
+                time.sleep(sleep_time)
+            else:
+                st.error(f"❌ S&P 500 ETF (SPY) 데이터 로드 최종 오류 발생: {e}. FinanceDataReader 문제일 수 있습니다.")
+
     if df_stocks.empty:
         st.error("주식 지수 데이터를 전혀 가져오지 못했습니다.")
 
