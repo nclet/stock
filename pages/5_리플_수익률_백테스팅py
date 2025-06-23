@@ -254,7 +254,7 @@ initial_rows = len(processed_data)
 processed_data.dropna(subset=columns_to_check, inplace=True)
 rows_after_dropna = len(processed_data)
 
-st.info(f"지표 계산 후 NaN 제거: 초기 {initial_rows}개 행에서 {rows_after_dropna}개 행으로 감소했습니다 (총 {initial_rows - rows_after_dropna}개 행 제거).")
+# st.info(f"지표 계산 후 NaN 제거: 초기 {initial_rows}개 행에서 {rows_after_dropna}개 행으로 감소했습니다 (총 {initial_rows - rows_after_dropna}개 행 제거).")
 
 
 if processed_data.empty or len(processed_data) < 2:
@@ -443,7 +443,7 @@ ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='re
 ax1.set_ylabel("Price(₩KRW)")
 ax1.legend(loc='upper left')
 ax1.grid(True)
-ax1.set_title("비트코인 가격, 이동평균선 및 매매 신호")
+ax1.set_title("Ripple Price, Moving Average, and Trading Signals")
 
 
 # --- 누적 수익률 차트 ---
