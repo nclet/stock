@@ -35,8 +35,9 @@ def load_sentiment_model():
     
     try:
         hf_token = st.secrets.get("HF_TOKEN")
-        tokenizer = AutoTokenizer.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", use_auth_token=hf_token)
-        model = AutoModelForSequenceClassification.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", use_auth_token=hf_token)
+        tokenizer = AutoTokenizer.from_pretrained("nlp04/korean-sentiment-analysis", use_auth_token=hf_token)
+        model = AutoModelForSequenceClassification.from_pretrained("nlp04/korean-sentiment-analysis", use_auth_token=hf_token)
+
         st.success("✅ AI 감성 분석 모델 로드 완료!")
         return tokenizer, model
     except Exception as e:
