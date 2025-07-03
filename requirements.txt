@@ -12,3 +12,7 @@ seaborn
 xmltodict
 pandas-datareader
 requests
+beautifulsoup4
+transformers
+torch
+sentencepiece
