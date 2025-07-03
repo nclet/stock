@@ -18,7 +18,7 @@ import torch
 # ------------------------
 st.set_page_config(page_title="뉴스 감성 기반 주가 예측 (API)", layout="wide")
 
-st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측 (네이버 뉴스 API)")
+st.title("한국 증시 뉴스 기반 감성 분석 & 주가 예측")
 
 st.markdown("""
 본 앱은 **네이버 뉴스 API**를 이용하여 뉴스를 수집하고,  
