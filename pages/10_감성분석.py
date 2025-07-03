@@ -3,7 +3,14 @@ import requests
 import pandas as pd
 from datetime import datetime
 import urllib.parse
+st.write("Loaded secrets:")
+st.write(st.secrets)
 
+if "naver" not in st.secrets:
+    st.error("❌ secrets.toml에 'naver' 섹션이 없습니다. 설정을 확인하세요.")
+else:
+    st.success("✅ 'naver' 섹션이 존재합니다.")
+    st.write(st.secrets["naver"])
 # 감성 분석 함수 (임시)
 def analyze_sentiment(text):
     # 실제 감성 분석 모델로 변경 가능
