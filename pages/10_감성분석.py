@@ -1,5 +1,5 @@
 # ===============================
-# 📄 뉴스 감성 분석 기반 주가 예측 앱 (최종본)
+# 🇰🇷 뉴스 감성 분석 기반 주가 예측 앱 (최종본)
 # ===============================
 
 import streamlit as st
@@ -60,7 +60,7 @@ start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta
 end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 
 # ------------------------
-# ✨ 네이버 뉴스 크롤링 함수
+# ✨ 네이버 뉴스 크롤링 함수 (최신 구조 반영 + User-Agent 추가)
 # ------------------------
 def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=3):
     base_url = "https://search.naver.com/search.naver"
@@ -75,7 +75,6 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
-    # 날짜 타입 맞추기
     start_date_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
     end_date_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
 
@@ -100,19 +99,26 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
 
             for item in news_items:
                 title_tag = item.select_one('a.news_tit')
-                date_tag = item.select_one('div.news_info > div.info_group > span.info')
-                if title_tag and date_tag:
-                    title = title_tag['title']
-                    raw_date = date_tag.get_text().strip()
+                date_tag_list = item.select('div.info_group span.info')
+                
+                raw_date = None
+                for span in date_tag_list:
+                    text = span.get_text().strip()
+                    if re.match(r'\d{4}\.\d{2}\.\d{2}\.', text) or "시간 전" in text or "분 전" in text or "일 전" in text:
+                        raw_date = text
+                        break
 
-                    news_date = None
+                if title_tag and raw_date:
+                    title = title_tag['title']
+
                     if "시간 전" in raw_date or "분 전" in raw_date or "일 전" in raw_date:
                         news_date = datetime.now().date()
                     elif re.match(r'\d{4}\.\d{2}\.\d{2}\.', raw_date):
                         news_date = datetime.strptime(raw_date, '%Y.%m.%d.').date()
+                    else:
+                        continue
 
-                    # 날짜 타입 일치 (date로 변환)
-                    if news_date and start_date_dt.date() <= news_date <= end_date_dt.date():
+                    if start_date_dt.date() <= news_date <= end_date_dt.date():
                         sentiment = analyze_sentiment(title)
                         news_data_list.append({
                             'Date': news_date,
