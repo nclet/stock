@@ -1,48 +1,35 @@
+# ===============================
+# 📄 전체 Streamlit 앱 완성본
+# ===============================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+from bs4 import BeautifulSoup
+import re
+from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-import torch
+
+# 딥러닝 감성 분석 라이브러리
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error
+import torch
 
-st.set_page_config(page_title="뉴스 감성 기반 주가 예측", layout="wide")
-st.title("📰 뉴스 감성 기반 주가 예측 데모")
+# ------------------------
+# ✨ 페이지 설정
+# ------------------------
+st.set_page_config(page_title="뉴스 감성 분석 기반 주가 예측", layout="wide")
 
-# 시장 선택
-market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ", "KONEX"])
+st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측 데모")
+st.markdown("""
+본 앱은 **네이버 뉴스 제목**을 크롤링하고, 딥러닝 감성 분석으로 점수를 추출한 뒤,  
+과거 주가와 결합하여 단순 선형 회귀 기반 주가 예측 데모를 수행합니다.
+""")
 
-# 해당 시장 종목 가져오기
-company_list = fdr.StockListing(market_option)
-
-# 종목 이름 리스트
-company_names = company_list['Name'].tolist()
-
-# 기업 선택
-company_name = st.selectbox("✅ 분석할 기업 선택", company_names)
-
-# 선택된 종목 코드
-code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
-
-st.write(f"선택한 기업: {company_name}, 코드: {code}")
-
-# # 1️⃣ 기업 선택
-# company_list = fdr.StockListing('KOSPI')
-# company_names = company_list['Name'].tolist()
-
-start_date = st.date_input("시작일", datetime.now() - timedelta(days=60))
-end_date = st.date_input("종료일", datetime.now())
-# 코드 가져오기
-code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
-
-# 2️⃣ 주가 데이터 수집
-df_price = fdr.DataReader(code, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
-df_price.reset_index(inplace=True)
-
-# 3️⃣ 뉴스 감성 분석 준비
+# ------------------------
+# ✨ 감성 분석 모델 로드
+# ------------------------
 @st.cache_resource
 def load_sentiment_model():
     tokenizer = AutoTokenizer.from_pretrained("beomi/KcELECTRA-base")
@@ -54,66 +41,150 @@ tokenizer, sentiment_model = load_sentiment_model()
 def analyze_sentiment(text):
     if not text:
         return 0.0
-
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
     with torch.no_grad():
         outputs = sentiment_model(**inputs)
     score = torch.softmax(outputs.logits, dim=1)[0][1].item()
     return (score - 0.5) * 2  # -1 ~ 1
 
-# 4️⃣ 뉴스 크롤링 함수 (샘플: 감성 점수 랜덤 생성 예제)
-# 실제로는 네이버 뉴스 크롤링 함수 사용 가능
-def get_dummy_news_sentiment(start_date, end_date):
-    dates = pd.date_range(start_date, end_date, freq='B')
-    scores = np.random.uniform(-0.5, 0.5, size=len(dates))
-    df_news = pd.DataFrame({'Date': dates, 'Sentiment_Score': scores})
-    return df_news
+# ------------------------
+# ✨ 종목 선택 UI
+# ------------------------
+market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
+company_list = fdr.StockListing(market_option)
+company_names = company_list['Name'].tolist()
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
+stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
 
-df_news = get_dummy_news_sentiment(start_date, end_date)
+start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
+end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 
-# 5️⃣ 데이터 병합
-merged_df = pd.merge(df_price, df_news, on='Date', how='left')
-merged_df['Sentiment_Score'].fillna(0, inplace=True)
+# ------------------------
+# ✨ 네이버 뉴스 크롤링 함수
+# ------------------------
+def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=3):
+    base_url = "https://search.naver.com/search.naver"
+    news_data_list = []
 
-# 6️⃣ 피처 엔지니어링
-merged_df['MA5'] = merged_df['Close'].rolling(window=5).mean()
-merged_df['Volatility'] = merged_df['Close'].rolling(window=5).std()
-merged_df.dropna(inplace=True)
+    start_date_str = start_date.strftime('%Y.%m.%d')
+    end_date_str = end_date.strftime('%Y.%m.%d')
+    start_date_param = start_date.strftime('%Y%m%d')
+    end_date_param = end_date.strftime('%Y%m%d')
 
-# 7️⃣ 학습 데이터 준비
-X = merged_df[['Sentiment_Score', 'MA5', 'Volatility']]
-y = merged_df['Close']
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
 
-# 8️⃣ 모델 학습
-model = RandomForestRegressor(n_estimators=100, random_state=42)
-model.fit(X[:-5], y[:-5])  # 마지막 5개는 테스트용
+    for i in range(max_pages):
+        start_idx = i * 10 + 1
+        params = {
+            'where': 'news',
+            'query': company_name,
+            'sort': 0,
+            'ds': start_date_str,
+            'de': end_date_str,
+            'nso': f'so:r,p:from{start_date_param}to{end_date_param},a:all',
+            'start': start_idx
+        }
+        try:
+            response = requests.get(base_url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            news_items = soup.select('div.news_area')
+            if not news_items:
+                break
 
-# 9️⃣ 예측 및 평가
-y_pred = model.predict(X[-5:])
-mse = mean_squared_error(y[-5:], y_pred)
+            for item in news_items:
+                title_tag = item.select_one('a.news_tit')
+                date_tag = item.select_one('div.news_info > div.info_group > span.info')
+                if title_tag and date_tag:
+                    title = title_tag['title']
+                    raw_date = date_tag.get_text().strip()
 
-# 10️⃣ 결과 출력
-st.subheader(f"📈 {company_name} 주가 및 감성 점수")
-fig, ax1 = plt.subplots(figsize=(12,5))
+                    news_date = None
+                    if "시간 전" in raw_date or "분 전" in raw_date or "일 전" in raw_date:
+                        news_date = datetime.now().date()
+                    elif re.match(r'\d{4}\.\d{2}\.\d{2}\.', raw_date):
+                        news_date = datetime.strptime(raw_date, '%Y.%m.%d.').date()
 
-ax1.plot(merged_df['Date'], merged_df['Close'], color='blue', label='종가')
-ax1.set_ylabel("종가")
-ax1.legend(loc='upper left')
+                    if news_date and start_date <= news_date <= end_date:
+                        sentiment = analyze_sentiment(title)
+                        news_data_list.append({
+                            'Date': news_date,
+                            'Title': title,
+                            'Sentiment_Score': sentiment
+                        })
 
-ax2 = ax1.twinx()
-ax2.plot(merged_df['Date'], merged_df['Sentiment_Score'], color='orange', linestyle='--', label='감성 점수')
-ax2.set_ylabel("감성 점수")
-ax2.legend(loc='upper right')
+        except Exception as e:
+            st.warning(f"뉴스 크롤링 오류: {e}")
+            break
 
-st.pyplot(fig)
+    if not news_data_list:
+        return pd.DataFrame(columns=['Date', 'Sentiment_Score'])
 
-st.subheader("💡 예측 결과")
-st.write("예측된 마지막 5일 종가:", y_pred.round(2).tolist())
-st.write("실제 마지막 5일 종가:", y[-5:].values.round(2).tolist())
-st.metric("테스트 MSE", f"{mse:.2f}")
+    df_news = pd.DataFrame(news_data_list)
+    df_news['Date'] = pd.to_datetime(df_news['Date'])
+    df_daily = df_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
 
-st.info("""
-- **감성 점수**는 샘플용 더미로 랜덤 생성했습니다.  
-- 실제 뉴스 제목으로 분석하려면 `get_naver_news_with_sentiment()` 함수를 실제 네이버 뉴스 크롤링 로직과 연결하면 됩니다.
-- 피처 엔지니어링 및 모델은 자유롭게 변경 가능 (LSTM, XGBoost 등).
-""")
+    return df_daily
+
+# ------------------------
+# ✨ 버튼 실행
+# ------------------------
+if st.button("🚀 뉴스 크롤링 및 분석 시작"):
+    with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
+        df_news = get_naver_news_with_sentiment(company_name, start_date, end_date)
+
+    if df_news.empty:
+        st.error("❌ 뉴스 데이터를 가져오지 못했습니다.")
+    else:
+        st.success("✅ 뉴스 감성 분석 완료!")
+        st.dataframe(df_news)
+
+        # ------------------------
+        # ✨ 주가 데이터 로드
+        # ------------------------
+        df_stock = fdr.DataReader(stock_code, start_date, end_date)
+        if df_stock.empty:
+            st.error("❌ 주가 데이터를 가져오지 못했습니다.")
+        else:
+            df_stock = df_stock.reset_index()[['Date', 'Close']]
+
+            # ------------------------
+            # ✨ 주가 & 감성 점수 병합
+            # ------------------------
+            df_merged = pd.merge(df_stock, df_news, on='Date', how='left').fillna(0)
+
+            # ------------------------
+            # ✨ 단순 선형회귀 예측 (데모용)
+            # ------------------------
+            from sklearn.linear_model import LinearRegression
+
+            X = df_merged[['Sentiment_Score']].values
+            y = df_merged['Close'].values
+
+            if len(X) > 2:
+                model = LinearRegression()
+                model.fit(X, y)
+                y_pred = model.predict(X)
+                df_merged['Predicted_Close'] = y_pred
+
+                # ------------------------
+                # ✨ 결과 시각화
+                # ------------------------
+                fig, ax = plt.subplots(figsize=(10, 5))
+                ax.plot(df_merged['Date'], df_merged['Close'], label='Actual Close')
+                ax.plot(df_merged['Date'], df_merged['Predicted_Close'], label='Predicted Close', linestyle='--')
+                ax.set_title(f"{company_name} 주가 및 감성 기반 예측")
+                ax.legend()
+                ax.grid(True)
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
+
+                st.metric(label="회귀계수 (감성 점수 → 주가)", value=f"{model.coef_[0]:.2f}")
+            else:
+                st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
+
+        st.markdown("---")
+        st.write("감성 점수는 -1 (강한 부정) ~ 1 (강한 긍정) 범위이며, 단순 예측 모델입니다.")
+
