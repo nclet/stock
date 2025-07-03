@@ -1,20 +1,72 @@
+# ===============================
+# 🇰🇷 뉴스 감성 분석 기반 주가 예측 앱 (네이버 뉴스 API 버전)
+# ===============================
+
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime
-import urllib.parse
+import numpy as np
+import requests
+from datetime import datetime, timedelta
+import FinanceDataReader as fdr
+import matplotlib.pyplot as plt
 
-# 감성 분석 함수 (임시)
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+# ------------------------
+# ✨ 페이지 설정
+# ------------------------
+st.set_page_config(page_title="뉴스 감성 기반 주가 예측 (API)", layout="wide")
+
+st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측 (네이버 뉴스 API)")
+
+st.markdown("""
+본 앱은 **네이버 뉴스 API**를 이용하여 뉴스를 수집하고,  
+딥러닝 감성 분석으로 점수를 추출한 뒤,  
+과거 주가와 결합하여 단순 선형 회귀 기반 주가 예측을 시연합니다.
+""")
+
+# ------------------------
+# ✨ 감성 분석 모델 로드
+# ------------------------
+@st.cache_resource
+def load_sentiment_model():
+    tokenizer = AutoTokenizer.from_pretrained("beomi/KcELECTRA-base")
+    model = AutoModelForSequenceClassification.from_pretrained("beomi/KcELECTRA-base")
+    return tokenizer, model
+
+tokenizer, sentiment_model = load_sentiment_model()
+
 def analyze_sentiment(text):
-    # 실제 감성 분석 모델로 변경 가능
-    return 1.0  # 긍정 점수 예시
+    if not text:
+        return 0.0
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = sentiment_model(**inputs)
+    score = torch.softmax(outputs.logits, dim=1)[0][1].item()
+    return (score - 0.5) * 2  # -1 ~ 1
 
-# 네이버 뉴스 검색 API 호출 함수
-def get_naver_news_api(query, display=30, start=1, sort="date"):
+# ------------------------
+# ✨ 종목 선택 UI
+# ------------------------
+market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
+company_list = fdr.StockListing(market_option)
+company_names = company_list['Name'].tolist()
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
+stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
+
+start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
+end_date = st.date_input("뉴스 검색 종료일", datetime.now())
+
+# ------------------------
+# ✨ 네이버 뉴스 API 크롤링 함수
+# ------------------------
+def get_naver_news_api(company_name, display=30, start=1, sort="date"):
     client_id = st.secrets["naver"]["client_id"]
     client_secret = st.secrets["naver"]["client_secret"]
 
-    enc_query = urllib.parse.quote(query)
+    import urllib.parse
+    enc_query = urllib.parse.quote(company_name)
     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
 
     headers = {
@@ -29,7 +81,6 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         news_data = []
         for item in items:
             title = item.get('title', '')
-            description = item.get('description', '')
             pub_date = item.get('pubDate', '')
             try:
                 pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
@@ -37,8 +88,7 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
                 pub_date_dt = None
             news_data.append({
                 'Date': pub_date_dt,
-                'Title': title,
-                'Description': description
+                'Title': title
             })
         df = pd.DataFrame(news_data)
         return df
@@ -46,36 +96,79 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
         return pd.DataFrame()
 
-# Streamlit UI
-st.title("네이버 뉴스 검색 및 감성 분석")
+# ------------------------
+# ✨ 버튼 실행
+# ------------------------
+max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=30, step=10)
 
-company_name = st.text_input("기업 이름 또는 키워드 입력", "삼성전자")
-
-start_date = st.date_input("시작 날짜", datetime.today())
-end_date = st.date_input("종료 날짜", datetime.today())
-
-max_results = st.slider("최대 뉴스 건수 선택", min_value=10, max_value=100, value=30, step=10)
-
-if st.button("뉴스 검색 및 감성 분석 실행"):
-    with st.spinner("뉴스 검색 중..."):
+if st.button("🚀 뉴스 크롤링 및 분석 시작"):
+    with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
         all_news = pd.DataFrame()
-        # 최대 100건씩 나누어 여러번 호출 가능 (최대 1000건)
-        for start_idx in range(1, max_results + 1, 100):
-            count = min(100, max_results - start_idx + 1)
-            df_part = get_naver_news_api(company_name, display=count, start=start_idx, sort="date")
+        # 네이버 API는 start 최대 1000까지, 100개씩 요청 가능
+        for start_idx in range(1, max_news + 1, 100):
+            count = min(100, max_news - start_idx + 1)
+            df_part = get_naver_news_api(company_name, display=count, start=start_idx)
             all_news = pd.concat([all_news, df_part], ignore_index=True)
             if len(df_part) < count:
-                # 더 이상 뉴스 없음
                 break
 
-        if not all_news.empty:
-            all_news = all_news.dropna(subset=['Date'])
-            filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
+        # 날짜 필터링
+        all_news = all_news.dropna(subset=['Date'])
+        filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
 
-            # 감성 분석 적용
-            filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
+    if filtered_news.empty:
+        st.error("❌ 뉴스 데이터를 가져오지 못했습니다.")
+    else:
+        # 감성 점수 계산
+        filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
 
-            st.write(f"총 {len(filtered_news)}건 뉴스 수집 및 감성 분석 완료")
-            st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
+        st.success("✅ 뉴스 감성 분석 완료!")
+        st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
+
+        # ------------------------
+        # ✨ 주가 데이터 로드
+        # ------------------------
+        df_stock = fdr.DataReader(stock_code, start_date, end_date)
+        if df_stock.empty:
+            st.error("❌ 주가 데이터를 가져오지 못했습니다.")
         else:
-            st.warning("검색된 뉴스가 없습니다.")
+            df_stock = df_stock.reset_index()[['Date', 'Close']]
+
+            # ------------------------
+            # ✨ 주가 & 감성 점수 병합
+            # ------------------------
+            df_merged = pd.merge(df_stock, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
+                                 on='Date', how='left').fillna(0)
+
+            # ------------------------
+            # ✨ 단순 선형회귀 예측 (데모용)
+            # ------------------------
+            from sklearn.linear_model import LinearRegression
+
+            X = df_merged[['Sentiment_Score']].values
+            y = df_merged['Close'].values
+
+            if len(X) > 2:
+                model = LinearRegression()
+                model.fit(X, y)
+                y_pred = model.predict(X)
+                df_merged['Predicted_Close'] = y_pred
+
+                # ------------------------
+                # ✨ 결과 시각화
+                # ------------------------
+                fig, ax = plt.subplots(figsize=(10, 5))
+                ax.plot(df_merged['Date'], df_merged['Close'], label='Actual Close')
+                ax.plot(df_merged['Date'], df_merged['Predicted_Close'], label='Predicted Close', linestyle='--')
+                ax.set_title(f"{company_name} 주가 및 감성 기반 예측")
+                ax.legend()
+                ax.grid(True)
+                plt.xticks(rotation=45)
+                st.pyplot(fig)
+
+                st.metric(label="회귀계수 (감성 점수 → 주가)", value=f"{model.coef_[0]:.2f}")
+            else:
+                st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
+
+        st.markdown("---")
+        st.write("감성 점수는 -1 (강한 부정) ~ 1 (강한 긍정) 범위이며, 단순 예측 데모용입니다.")
