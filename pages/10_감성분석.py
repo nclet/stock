@@ -12,11 +12,27 @@ from sklearn.metrics import mean_squared_error
 st.set_page_config(page_title="뉴스 감성 기반 주가 예측", layout="wide")
 st.title("📰 뉴스 감성 기반 주가 예측 데모")
 
-# 1️⃣ 기업 선택
-company_list = fdr.StockListing('KOSPI')
+# 시장 선택
+market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ", "KONEX"])
+
+# 해당 시장 종목 가져오기
+company_list = fdr.StockListing(market_option)
+
+# 종목 이름 리스트
 company_names = company_list['Name'].tolist()
 
-company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
+# 기업 선택
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names)
+
+# 선택된 종목 코드
+code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
+
+st.write(f"선택한 기업: {company_name}, 코드: {code}")
+
+# # 1️⃣ 기업 선택
+# company_list = fdr.StockListing('KOSPI')
+# company_names = company_list['Name'].tolist()
+
 start_date = st.date_input("시작일", datetime.now() - timedelta(days=60))
 end_date = st.date_input("종료일", datetime.now())
 # 코드 가져오기
