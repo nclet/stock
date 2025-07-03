@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime, timedelta
+import os # os 모듈 임포트
 
 # 딥러닝 감성 분석 관련 라이브러리 임포트
 try:
@@ -47,6 +48,7 @@ def load_sentiment_model():
             """)
 
         st.info(f"모델 'snunlp/KR-BERT-finetuned-sentiment' 로드를 시작합니다. (캐시 무시, 강제 다운로드 시도)")
+        
         # KR-BERT 모델 및 토크나이저 로드
         # force_download=True 를 추가하여 캐시를 무시하고 강제로 다시 다운로드 시도
         tokenizer = AutoTokenizer.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", token=hf_token, force_download=True)
@@ -57,10 +59,36 @@ def load_sentiment_model():
         st.error(f"❌ AI 감성 분석 모델 로드 중 오류 발생: {e}")
         st.error("""
         '401 Unauthorized' 오류는 주로 토큰 문제 또는 네트워크 제한으로 인해 발생합니다.
-        - Hugging Face 토큰이 유효한지, 그리고 `secrets.toml`에 정확히 설정되었는지 다시 확인해주세요.
-        - 또는 터미널에서 `huggingface-cli login` 명령어를 사용하여 로그인해보세요.
-        - 회사/학교 네트워크 환경이라면 방화벽이나 프록시 설정이 모델 다운로드를 차단할 수 있습니다.
-        - 이 문제가 계속된다면, 다른 공개 모델 (`bert-base-uncased` 등)을 로드하여 테스트해보는 것이 도움이 될 수 있습니다.
+        
+        **다음 해결책들을 시도해 보세요:**
+        
+        1.  **Hugging Face 토큰 환경 변수 설정 (가장 강력한 방법):**
+            * Hugging Face 웹사이트에서 유효한 Access Token을 복사합니다.
+            * Windows 검색에서 '환경 변수'를 검색하여 '시스템 환경 변수 편집'을 엽니다.
+            * '환경 변수' 버튼을 클릭하고, '시스템 변수' 섹션에서 '새로 만들기'를 클릭합니다.
+            * 변수 이름: `HF_TOKEN`
+            * 변수 값: 복사한 토큰 문자열을 붙여넣습니다.
+            * 모든 창을 '확인'으로 닫은 후, **컴퓨터를 재부팅합니다.**
+            * 재부팅 후 Streamlit 앱을 다시 실행해 보세요.
+            
+        2.  **Hugging Face 캐시 폴더 완전 삭제:**
+            * `C:\Users\YOUR_USERNAME\.cache\huggingface\hub` 폴더를 **통째로 삭제**합니다. (YOUR_USERNAME은 본인의 사용자 이름입니다.)
+            * 이후 Streamlit 앱을 다시 실행합니다.
+            
+        3.  **다른 공개 모델로 테스트 (문제 진단용):**
+            * `snunlp/KR-BERT-finetuned-sentiment` 대신 `bert-base-uncased`와 같은 매우 일반적인 공개 모델을 로드해 보세요.
+            * `load_sentiment_model` 함수 내의 모델 이름을 다음으로 변경하고 테스트합니다:
+                ```python
+                tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", token=hf_token, force_download=True)
+                model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", token=hf_token, force_download=True)
+                ```
+            * 만약 `bert-base-uncased`도 실패한다면, 네트워크 환경 자체가 Hugging Face Hub로의 연결을 강력하게 차단하고 있을 가능성이 매우 높습니다.
+            
+        4.  **네트워크 환경 변경:**
+            * 회사/학교 네트워크 환경이라면 방화벽이나 프록시 설정이 모델 다운로드를 차단할 수 있습니다. 개인 Wi-Fi나 모바일 핫스팟 등 다른 네트워크 환경에서 시도해 보세요.
+            
+        5.  **수동 모델 다운로드 및 로컬 로드 (최후의 수단):**
+            * 이전 답변에서 안내해 드린 대로, Hugging Face 웹사이트에서 모델 파일을 직접 다운로드하여 로컬 경로에 저장한 후, 코드에서 해당 로컬 경로를 지정하여 모델을 로드하는 방법을 시도할 수 있습니다. 이 방법은 네트워크 문제를 완전히 우회합니다.
         """)
         st.stop()
 
