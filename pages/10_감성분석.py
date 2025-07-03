@@ -1,5 +1,5 @@
 # ===============================
-# 📄 전체 Streamlit 앱 완성본
+# 📄 뉴스 감성 분석 기반 주가 예측 앱 (최종본)
 # ===============================
 
 import streamlit as st
@@ -19,12 +19,12 @@ import torch
 # ------------------------
 # ✨ 페이지 설정
 # ------------------------
-st.set_page_config(page_title="뉴스 감성 분석 기반 주가 예측", layout="wide")
+st.set_page_config(page_title="뉴스 감성 기반 주가 예측", layout="wide")
 
-st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측 데모")
+st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측")
 st.markdown("""
 본 앱은 **네이버 뉴스 제목**을 크롤링하고, 딥러닝 감성 분석으로 점수를 추출한 뒤,  
-과거 주가와 결합하여 단순 선형 회귀 기반 주가 예측 데모를 수행합니다.
+과거 주가와 결합하여 단순 선형 회귀 기반 주가 예측을 시연합니다.
 """)
 
 # ------------------------
@@ -75,6 +75,10 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
     }
 
+    # 날짜 타입 맞추기
+    start_date_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+    end_date_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+
     for i in range(max_pages):
         start_idx = i * 10 + 1
         params = {
@@ -107,7 +111,8 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
                     elif re.match(r'\d{4}\.\d{2}\.\d{2}\.', raw_date):
                         news_date = datetime.strptime(raw_date, '%Y.%m.%d.').date()
 
-                    if news_date and start_date <= news_date <= end_date:
+                    # 날짜 타입 일치 (date로 변환)
+                    if news_date and start_date_dt.date() <= news_date <= end_date_dt.date():
                         sentiment = analyze_sentiment(title)
                         news_data_list.append({
                             'Date': news_date,
@@ -186,5 +191,5 @@ if st.button("🚀 뉴스 크롤링 및 분석 시작"):
                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("감성 점수는 -1 (강한 부정) ~ 1 (강한 긍정) 범위이며, 단순 예측 모델입니다.")
+        st.write("감성 점수는 -1 (강한 부정) ~ 1 (강한 긍정) 범위이며, 단순 예측 데모용입니다.")
 
