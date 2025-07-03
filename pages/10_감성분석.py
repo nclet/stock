@@ -162,7 +162,7 @@ if st.button("🚀 뉴스 크롤링 및 분석 시작"):
                 fig, ax = plt.subplots(figsize=(10, 5))
                 ax.plot(df_merged['Date'], df_merged['Close'], label='Actual Close')
                 ax.plot(df_merged['Date'], df_merged['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} 주가 및 감성 기반 예측")
+                ax.set_title(f"{company_name} Stock Price and Sentiment-based Forecasts")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
