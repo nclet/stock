@@ -31,16 +31,22 @@ def load_sentiment_model():
     사전 학습된 한국어 감성 분석 모델과 토크나이저를 로드합니다.
     모델: 'snunlp/KR-BERT-finetuned-sentiment' (네이버 영화 리뷰 데이터셋으로 학습됨)
     """
-    st.info("AI 감성 분석 모델을 로드 중입니다. 잠시만 기다려 주세요...")
+    st.info("AI 감성 분석 모델 로드 중입니다. 잠시만 기다려 주세요...")
+    
     try:
         # Hugging Face 토큰을 st.secrets에서 불러옵니다.
-        # secrets.toml 파일에 HF_TOKEN = "YOUR_TOKEN_STRING" 형태로 저장되어 있어야 합니다.
         hf_token = st.secrets.get("HF_TOKEN") 
         if hf_token:
-            st.info("Hugging Face 토큰을 사용하여 모델을 로드합니다.")
+            st.info("Hugging Face 토큰 (secrets.toml에서 로드됨)을 사용하여 모델 로드를 시도합니다.")
         else:
-            st.warning("Hugging Face 토큰이 secrets.toml에 설정되지 않았거나 불러올 수 없습니다. 공개 모델은 토큰 없이 시도합니다.")
+            st.warning("""
+            Hugging Face 토큰이 secrets.toml에 설정되지 않았거나 불러올 수 없습니다.
+            '401 Unauthorized' 오류가 계속 발생한다면, 다음을 시도해주세요:
+            1. secrets.toml 파일에 HF_TOKEN을 정확히 입력했는지 확인.
+            2. 터미널에서 `pip install huggingface_hub` 후 `huggingface-cli login` 명령어로 로그인 시도.
+            """)
 
+        st.info(f"모델 'snunlp/KR-BERT-finetuned-sentiment' 로드를 시작합니다. (캐시 무시, 강제 다운로드 시도)")
         # KR-BERT 모델 및 토크나이저 로드
         # force_download=True 를 추가하여 캐시를 무시하고 강제로 다시 다운로드 시도
         tokenizer = AutoTokenizer.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", token=hf_token, force_download=True)
@@ -49,6 +55,13 @@ def load_sentiment_model():
         return tokenizer, model
     except Exception as e:
         st.error(f"❌ AI 감성 분석 모델 로드 중 오류 발생: {e}")
+        st.error("""
+        '401 Unauthorized' 오류는 주로 토큰 문제 또는 네트워크 제한으로 인해 발생합니다.
+        - Hugging Face 토큰이 유효한지, 그리고 `secrets.toml`에 정확히 설정되었는지 다시 확인해주세요.
+        - 또는 터미널에서 `huggingface-cli login` 명령어를 사용하여 로그인해보세요.
+        - 회사/학교 네트워크 환경이라면 방화벽이나 프록시 설정이 모델 다운로드를 차단할 수 있습니다.
+        - 이 문제가 계속된다면, 다른 공개 모델 (`bert-base-uncased` 등)을 로드하여 테스트해보는 것이 도움이 될 수 있습니다.
+        """)
         st.stop()
 
 tokenizer, sentiment_model = load_sentiment_model()
