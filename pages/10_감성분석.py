@@ -137,6 +137,8 @@ if st.button("🚀 뉴스 크롤링 및 분석 시작"):
             # ------------------------
             # ✨ 주가 & 감성 점수 병합
             # ------------------------
+            df_stock['Date'] = pd.to_datetime(df_stock['Date'])
+            filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             df_merged = pd.merge(df_stock, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
                                  on='Date', how='left').fillna(0)
 
