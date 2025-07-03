@@ -5,180 +5,106 @@ import requests
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime, timedelta
-import os # os 모듈 임포트
+import matplotlib.pyplot as plt
+import os
 
-# 딥러닝 감성 분석 관련 라이브러리 임포트
+# 딥러닝 감성 분석 관련 라이브러리
 try:
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     import torch
 except ImportError:
     st.error("""
-    **딥러닝 감성 분석 기능을 사용하려면 다음 라이브러리를 설치해야 합니다:**
+    **딥러닝 감성 분석 기능을 사용하려면 다음을 설치하세요:**
     `pip install transformers torch sentencepiece`
     """)
     st.stop()
 
-# --- ✨ Streamlit 페이지 설정 (가장 첫 번째 Streamlit 명령이어야 함) ✨ ---
-st.set_page_config(layout="wide", page_title="뉴스 감성 분석 데모")
+from sklearn.linear_model import LinearRegression
 
-st.title("📰 네이버 뉴스 감성 분석 데모")
-st.markdown("특정 기업의 네이버 뉴스 기사를 크롤링하고, 딥러닝 모델을 사용하여 기사 제목의 감성을 분석합니다.")
+# --- ✨ Streamlit 페이지 설정 ---
+st.set_page_config(layout="wide", page_title="뉴스 감성 분석 및 주가 예측 데모")
+
+st.title("📰 뉴스 감성 분석 및 주가 예측 데모")
+st.markdown("네이버 뉴스를 기반으로 감성 분석을 수행하고, 그 결과를 활용해 주가를 예측합니다.")
 
 # --- 딥러닝 기반 감성 분석 모델 로드 및 함수 ---
 
 @st.cache_resource
 def load_sentiment_model():
-    """
-    사전 학습된 한국어 감성 분석 모델과 토크나이저를 로드합니다.
-    모델: 'snunlp/KR-BERT-finetuned-sentiment' (네이버 영화 리뷰 데이터셋으로 학습됨)
-    """
     st.info("AI 감성 분석 모델 로드 중입니다. 잠시만 기다려 주세요...")
     
     try:
-        # Hugging Face 토큰을 st.secrets에서 불러옵니다.
-        hf_token = st.secrets.get("HF_TOKEN") 
-        if hf_token:
-            st.info("Hugging Face 토큰 (secrets.toml에서 로드됨)을 사용하여 모델 로드를 시도합니다.")
-        else:
-            st.warning("""
-            Hugging Face 토큰이 secrets.toml에 설정되지 않았거나 불러올 수 없습니다.
-            '401 Unauthorized' 오류가 계속 발생한다면, 다음을 시도해주세요:
-            1. secrets.toml 파일에 HF_TOKEN을 정확히 입력했는지 확인.
-            2. 터미널에서 `pip install huggingface_hub` 후 `huggingface-cli login` 명령어로 로그인 시도.
-            """)
-
-        st.info(f"모델 'snunlp/KR-BERT-finetuned-sentiment' 로드를 시작합니다. (캐시 무시, 강제 다운로드 시도)")
-        
-        # KR-BERT 모델 및 토크나이저 로드
-        # force_download=True 를 추가하여 캐시를 무시하고 강제로 다시 다운로드 시도
-        tokenizer = AutoTokenizer.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", token=hf_token, force_download=True)
-        model = AutoModelForSequenceClassification.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", token=hf_token, force_download=True)
+        hf_token = st.secrets.get("HF_TOKEN")
+        tokenizer = AutoTokenizer.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", use_auth_token=hf_token)
+        model = AutoModelForSequenceClassification.from_pretrained("snunlp/KR-BERT-finetuned-sentiment", use_auth_token=hf_token)
         st.success("✅ AI 감성 분석 모델 로드 완료!")
         return tokenizer, model
     except Exception as e:
-        st.error(f"❌ AI 감성 분석 모델 로드 중 오류 발생: {e}")
-        st.error("""
-        '401 Unauthorized' 오류는 주로 토큰 문제 또는 네트워크 제한으로 인해 발생합니다.
-        
-        **다음 해결책들을 시도해 보세요:**
-        
-        1.  **Hugging Face 토큰 환경 변수 설정 (가장 강력한 방법):**
-            * Hugging Face 웹사이트에서 유효한 Access Token을 복사합니다.
-            * Windows 검색에서 '환경 변수'를 검색하여 '시스템 환경 변수 편집'을 엽니다.
-            * '환경 변수' 버튼을 클릭하고, '시스템 변수' 섹션에서 '새로 만들기'를 클릭합니다.
-            * 변수 이름: `HF_TOKEN`
-            * 변수 값: 복사한 토큰 문자열을 붙여넣습니다.
-            * 모든 창을 '확인'으로 닫은 후, **컴퓨터를 재부팅합니다.**
-            * 재부팅 후 Streamlit 앱을 다시 실행해 보세요.
-            
-        2.  **Hugging Face 캐시 폴더 완전 삭제:**
-            * `C:\Users\YOUR_USERNAME\.cache\huggingface\hub` 폴더를 **통째로 삭제**합니다. (YOUR_USERNAME은 본인의 사용자 이름입니다.)
-            * 이후 Streamlit 앱을 다시 실행합니다.
-            
-        3.  **다른 공개 모델로 테스트 (문제 진단용):**
-            * `snunlp/KR-BERT-finetuned-sentiment` 대신 `bert-base-uncased`와 같은 매우 일반적인 공개 모델을 로드해 보세요.
-            * `load_sentiment_model` 함수 내의 모델 이름을 다음으로 변경하고 테스트합니다:
-                ```python
-                tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", token=hf_token, force_download=True)
-                model = AutoModelForSequenceClassification.from_pretrained("bert-base-uncased", token=hf_token, force_download=True)
-                ```
-            * 만약 `bert-base-uncased`도 실패한다면, 네트워크 환경 자체가 Hugging Face Hub로의 연결을 강력하게 차단하고 있을 가능성이 매우 높습니다.
-            
-        4.  **네트워크 환경 변경:**
-            * 회사/학교 네트워크 환경이라면 방화벽이나 프록시 설정이 모델 다운로드를 차단할 수 있습니다. 개인 Wi-Fi나 모바일 핫스팟 등 다른 네트워크 환경에서 시도해 보세요.
-            
-        5.  **수동 모델 다운로드 및 로컬 로드 (최후의 수단):**
-            * 이전 답변에서 안내해 드린 대로, Hugging Face 웹사이트에서 모델 파일을 직접 다운로드하여 로컬 경로에 저장한 후, 코드에서 해당 로컬 경로를 지정하여 모델을 로드하는 방법을 시도할 수 있습니다. 이 방법은 네트워크 문제를 완전히 우회합니다.
-        """)
+        st.error(f"모델 로드 중 오류 발생: {e}")
         st.stop()
 
 tokenizer, sentiment_model = load_sentiment_model()
 
 def analyze_sentiment_with_dl(text):
-    """
-    사전 학습된 딥러닝 모델을 사용하여 텍스트의 감성을 분석합니다.
-    Args:
-        text (str): 분석할 한국어 텍스트.
-    Returns:
-        float: 감성 점수 (긍정: 1에 가까움, 부정: 0에 가까움).
-               여기서는 긍정/부정 확률을 기반으로 점수를 계산합니다.
-               모델에 따라 클래스 순서가 다를 수 있으므로 확인 필요.
-               snunlp/KR-BERT-finetuned-sentiment 모델은 0: 부정, 1: 긍정으로 학습됨.
-    """
     if not text:
-        return 0.0 # 빈 텍스트는 중립으로 처리
+        return 0.0
 
     try:
-        # 텍스트 토큰화 및 모델 입력 준비
         inputs = tokenizer(
             text,
-            return_tensors='pt', # PyTorch 텐서 반환
-            truncation=True,     # 최대 길이 초과 시 자르기
-            padding=True         # 패딩 추가
+            return_tensors='pt',
+            truncation=True,
+            padding=True
         )
-
-        # 모델 예측 (로짓 반환)
-        with torch.no_grad(): # 그래디언트 계산 비활성화 (추론 시)
+        with torch.no_grad():
             outputs = sentiment_model(**inputs)
 
-        # 소프트맥스 함수를 적용하여 확률로 변환
         probabilities = torch.softmax(outputs.logits, dim=1)
-
-        # '긍정' 클래스에 해당하는 확률을 감성 점수로 사용 (인덱스 1이 긍정, 0이 부정)
-        sentiment_score = probabilities[0][1].item() # 긍정 확률
+        pos_score = probabilities[0][1].item()
         
-        # -1 (부정) ~ 1 (긍정) 범위로 변환
-        # 0.5를 기준으로 긍정/부정으로 나뉘므로, (확률 - 0.5) * 2 로 변환
-        return (sentiment_score - 0.5) * 2 
+        # 보다 구체적인 변환: (pos_score - 0.5) * 2 → -1 ~ 1
+        standardized_score = (pos_score - 0.5) * 2
+        standardized_score = np.clip(standardized_score, -1, 1)
+        return standardized_score
+
     except Exception as e:
-        st.warning(f"감성 분석 중 오류 발생: {e}. 해당 뉴스는 중립으로 처리됩니다.")
-        return 0.0 # 오류 발생 시 중립으로 처리
+        st.warning(f"감성 분석 오류: {e}")
+        return 0.0
 
 # --- 뉴스 크롤링 함수 ---
 
-@st.cache_data(ttl=3600) # 뉴스 크롤링 결과를 1시간 동안 캐싱
-def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=5):
-    """
-    네이버 뉴스에서 특정 회사 관련 뉴스를 크롤링하고 딥러닝 감성 분석을 수행합니다.
-    Args:
-        company_name (str): 검색할 회사 이름.
-        start_date (datetime): 검색 시작 날짜.
-        end_date (datetime): 검색 종료 날짜.
-        max_pages (int): 검색할 최대 페이지 수 (페이지당 10개 뉴스).
-    Returns:
-        pd.DataFrame: 'Date', 'Title', 'Sentiment_Score' 컬럼을 포함하는 데이터프레임.
-    """
+@st.cache_data(ttl=3600)
+def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=3):
     base_url = "https://search.naver.com/search.naver"
     news_data_list = []
 
-    st.info(f"📰 '{company_name}' 관련 뉴스 크롤링 및 딥러닝 감성 분석 중입니다...")
-    
+    st.info(f"'{company_name}' 관련 뉴스 크롤링 중...")
+
     start_date_str = start_date.strftime('%Y.%m.%d')
     end_date_str = end_date.strftime('%Y.%m.%d')
     start_date_param = start_date.strftime('%Y%m%d')
     end_date_param = end_date.strftime('%Y%m%d')
 
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0'
     }
 
     total_crawled_news = 0
     for i in range(max_pages):
-        start_idx = i * 10
+        start_idx = i * 10 + 1
         params = {
             'where': 'news',
             'query': company_name,
-            'sort': 0, # 0: 최신순
+            'sort': 0,
             'ds': start_date_str,
             'de': end_date_str,
             'nso': f'so:r,p:from{start_date_param}to{end_date_param},a:all',
             'start': start_idx
         }
-        
+
         try:
             response = requests.get(base_url, params=params, headers=headers, timeout=10)
             response.raise_for_status()
-            
             soup = BeautifulSoup(response.text, 'html.parser')
             news_items = soup.select('div.news_area')
             if not news_items:
@@ -195,9 +121,9 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
                     news_date = None
                     if "시간 전" in raw_date or "분 전" in raw_date or "일 전" in raw_date:
                         news_date = datetime.now().date()
-                    elif re.match(r'\d{4}\.\d{2}\.\d{2}\.', raw_date):
-                        news_date = datetime.strptime(raw_date, '%Y.%m.%d.').date()
-                    
+                    elif re.match(r'\d{4}\.\d{2}\.\d{2}\.?', raw_date):
+                        news_date = datetime.strptime(raw_date.rstrip('.'), '%Y.%m.%d').date()
+
                     if news_date and start_date.date() <= news_date <= end_date.date():
                         sentiment = analyze_sentiment_with_dl(title)
                         news_data_list.append({
@@ -206,107 +132,95 @@ def get_naver_news_with_sentiment(company_name, start_date, end_date, max_pages=
                             'Sentiment_Score': sentiment
                         })
                         total_crawled_news += 1
-            
-            if len(news_items) < 10: # 페이지당 10개 미만이면 마지막 페이지로 간주
+
+            if len(news_items) < 10:
                 break
-        
-        except requests.exceptions.RequestException as e:
-            st.warning(f"네이버 뉴스 크롤링 중 HTTP 요청 오류 발생 (페이지 {i+1}): {e}")
-            break
+
         except Exception as e:
-            st.warning(f"뉴스 데이터 파싱 중 예상치 못한 오류 발생 (페이지 {i+1}): {e}")
+            st.warning(f"뉴스 크롤링 오류 (페이지 {i+1}): {e}")
             break
 
     if not news_data_list:
-        st.warning(f"'{company_name}' 관련 뉴스를 찾을 수 없거나 크롤링에 실패했습니다. 다른 검색어로 시도하거나 기간을 조정해보세요.")
         return pd.DataFrame(columns=['Date', 'Title', 'Sentiment_Score'])
 
     df_news = pd.DataFrame(news_data_list)
     df_news['Date'] = pd.to_datetime(df_news['Date'])
-    
-    st.success(f"✅ 총 {total_crawled_news}개 뉴스 크롤링 및 감성 분석 완료!")
     return df_news
 
 # --- Streamlit UI ---
 
-# 사용자 입력 섹션
 st.sidebar.header("🔍 검색 설정")
-company_name = st.sidebar.text_input("기업 이름 또는 키워드를 입력하세요 (예: 삼성전자)", "삼성전자")
-
+company_name = st.sidebar.text_input("기업 이름 또는 키워드 (예: 삼성전자)", "삼성전자")
 today = datetime.now().date()
-default_start_date = today - timedelta(days=7) # 기본적으로 7일 전부터
-date_range = st.sidebar.date_input(
-    "뉴스 검색 기간을 선택하세요:",
-    value=(default_start_date, today),
-    max_value=today # 오늘 날짜까지만 선택 가능
-)
+default_start = today - timedelta(days=7)
+
+date_range = st.sidebar.date_input("뉴스 검색 기간", value=(default_start, today), max_value=today)
 
 if len(date_range) == 2:
     start_date_input = datetime.combine(date_range[0], datetime.min.time())
     end_date_input = datetime.combine(date_range[1], datetime.max.time())
 else:
-    st.sidebar.warning("뉴스 검색 기간을 선택해주세요.")
+    st.sidebar.warning("날짜를 선택해주세요.")
     st.stop()
 
-max_pages_input = st.sidebar.slider("크롤링할 최대 페이지 수 (페이지당 10개 뉴스)", 1, 10, 3)
+max_pages_input = st.sidebar.slider("최대 페이지 수 (10개 뉴스/페이지)", 1, 10, 3)
 
-if st.sidebar.button("🚀 뉴스 검색 및 감성 분석 시작"):
-    if not company_name:
-        st.sidebar.error("기업 이름을 입력해주세요.")
+if st.sidebar.button("🚀 뉴스 크롤링 및 감성 분석"):
+    df_sentiment = get_naver_news_with_sentiment(company_name, start_date_input, end_date_input, max_pages_input)
+
+    if not df_sentiment.empty:
+        st.subheader("📰 감성 분석 결과")
+        df_sentiment['Sentiment_Class'] = df_sentiment['Sentiment_Score'].apply(
+            lambda x: "긍정 😊" if x > 0.3 else ("부정 😠" if x < -0.3 else "중립 😐")
+        )
+        st.dataframe(df_sentiment[['Date', 'Title', 'Sentiment_Score', 'Sentiment_Class']])
+
+        # --- 일별 평균 감성 시각화 ---
+        st.subheader("📊 일별 평균 감성 점수")
+        daily_avg = df_sentiment.groupby('Date')['Sentiment_Score'].mean().reset_index()
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(daily_avg['Date'], daily_avg['Sentiment_Score'], marker='o')
+        ax.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+        ax.set_title(f"'{company_name}' 일별 평균 감성 점수")
+        ax.set_ylabel("감성 점수 (-1 ~ 1)")
+        ax.grid(True)
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
+
+        # --- 예제: 주가 예측 로직 추가 (간단 회귀) ---
+        st.subheader("💹 간단한 뉴스 기반 주가 예측 예시")
+
+        # 예제용 랜덤 주가 생성 (실제로는 API나 CSV에서 불러와야 함)
+        np.random.seed(42)
+        daily_avg['Close'] = 50000 + (daily_avg['Sentiment_Score'] * 5000) + np.random.normal(0, 2000, size=len(daily_avg))
+
+        # Feature & Target
+        X = daily_avg[['Sentiment_Score']]
+        y = daily_avg['Close']
+
+        model = LinearRegression()
+        model.fit(X, y)
+        daily_avg['Predicted_Close'] = model.predict(X)
+
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+        ax2.plot(daily_avg['Date'], daily_avg['Close'], marker='o', label='실제 종가')
+        ax2.plot(daily_avg['Date'], daily_avg['Predicted_Close'], marker='x', linestyle='--', label='예측 종가')
+        ax2.set_title(f"뉴스 감성 기반 예측 종가 (예제)")
+        ax2.legend()
+        ax2.grid(True)
+        plt.xticks(rotation=45)
+        st.pyplot(fig2)
+
+        st.info("⚠️ 위 예측은 단순한 데모용 예제입니다. 실제 주가 데이터와 연동하면 더 정확한 분석이 가능합니다.")
+
     else:
-        with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
-            df_sentiment_results = get_naver_news_with_sentiment(
-                company_name,
-                start_date_input,
-                end_date_input,
-                max_pages_input
-            )
-
-        if not df_sentiment_results.empty:
-            st.subheader(f"'{company_name}' 관련 뉴스 감성 분석 결과")
-            
-            # 감성 점수에 따라 긍정/부정/중립 분류
-            def classify_sentiment(score):
-                if score > 0.3: # 0.5 기준에서 0.3 이상이면 긍정
-                    return "긍정 😊"
-                elif score < -0.3: # 0.5 기준에서 -0.3 이하면 부정
-                    return "부정 😠"
-                else:
-                    return "중립 😐"
-            
-            df_sentiment_results['Sentiment_Class'] = df_sentiment_results['Sentiment_Score'].apply(classify_sentiment)
-
-            # 결과 테이블 표시
-            st.dataframe(df_sentiment_results[['Date', 'Title', 'Sentiment_Score', 'Sentiment_Class']].sort_values(by='Date', ascending=False).reset_index(drop=True))
-
-            # 감성 점수 요약
-            st.subheader("기간별 감성 요약")
-            daily_avg_sentiment = df_sentiment_results.groupby('Date')['Sentiment_Score'].mean().reset_index()
-            
-            # 감성 점수 시각화
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(daily_avg_sentiment['Date'], daily_avg_sentiment['Sentiment_Score'], marker='o', linestyle='-')
-            ax.axhline(0, color='gray', linestyle='--', linewidth=0.8) # 중립선
-            ax.set_title(f"'{company_name}' 일별 평균 뉴스 감성 점수")
-            ax.set_xlabel("날짜")
-            ax.set_ylabel("감성 점수 (-1:부정 ~ 1:긍정)")
-            ax.grid(True)
-            plt.xticks(rotation=45)
-            plt.tight_layout()
-            st.pyplot(fig)
-
-            # 전체 기간 평균 감성 점수
-            avg_overall_sentiment = df_sentiment_results['Sentiment_Score'].mean()
-            st.metric(label=f"전체 기간 평균 감성 점수 ({start_date_input.strftime('%Y-%m-%d')} ~ {end_date_input.strftime('%Y-%m-%d')})",
-                      value=f"{avg_overall_sentiment:.2f}",
-                      delta=classify_sentiment(avg_overall_sentiment))
-            
-            st.info("감성 점수: -1 (강한 부정) ~ 1 (강한 긍정). 0에 가까울수록 중립입니다.")
+        st.warning("뉴스 데이터를 가져오지 못했습니다.")
 
 st.markdown("---")
 st.write("### 참고")
 st.write("""
-- **뉴스 크롤링:** 네이버 뉴스 검색 결과를 기반으로 합니다. 과도한 요청은 웹사이트 정책에 위배될 수 있으므로, 크롤링 페이지 수를 제한했습니다.
-- **딥러닝 감성 분석:** `snunlp/KR-BERT-finetuned-sentiment` 모델을 사용하여 기사 제목의 감성을 분석합니다. 이 모델은 영화 리뷰 데이터셋으로 학습되었으므로, 주식 뉴스 도메인에 완벽하게 적용되지 않을 수 있습니다. 더 정확한 분석을 위해서는 주식 뉴스에 특화된 데이터로 파인튜닝된 모델이 필요합니다.
-- **감성 점수 해석:** 감성 점수는 -1 (강한 부정)부터 1 (강한 긍정)까지의 범위입니다. 0에 가까울수록 중립적인 감성입니다.
+- **뉴스 크롤링:** 네이버 뉴스 검색 결과를 사용합니다. 너무 많은 요청은 네이버 정책에 위배될 수 있습니다.
+- **감성 분석:** `snunlp/KR-BERT-finetuned-sentiment` 모델은 영화 리뷰 기반으로 학습되었으며, 뉴스 도메인에 최적화되어 있지 않을 수 있습니다.
+- **주가 예측 예제:** 실제 주가 API나 CSV를 연동하면 더 정밀한 예측이 가능합니다.
 """)
