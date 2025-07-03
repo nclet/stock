@@ -16,10 +16,9 @@ st.title("📰 뉴스 감성 기반 주가 예측 데모")
 company_list = fdr.StockListing('KOSPI')
 company_names = company_list['Name'].tolist()
 
-company_name = st.sidebar.selectbox("기업을 선택하세요", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
-start_date = st.sidebar.date_input("시작일", datetime.now() - timedelta(days=60))
-end_date = st.sidebar.date_input("종료일", datetime.now())
-
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
+start_date = st.date_input("시작일", datetime.now() - timedelta(days=60))
+end_date = st.date_input("종료일", datetime.now())
 # 코드 가져오기
 code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
 
