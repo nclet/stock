@@ -116,15 +116,23 @@ if st.button("🚀 뉴스 수집 및 분석 시작"):
             df_stock['MA20'] = df_stock['Close'].rolling(window=20).mean()
             df_stock['Diff_MA20'] = df_stock['Close'] - df_stock['MA20']
 
-            # VIX 추가
+            # ------------------------
+            # ✨ VIX 추가
+            # ------------------------
             vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date)
-            vix = vix.reset_index()[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
-
+            
+            vix = vix.reset_index()
+            
+            if 'Date' not in vix.columns:
+                vix = vix.rename(columns={vix.columns[0]: 'Date'})
+            
+            vix = vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
+            
+            # 이제 merge
             df_all = pd.merge(df_stock, vix, on='Date', how='left')
             df_all = pd.merge(df_all, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
                               on='Date', how='left').fillna(0)
 
-            df_all = df_all.dropna(subset=['Return_10d', 'Diff_MA20', 'VIX_Close'])
 
             # 모델 학습
             X = df_all[['Sentiment_Score', 'Return_10d', 'Diff_MA20', 'VIX_Close']].values
