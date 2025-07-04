@@ -1,7 +1,3 @@
-# ===============================
-# 🇰🇷 뉴스 감성 분석 기반 주가 예측 앱 (네이버 뉴스 API 버전)
-# ===============================
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,9 +5,14 @@ import requests
 from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
-
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
+import matplotlib as mpl
+
+# 한글깨짐방지
+mpl.rc('font', family='Malgun Gothic')
+# 마이너 버그 방지: 마이너스 깨짐 현상 방지
+mpl.rcParams['axes.unicode_minus'] = False
 
 # ------------------------
 # ✨ 페이지 설정
@@ -21,7 +22,7 @@ st.set_page_config(page_title="뉴스 감성 기반 주가 예측 (API)", layout
 st.title("한국 증시 뉴스 기반 감성 분석 & 주가 예측")
 
 st.markdown("""
-본 앱은 **네이버 뉴스 API**를 이용하여 뉴스를 수집하고,  
+**네이버 뉴스 API**를 이용하여 뉴스를 수집하고,  
 딥러닝 감성 분석으로 점수를 추출한 뒤,  
 과거 주가와 결합하여 단순 선형 회귀 기반 주가 예측을 시연합니다.
 """)
