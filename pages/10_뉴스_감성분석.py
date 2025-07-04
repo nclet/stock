@@ -7,12 +7,6 @@ import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
-import matplotlib as mpl
-
-# 한글깨짐방지
-mpl.rc('font', family='Malgun Gothic')
-# 마이너 버그 방지: 마이너스 깨짐 현상 방지
-mpl.rcParams['axes.unicode_minus'] = False
 
 # ------------------------
 # ✨ 페이지 설정
