@@ -4,20 +4,14 @@ import numpy as np
 import requests
 from datetime import datetime, timedelta
 import FinanceDataReader as fdr
+import yfinance as yf
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
+from sklearn.ensemble import RandomForestRegressor
 
-# ------------------------
-# ✨ 페이지 설정
-# ------------------------
-st.set_page_config(page_title="뉴스 감성 기반 주가 예측 (API)", layout="wide")
-st.title("🇰🇷 한국 증시 뉴스 기반 감성 분석 & 주가 예측")
-st.markdown("""
-**네이버 뉴스 API**를 이용하여 뉴스를 수집하고,  
-딥러닝 감성 분석으로 점수를 추출한 뒤,  
-과거 주가와 결합하여 단순 선형 회귀 기반 예측을 시연합니다.
-""")
+st.set_page_config(page_title="뉴스+모멘텀+VIX 기반 주가 예측", layout="wide")
+st.title("🇰🇷 뉴스 감성 + 모멘텀 + VIX 기반 고급 주가 예측")
 
 # ------------------------
 # ✨ 감성 분석 모델 로드
@@ -37,10 +31,10 @@ def analyze_sentiment(text):
     with torch.no_grad():
         outputs = sentiment_model(**inputs)
     score = torch.softmax(outputs.logits, dim=1)[0][1].item()
-    return (score - 0.5) * 2  # -1 ~ 1
+    return (score - 0.5) * 2
 
 # ------------------------
-# ✨ 종목 선택 UI
+# ✨ UI
 # ------------------------
 market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
 company_list = fdr.StockListing(market_option)
@@ -48,7 +42,7 @@ company_names = company_list['Name'].tolist()
 company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
 stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
 
-start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
+start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=60))
 end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 
 # ------------------------
@@ -79,10 +73,7 @@ def get_naver_news_api(company_name, display=30, start=1, sort="date"):
                 pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
             except Exception:
                 pub_date_dt = None
-            news_data.append({
-                'Date': pub_date_dt,
-                'Title': title
-            })
+            news_data.append({'Date': pub_date_dt, 'Title': title})
         df = pd.DataFrame(news_data)
         return df
     else:
@@ -94,35 +85,25 @@ def get_naver_news_api(company_name, display=30, start=1, sort="date"):
 # ------------------------
 max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=200, value=50, step=10)
 
-if st.button("🚀 뉴스 크롤링 및 분석 시작"):
-    with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
+if st.button("🚀 뉴스 수집 및 분석 시작"):
+    with st.spinner("뉴스 수집 및 감성 분석 중..."):
         all_news = pd.DataFrame()
-
-        # 네이버 API는 start 최대 1000까지, 100개씩 요청 가능
         for start_idx in range(1, max_news + 1, 100):
             count = min(100, max_news - start_idx + 1)
             df_part = get_naver_news_api(company_name, display=count, start=start_idx)
             all_news = pd.concat([all_news, df_part], ignore_index=True)
             if len(df_part) < count:
                 break
-
-        # 날짜 필터링
         all_news = all_news.dropna(subset=['Date'])
         filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
 
     if filtered_news.empty:
         st.error("❌ 뉴스 데이터를 가져오지 못했습니다.")
     else:
-        # 감성 점수 계산
         filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-
         st.success("✅ 뉴스 감성 분석 완료!")
-        st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
 
-        # ------------------------
-        # ✨ 주가 데이터 로드
-        # ------------------------
-        df_stock = fdr.DataReader(stock_code, start_date, end_date)
+        df_stock = fdr.DataReader(stock_code, start_date - timedelta(days=30), end_date)
         if df_stock.empty:
             st.error("❌ 주가 데이터를 가져오지 못했습니다.")
         else:
@@ -130,41 +111,44 @@ if st.button("🚀 뉴스 크롤링 및 분석 시작"):
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
 
-            df_merged = pd.merge(
-                df_stock,
-                filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
-                on='Date', how='left'
-            ).fillna(0)
+            # 모멘텀 지표 추가
+            df_stock['Return_10d'] = df_stock['Close'].pct_change(10)
+            df_stock['MA20'] = df_stock['Close'].rolling(window=20).mean()
+            df_stock['Diff_MA20'] = df_stock['Close'] - df_stock['MA20']
 
-            # ------------------------
-            # ✨ 단순 선형회귀 예측
-            # ------------------------
-            from sklearn.linear_model import LinearRegression
+            # VIX 추가
+            vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date)
+            vix = vix.reset_index()[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
 
-            X = df_merged[['Sentiment_Score']].values
-            y = df_merged['Close'].values
+            df_all = pd.merge(df_stock, vix, on='Date', how='left')
+            df_all = pd.merge(df_all, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
+                              on='Date', how='left').fillna(0)
 
-            if len(X) > 2:
-                model = LinearRegression()
+            df_all = df_all.dropna(subset=['Return_10d', 'Diff_MA20', 'VIX_Close'])
+
+            # 모델 학습
+            X = df_all[['Sentiment_Score', 'Return_10d', 'Diff_MA20', 'VIX_Close']].values
+            y = df_all['Close'].values
+
+            if len(X) > 30:
+                model = RandomForestRegressor(n_estimators=100, random_state=42)
                 model.fit(X, y)
                 y_pred = model.predict(X)
-                df_merged['Predicted_Close'] = y_pred
+                df_all['Predicted_Close'] = y_pred
 
-                # ------------------------
-                # ✨ 시각화
-                # ------------------------
+                # 시각화
                 fig, ax = plt.subplots(figsize=(10, 5))
-                ax.plot(df_merged['Date'], df_merged['Close'], label='Actual Close')
-                ax.plot(df_merged['Date'], df_merged['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} 주가 및 감성 기반 예측")
+                ax.plot(df_all['Date'], df_all['Close'], label='Actual Close')
+                ax.plot(df_all['Date'], df_all['Predicted_Close'], label='Predicted Close', linestyle='--')
+                ax.set_title(f"{company_name} 고급 주가 예측 (감성+모멘텀+VIX)")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
                 st.pyplot(fig)
 
-                st.metric(label="회귀계수 (감성 점수 → 주가)", value=f"{model.coef_[0]:.2f}")
+                st.metric(label="Feature Importance (샘플)", value="랜덤포레스트 자동 계산됨")
             else:
-                st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
+                st.warning("데이터가 부족하여 고급 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("감성 점수는 -1 (강한 부정) ~ 1 (강한 긍정) 범위이며, 단순 예측 데모용입니다.")
+        st.write("👉 감성 점수 (-1 ~ 1), 모멘텀 지표, VIX를 함께 활용한 고급 예측 데모입니다.")
