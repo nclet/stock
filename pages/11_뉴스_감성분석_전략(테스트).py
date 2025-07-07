@@ -9,21 +9,19 @@ import yfinance as yf
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.linear_model import LinearRegression
-import urllib.parse
 
 # ------------------------
 # ✨ 페이지 설정
 # ------------------------
-st.set_page_config(page_title="뉴스 감성분석 + 모멘텀 + VIX 전략", layout="wide")
-st.title("뉴스 감성 + 모멘텀 + VIX 결합 주가 예측 전략")
+st.set_page_config(page_title="뉴스 감성분석 전략", layout="wide")
+st.title("뉴스 감성분석 + VIX + 모멘텀 기반 주가 예측 전략")
 
 st.markdown("""
-네이버 뉴스, VIX(변동성 지수), 모멘텀 데이터를 결합하여  
-기업의 주가를 더 정교하게 예측하는 통합 전략 예제입니다.
+네이버 뉴스, VIX(변동성 지수), 모멘텀을 결합하여 주가를 예측하는 전략 예제입니다.
 """)
 
 # ------------------------
-# ✨ 감성 분석 모델 로드
+# ✨ 감성 분석 모델
 # ------------------------
 @st.cache_resource
 def load_sentiment_model():
@@ -43,38 +41,25 @@ def analyze_sentiment(text):
     return (score - 0.5) * 2  # -1 ~ 1
 
 # ------------------------
-# ✨ 종목 선택 UI (session_state로 문제 해결)
+# ✨ 종목 선택
 # ------------------------
-@st.cache_resource
-def get_company_list(market):
-    return fdr.StockListing(market)
-
 market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
-company_list = get_company_list(market_option)
+company_list = fdr.StockListing(market_option)
 company_names = company_list['Name'].tolist()
-
-if "selected_company" not in st.session_state:
-    st.session_state.selected_company = "삼성전자" if "삼성전자" in company_names else company_names[0]
-
-company_name = st.selectbox(
-    "✅ 분석할 기업 선택",
-    company_names,
-    index=company_names.index(st.session_state.selected_company),
-    key="selected_company"
-)
-
-stock_code = company_list.loc[company_list['Name'] == st.session_state.selected_company, 'Code'].values[0]
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names)
+stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
 
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
 end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 
 # ------------------------
-# ✨ 네이버 뉴스 API 함수
+# ✨ 네이버 뉴스 API
 # ------------------------
 def get_naver_news_api(company_name, display=30, start=1, sort="date"):
     client_id = st.secrets["naver"]["client_id"]
     client_secret = st.secrets["naver"]["client_secret"]
 
+    import urllib.parse
     enc_query = urllib.parse.quote(company_name)
     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
 
@@ -105,9 +90,6 @@ def get_naver_news_api(company_name, display=30, start=1, sort="date"):
         st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
         return pd.DataFrame()
 
-# ------------------------
-# ✨ 실행 버튼
-# ------------------------
 max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=30, step=10)
 
 if st.button("🚀 크롤링 및 분석 시작"):
@@ -141,22 +123,38 @@ if st.button("🚀 크롤링 및 분석 시작"):
             df_stock = df_stock.reset_index()[['Date', 'Close']]
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
 
-            # VIX 데이터
+            # ------------------------
+            # ✨ VIX 데이터
+            # ------------------------
             vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1))
             vix = vix.reset_index()
+
+            if isinstance(vix.columns, pd.MultiIndex):
+                vix.columns = vix.columns.get_level_values(0)
+
             vix = vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
             vix['Date'] = pd.to_datetime(vix['Date'])
 
-            # 모멘텀
+            # ------------------------
+            # ✨ 모멘텀
+            # ------------------------
             df_stock['Momentum'] = df_stock['Close'].diff()
 
-            # 병합
+            # ✅ MultiIndex 방지
+            if isinstance(df_stock.columns, pd.MultiIndex):
+                df_stock.columns = df_stock.columns.get_level_values(0)
+            if isinstance(filtered_news.columns, pd.MultiIndex):
+                filtered_news.columns = filtered_news.columns.get_level_values(0)
+
+            # ------------------------
+            # ✨ 병합
+            # ------------------------
             df_merge = pd.merge(df_stock, vix, on='Date', how='left')
             df_merge = pd.merge(df_merge, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
                                 on='Date', how='left').fillna(0)
 
             # ------------------------
-            # ✨ 회귀 예측
+            # ✨ 회귀 분석
             # ------------------------
             X = df_merge[['Sentiment_Score', 'Momentum', 'VIX_Close']].fillna(0).values
             y = df_merge['Close'].values
@@ -167,10 +165,13 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 y_pred = model.predict(X)
                 df_merge['Predicted_Close'] = y_pred
 
+                # ------------------------
+                # ✨ 시각화
+                # ------------------------
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} Stock Prediction (NEWS + MOMENTUM + VIX)")
+                ax.set_title(f"{company_name} 주가 예측 (뉴스 + 모멘텀 + VIX)")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
@@ -183,4 +184,4 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
+        st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정) 범위로 계산됩니다.")
