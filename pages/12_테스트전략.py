@@ -58,7 +58,8 @@ def load_sentiment_model():
         return tokenizer, model
     except Exception as e:
         st.error(f"❌ AI 감성 분석 모델 로드 중 오류 발생: {e}")
-        st.error("""
+        # SyntaxError 해결을 위해 raw string (r"...") 사용
+        st.error(r"""
         '401 Unauthorized' 오류는 주로 토큰 문제 또는 네트워크 제한으로 인해 발생합니다.
         
         **다음 해결책들을 시도해 보세요:**
