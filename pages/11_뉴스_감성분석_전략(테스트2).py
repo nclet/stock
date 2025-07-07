@@ -43,7 +43,7 @@ def analyze_sentiment(text):
     return (score - 0.5) * 2  # -1 ~ 1
 
 # ------------------------
-# ✨ 종목 선택 UI (session_state로 문제 해결)
+# ✨ 종목 선택 UI
 # ------------------------
 @st.cache_resource
 def get_company_list(market):
@@ -155,7 +155,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
             vix['Date'] = pd.to_datetime(vix['Date'])
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             
-            # 뉴스 그룹핑 후 reset_index
+            # 🟢 핵심 수정: 뉴스 그룹핑 후 reset_index() 추가
             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
             
             # 병합
