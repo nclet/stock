@@ -5,7 +5,7 @@ import requests
 from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
-import yfinance as yf
+import yfinance as yf # yfinance는 이제 사용하지 않지만, 기존 코드에 있었으므로 임포트 유지
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.linear_model import LinearRegression
@@ -142,31 +142,26 @@ if st.button("🚀 크롤링 및 분석 시작"):
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
 
             # ------------------------
-            # ✨ VIX 데이터 (MultiIndex 및 KeyError 해결)
+            # ✨ VIX 데이터 (FinanceDataReader 사용으로 변경)
             # ------------------------
-            vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1), progress=False) # progress=False 추가
-
-            if vix.empty: # VIX 데이터가 없는 경우 처리
-                st.warning("⚠️ VIX 데이터를 가져오지 못했습니다. 예측에 포함되지 않습니다.")
-                vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
-            else:
-                # MultiIndex 평탄화 (yf.download 직후 처리)
-                if isinstance(vix.columns, pd.MultiIndex):
-                    vix.columns = ['_'.join(col).strip() for col in vix.columns.values]
+            st.info("📉 VIX(변동성 지수) 데이터를 로드 중입니다 (FinanceDataReader 사용)...")
+            try:
+                # FinanceDataReader로 VIX 데이터 로드
+                # 'VIX'는 CBOE Volatility Index의 심볼입니다.
+                vix_raw = fdr.DataReader('VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1))
                 
-                vix = vix.reset_index() # Date를 컬럼으로 변환
-
-                # 'Close' 컬럼이 없으면 'Adj Close' 사용
-                if 'Close' not in vix.columns and 'Adj Close' in vix.columns:
-                    vix = vix[['Date', 'Adj Close']].rename(columns={'Adj Close': 'VIX_Close'})
-                elif 'Close' in vix.columns:
-                    vix = vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
-                else:
-                    st.warning("⚠️ VIX 데이터에서 'Close' 또는 'Adj Close' 컬럼을 찾을 수 없습니다. 예측에 포함되지 않습니다.")
+                if vix_raw.empty:
+                    st.warning("⚠️ VIX 데이터를 가져오지 못했습니다. 예측에 포함되지 않습니다.")
                     vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
-                    
-                vix_processed = vix[['Date', 'VIX_Close']]
-                vix_processed['Date'] = pd.to_datetime(vix_processed['Date'])
+                else:
+                    # FinanceDataReader는 기본적으로 MultiIndex를 반환하지 않으므로, 평탄화 로직 불필요
+                    # Date 컬럼을 인덱스에서 컬럼으로 변환하고, 'Close' 컬럼 이름 변경
+                    vix_processed = vix_raw.reset_index()[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
+                    vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # datetime.datetime으로 변환
+                    st.success("✅ VIX 데이터 로드 완료 (FinanceDataReader)!")
+            except Exception as e:
+                st.warning(f"⚠️ VIX 데이터 로드 중 오류 발생 (FinanceDataReader): {e}. 예측에 포함되지 않습니다.")
+                vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close']) # 오류 발생 시 빈 데이터프레임으로 초기화
             
             # ------------------------
             # ✨ 모멘텀
@@ -213,4 +208,4 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
+        st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
