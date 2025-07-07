@@ -13,12 +13,11 @@ from sklearn.linear_model import LinearRegression
 # ------------------------
 # ✨ 페이지 설정
 # ------------------------
-st.set_page_config(page_title="뉴스 + VIX + 모멘텀 기반 주가 예측", layout="wide")
-st.title("🇰🇷 뉴스 감성 + VIX + 모멘텀 기반 주가 예측 (고급)")
+st.set_page_config(page_title="뉴스 감성분석 전략", layout="wide")
+st.title("뉴스 감성분석 전략")
 
 st.markdown("""
-네이버 뉴스 API를 활용한 감성 점수,  
-VIX(변동성 지수), 모멘텀을 결합한 다변량 기반 주가 예측 데모입니다.
+네이버 뉴스, VIX(변동성 지수), 모멘텀을 결합하여 주가를 예측하는 모형입니다.
 """)
 
 @st.cache_resource
@@ -41,7 +40,7 @@ def analyze_sentiment(text):
 market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
 company_list = fdr.StockListing(market_option)
 company_names = company_list['Name'].tolist()
-company_name = st.selectbox("✅ 분석할 기업 선택", company_names, index=company_names.index("삼성전자") if "삼성전자" in company_names else 0)
+company_name = st.selectbox("✅ 분석할 기업 선택", company_names)
 stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
 
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
@@ -149,7 +148,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} 주가 예측 (뉴스 + 모멘텀 + VIX)")
+                ax.set_title(f"{company_name} stock price prediction (NEWS + MOMENTUM + VIX)")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
@@ -162,4 +161,4 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("👉 감성 점수는 -1 (강 부정) ~ 1 (강 긍정), 모멘텀은 단순 종가 차이, VIX는 시장 변동성을 나타냅니다.")
+        st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다. ")
