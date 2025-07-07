@@ -150,10 +150,17 @@ if st.button("🚀 크롤링 및 분석 시작"):
             # 모멘텀
             df_stock['Momentum'] = df_stock['Close'].diff()
 
+            # Date 컬럼 타입 통일
+            df_stock['Date'] = pd.to_datetime(df_stock['Date'])
+            vix['Date'] = pd.to_datetime(vix['Date'])
+            filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
+            
+            # 뉴스 그룹핑 후 reset_index
+            filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
+            
             # 병합
             df_merge = pd.merge(df_stock, vix, on='Date', how='left')
-            df_merge = pd.merge(df_merge, filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index(),
-                                on='Date', how='left').fillna(0)
+            df_merge = pd.merge(df_merge, filtered_news_grouped, on='Date', how='left').fillna(0)
 
             # ------------------------
             # ✨ 회귀 예측
