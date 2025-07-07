@@ -154,11 +154,29 @@ if st.button("🚀 크롤링 및 분석 시작"):
                     st.warning("⚠️ VIX 데이터를 가져오지 못했습니다. 예측에 포함되지 않습니다.")
                     vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
                 else:
-                    # FinanceDataReader는 기본적으로 MultiIndex를 반환하지 않으므로, 평탄화 로직 불필요
-                    # Date 컬럼을 인덱스에서 컬럼으로 변환하고, 'Close' 컬럼 이름 변경
-                    vix_processed = vix_raw.reset_index()[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
-                    vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # datetime.datetime으로 변환
-                    st.success("✅ VIX 데이터 로드 완료 (FinanceDataReader)!")
+                    # --- START MultiIndex/KeyError FIX ---
+                    # 인덱스 이름이 'Date'가 아닌 경우 'Date'로 명시적으로 설정
+                    if vix_raw.index.name != 'Date':
+                        vix_raw.index.name = 'Date'
+                    
+                    vix_temp = vix_raw.reset_index() # 이제 'Date' 컬럼이 확실히 생성됨
+
+                    # 'Close' 또는 'Adj Close' 컬럼을 찾아 사용
+                    col_to_use = None
+                    if 'Close' in vix_temp.columns:
+                        col_to_use = 'Close'
+                    elif 'Adj Close' in vix_temp.columns: # 혹시 모를 대체 컬럼
+                        col_to_use = 'Adj Close'
+                    
+                    if 'Date' in vix_temp.columns and col_to_use: # 'Date'와 값 컬럼 모두 존재하는지 확인
+                        vix_processed = vix_temp[['Date', col_to_use]].rename(columns={col_to_use: 'VIX_Close'})
+                        vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # datetime.datetime으로 변환
+                        st.success("✅ VIX 데이터 로드 완료 (FinanceDataReader)!")
+                    else:
+                        st.warning("⚠️ VIX 데이터에 필요한 'Date' 또는 'Close'/'Adj Close' 컬럼이 없습니다. 예측에 포함되지 않습니다.")
+                        vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
+                    # --- END MultiIndex/KeyError FIX ---
+
             except Exception as e:
                 st.warning(f"⚠️ VIX 데이터 로드 중 오류 발생 (FinanceDataReader): {e}. 예측에 포함되지 않습니다.")
                 vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close']) # 오류 발생 시 빈 데이터프레임으로 초기화
@@ -170,7 +188,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
 
             # Date 컬럼 타입 통일
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
-            # vix_processed['Date']는 이미 위에서 pd.to_datetime 처리됨
+            vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # vix_processed['Date']는 이미 위에서 pd.to_datetime 처리됨
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             
             # 🟢 핵심 수정: 뉴스 그룹핑 후 reset_index() 추가
