@@ -141,32 +141,48 @@ if st.button("🚀 크롤링 및 분석 시작"):
             df_stock = df_stock.reset_index()[['Date', 'Close']]
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
 
-            # VIX 데이터
-            vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1))
+            # ------------------------
+            # ✨ VIX 데이터 (MultiIndex 및 KeyError 해결)
+            # ------------------------
+            vix = yf.download('^VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1), progress=False) # progress=False 추가
+
+            if vix.empty: # VIX 데이터가 없는 경우 처리
+                st.warning("⚠️ VIX 데이터를 가져오지 못했습니다. 예측에 포함되지 않습니다.")
+                vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
+            else:
+                # MultiIndex 평탄화 (yf.download 직후 처리)
+                if isinstance(vix.columns, pd.MultiIndex):
+                    vix.columns = ['_'.join(col).strip() for col in vix.columns.values]
+                
+                vix = vix.reset_index() # Date를 컬럼으로 변환
+
+                # 'Close' 컬럼이 없으면 'Adj Close' 사용
+                if 'Close' not in vix.columns and 'Adj Close' in vix.columns:
+                    vix = vix[['Date', 'Adj Close']].rename(columns={'Adj Close': 'VIX_Close'})
+                elif 'Close' in vix.columns:
+                    vix = vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
+                else:
+                    st.warning("⚠️ VIX 데이터에서 'Close' 또는 'Adj Close' 컬럼을 찾을 수 없습니다. 예측에 포함되지 않습니다.")
+                    vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
+                    
+                vix_processed = vix[['Date', 'VIX_Close']]
+                vix_processed['Date'] = pd.to_datetime(vix_processed['Date'])
             
-            # --- START MultiIndex FIX ---
-            # yfinance에서 반환되는 DataFrame의 컬럼이 MultiIndex일 경우를 대비하여 평탄화
-            if isinstance(vix.columns, pd.MultiIndex):
-                vix.columns = ['_'.join(col).strip() for col in vix.columns.values]
-            # --- END MultiIndex FIX ---
-
-            vix = vix.reset_index()
-            vix = vix[['Date', 'Close']].rename(columns={'Close': 'VIX_Close'})
-            vix['Date'] = pd.to_datetime(vix['Date'])
-
-            # 모멘텀
+            # ------------------------
+            # ✨ 모멘텀
+            # ------------------------
             df_stock['Momentum'] = df_stock['Close'].diff()
 
             # Date 컬럼 타입 통일
             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
-            vix['Date'] = pd.to_datetime(vix['Date'])
+            # vix_processed['Date']는 이미 위에서 pd.to_datetime 처리됨
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             
             # 🟢 핵심 수정: 뉴스 그룹핑 후 reset_index() 추가
             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
             
             # 병합
-            df_merge = pd.merge(df_stock, vix, on='Date', how='left')
+            df_merge = pd.merge(df_stock, vix_processed, on='Date', how='left') # vix_processed 사용
             df_merge = pd.merge(df_merge, filtered_news_grouped, on='Date', how='left').fillna(0)
 
             # ------------------------
@@ -197,4 +213,4 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
 
         st.markdown("---")
-        st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
+        st.write("감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
