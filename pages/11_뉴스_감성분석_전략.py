@@ -13,12 +13,11 @@ from sklearn.linear_model import LinearRegression
 # ------------------------
 # ✨ 페이지 설정
 # ------------------------
-st.set_page_config(page_title="뉴스 + VIX + 모멘텀 기반 주가 예측", layout="wide")
-st.title("🇰🇷 뉴스 감성 + VIX + 모멘텀 기반 주가 예측 (고급)")
+st.set_page_config(page_title="뉴스 감성분석 전략", layout="wide")
+st.title("뉴스 감성 분석 전략")
 
 st.markdown("""
-네이버 뉴스 API를 활용한 감성 점수,  
-VIX(변동성 지수), 모멘텀을 결합한 다변량 기반 주가 예측 데모입니다.
+네이버 뉴스 API를 통해 해당 종목의 뉴스를 종합합니다. 그리고 VIX(변동성지수), 모멘텀을 결합하여 주가를 예측합니다.
 """)
 
 @st.cache_resource
@@ -149,7 +148,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} 주가 예측 (뉴스 + 모멘텀 + VIX)")
+                ax.set_title(f"{company_name} 주가 예측 (News + Momentum + VIX)")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
