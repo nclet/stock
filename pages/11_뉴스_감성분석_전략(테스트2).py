@@ -44,10 +44,24 @@ def analyze_sentiment(text):
 # ✨ 종목 선택
 # ------------------------
 market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
+
 company_list = fdr.StockListing(market_option)
 company_names = company_list['Name'].tolist()
-company_name = st.selectbox("✅ 분석할 기업 선택", company_names)
-stock_code = company_list.loc[company_list['Name'] == company_name, 'Code'].values[0]
+
+# ✅ 세션 상태 사용하여 선택 값 유지
+if "selected_company" not in st.session_state:
+    st.session_state.selected_company = company_names[0]
+
+selected_company = st.selectbox(
+    "✅ 분석할 기업 선택",
+    company_names,
+    index=company_names.index(st.session_state.selected_company) if st.session_state.selected_company in company_names else 0,
+    key="company_selectbox"
+)
+
+st.session_state.selected_company = selected_company
+
+stock_code = company_list.loc[company_list['Name'] == selected_company, 'Code'].values[0]
 
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
 end_date = st.date_input("뉴스 검색 종료일", datetime.now())
@@ -97,7 +111,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
         all_news = pd.DataFrame()
         for start_idx in range(1, max_news + 1, 100):
             count = min(100, max_news - start_idx + 1)
-            df_part = get_naver_news_api(company_name, display=count, start=start_idx)
+            df_part = get_naver_news_api(selected_company, display=count, start=start_idx)
             all_news = pd.concat([all_news, df_part], ignore_index=True)
             if len(df_part) < count:
                 break
@@ -171,7 +185,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--')
-                ax.set_title(f"{company_name} 주가 예측 (뉴스 + 모멘텀 + VIX)")
+                ax.set_title(f"{selected_company} 주가 예측 (뉴스 + 모멘텀 + VIX)")
                 ax.legend()
                 ax.grid(True)
                 plt.xticks(rotation=45)
