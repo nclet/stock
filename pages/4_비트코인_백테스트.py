@@ -203,7 +203,7 @@ if use_sma and short_ma_period >= long_ma_period:
     st.error("❌ 단기 이동평균선 기간은 장기 이동평균선 기간보다 작아야 합니다.") # Moved from sidebar
     st.stop()
 
-st.subheader("� 모멘텀 지표 설정")
+st.subheader("📈모멘텀 지표 설정")
 use_momentum = st.checkbox("모멘텀 사용", value=False)
 momentum_period = st.slider("모멘텀 기간 (일)", 5, 30, 14) if use_momentum else 0
 momentum_buy_threshold = st.slider("모멘텀 매수 임계값 (%)", -10.0, 10.0, 0.5, step=0.1) if use_momentum else 0
