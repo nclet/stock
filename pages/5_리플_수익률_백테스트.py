@@ -408,7 +408,7 @@ def backtest_strategy(df, use_sma, use_momentum, use_rsi, use_macd, use_obv,
 
     return df
 
-st.write("### 📈 백테스팅 결과")
+st.write("### 💸 백테스팅 결과")
 results = backtest_strategy(processed_data.copy(), use_sma, use_momentum, use_rsi, use_macd, use_obv,
                             short_ma_period, long_ma_period,
                             momentum_buy_threshold, momentum_sell_threshold,
