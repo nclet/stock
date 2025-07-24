@@ -275,7 +275,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 y_pred = model.predict(X)
                 df_merge['Predicted_Close'] = y_pred
 
-                st.subheader("⬆️주가 예측 결과")
+                st.subheader("주가 예측 결과")
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close', color='blue')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--', color='red')
