@@ -45,7 +45,7 @@ def load_sentiment_model():
         model.to(device)
         
         st.success(f"✅ 감성 분석 모델 '{model_name}'를 사용하고 있습니다. (기반장치:{device})")
-        # st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
+        st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
         
         return tokenizer, model, device
     except Exception as e:
