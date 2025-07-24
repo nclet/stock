@@ -185,6 +185,28 @@ def get_naver_news_api(company_name, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ------------------------
+# ✨ 기술적 지표 계산 함수 (추가)
+# ------------------------
+@st.cache_data
+def calculate_bollinger_bands_pred(prices, window=20, num_std=2):
+    rolling_mean = prices.rolling(window).mean()
+    rolling_std = prices.rolling(window).std()
+    upper_band = rolling_mean + (rolling_std * num_std)
+    lower_band = rolling_mean - (rolling_std * num_std)
+    return rolling_mean, upper_band, lower_band
+
+@st.cache_data
+def calculate_rsi_pred(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# ------------------------
 # ✨ LSTM 모델 관련 함수
 # ------------------------
 def build_lstm_model(input_shape):
@@ -443,3 +465,4 @@ if st.button("🚀 데이터 수집 및 예측 시작"):
         - **통합 전략:** 뉴스 감성, 모멘텀, VIX와 같은 외부 정보가 LSTM 모델의 입력 특징으로 사용되어 주가 예측의 정확도를 높이는 데 기여합니다.
         - **예측의 한계:** 주가 예측은 본질적으로 불확실성이 매우 높습니다. 이 모델은 과거 데이터를 기반으로 학습하므로, 급격한 시장 변화나 예상치 못한 외부 요인을 완벽하게 반영하기 어렵니다. 참고 자료로만 활용하시기 바랍니다.
         """)
+
