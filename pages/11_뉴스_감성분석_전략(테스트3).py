@@ -16,11 +16,11 @@ import urllib.parse
 # ✨ 페이지 설정
 # ------------------------
 st.set_page_config(page_title="뉴스 감성분석 + 모멘텀 + VIX 전략", layout="wide")
-    st.title("뉴스 감성 분석 전략")
+st.title("뉴스 감성 + 모멘텀 + VIX 결합 주가 예측 전략")
 
 st.markdown("""
-네이버 뉴스를 크롤링하여 VIX(변동성 지수), 모멘텀 데이터를 결합하여
-기업의 주가를 더 정교하게 예측하는 통합 전략입니다.
+네이버 뉴스, VIX(변동성 지수), 모멘텀 데이터를 결합하여
+기업의 주가를 더 정교하게 예측하는 통합 전략 예제입니다.
 """)
 
 # ------------------------
@@ -44,7 +44,7 @@ def load_sentiment_model():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         
-        st.success(f"✅ 감성 분석 모델 '{model_name}'를 사용하고 있습니다. (기반장치:{device})")
+        st.success(f"✅ 감성 분석 모델 '{model_name}' 로드 완료! (장치: {device})")
         st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
         
         return tokenizer, model, device
@@ -275,7 +275,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 y_pred = model.predict(X)
                 df_merge['Predicted_Close'] = y_pred
 
-                st.subheader("주가 예측 결과")
+                st.subheader("📊 주가 예측 결과")
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close', color='blue')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--', color='red')
@@ -296,235 +296,3 @@ if st.button("🚀 크롤링 및 분석 시작"):
 
         st.markdown("---")
         st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
-
-
-
-# import streamlit as st
-# import pandas as pd
-# import numpy as np
-# import requests
-# from datetime import datetime, timedelta
-# import FinanceDataReader as fdr
-# import matplotlib.pyplot as plt
-# import yfinance as yf # yfinance는 이제 사용하지 않지만, 기존 코드에 있었으므로 임포트 유지
-# from transformers import AutoTokenizer, AutoModelForSequenceClassification
-# import torch
-# from sklearn.linear_model import LinearRegression
-# import urllib.parse
-
-# # ------------------------
-# # ✨ 페이지 설정
-# # ------------------------
-# st.set_page_config(page_title="뉴스 감성분석 + 모멘텀 + VIX 전략", layout="wide")
-# st.title("뉴스 감성 + 모멘텀 + VIX 결합 주가 예측 전략")
-
-# st.markdown("""
-# 네이버 뉴스, VIX(변동성 지수), 모멘텀 데이터를 결합하여  
-# 기업의 주가를 더 정교하게 예측하는 통합 전략 예제입니다.
-# """)
-
-# # ------------------------
-# # ✨ 감성 분석 모델 로드
-# # ------------------------
-# @st.cache_resource
-# def load_sentiment_model():
-#     tokenizer = AutoTokenizer.from_pretrained("beomi/KcELECTRA-base")
-#     model = AutoModelForSequenceClassification.from_pretrained("beomi/KcELECTRA-base")
-#     return tokenizer, model
-
-# tokenizer, sentiment_model = load_sentiment_model()
-
-# def analyze_sentiment(text):
-#     if not text:
-#         return 0.0
-#     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-#     with torch.no_grad():
-#         outputs = sentiment_model(**inputs)
-#     score = torch.softmax(outputs.logits, dim=1)[0][1].item()
-#     return (score - 0.5) * 2  # -1 ~ 1
-
-# # ------------------------
-# # ✨ 종목 선택 UI
-# # ------------------------
-# @st.cache_resource
-# def get_company_list(market):
-#     return fdr.StockListing(market)
-
-# market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
-# company_list = get_company_list(market_option)
-# company_names = company_list['Name'].tolist()
-
-# if "selected_company" not in st.session_state:
-#     st.session_state.selected_company = "삼성전자" if "삼성전자" in company_names else company_names[0]
-
-# company_name = st.selectbox(
-#     "✅ 분석할 기업 선택",
-#     company_names,
-#     index=company_names.index(st.session_state.selected_company),
-#     key="selected_company"
-# )
-
-# stock_code = company_list.loc[company_list['Name'] == st.session_state.selected_company, 'Code'].values[0]
-
-# start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
-# end_date = st.date_input("뉴스 검색 종료일", datetime.now())
-
-# # ------------------------
-# # ✨ 네이버 뉴스 API 함수
-# # ------------------------
-# def get_naver_news_api(company_name, display=30, start=1, sort="date"):
-#     client_id = st.secrets["naver"]["client_id"]
-#     client_secret = st.secrets["naver"]["client_secret"]
-
-#     enc_query = urllib.parse.quote(company_name)
-#     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
-
-#     headers = {
-#         "X-Naver-Client-Id": client_id,
-#         "X-Naver-Client-Secret": client_secret
-#     }
-
-#     response = requests.get(url, headers=headers)
-#     if response.status_code == 200:
-#         data = response.json()
-#         items = data.get('items', [])
-#         news_data = []
-#         for item in items:
-#             title = item.get('title', '')
-#             pub_date = item.get('pubDate', '')
-#             try:
-#                 pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
-#             except Exception:
-#                 pub_date_dt = None
-#             news_data.append({
-#                 'Date': pub_date_dt,
-#                 'Title': title
-#             })
-#         df = pd.DataFrame(news_data)
-#         return df
-#     else:
-#         st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
-#         return pd.DataFrame()
-
-# # ------------------------
-# # ✨ 실행 버튼
-# # ------------------------
-# max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=30, step=10)
-
-# if st.button("🚀 크롤링 및 분석 시작"):
-#     with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
-#         all_news = pd.DataFrame()
-#         for start_idx in range(1, max_news + 1, 100):
-#             count = min(100, max_news - start_idx + 1)
-#             df_part = get_naver_news_api(company_name, display=count, start=start_idx)
-#             all_news = pd.concat([all_news, df_part], ignore_index=True)
-#             if len(df_part) < count:
-#                 break
-
-#         all_news = all_news.dropna(subset=['Date'])
-#         filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
-
-#     if filtered_news.empty:
-#         st.error("❌ 뉴스 데이터를 가져오지 못했습니다.")
-#     else:
-#         filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-
-#         st.success("✅ 뉴스 감성 분석 완료!")
-#         st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
-
-#         # ------------------------
-#         # ✨ 주가 데이터
-#         # ------------------------
-#         df_stock = fdr.DataReader(stock_code, start_date, end_date)
-#         if df_stock.empty:
-#             st.error("❌ 주가 데이터를 가져오지 못했습니다.")
-#         else:
-#             df_stock = df_stock.reset_index()[['Date', 'Close']]
-#             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
-
-#             # ------------------------
-#             # ✨ VIX 데이터 (FinanceDataReader 사용으로 변경)
-#             # ------------------------
-#             st.info("📉 VIX(변동성 지수) 데이터를 로드 중입니다 (FinanceDataReader 사용)...")
-#             try:
-#                 # FinanceDataReader로 VIX 데이터 로드
-#                 # 'VIX'는 CBOE Volatility Index의 심볼입니다.
-#                 vix_raw = fdr.DataReader('VIX', start=start_date - timedelta(days=30), end=end_date + timedelta(days=1))
-                
-#                 if vix_raw.empty:
-#                     st.warning("⚠️ VIX 데이터를 가져오지 못했습니다. 예측에 포함되지 않습니다.")
-#                     vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
-#                 else:
-#                     # --- START MultiIndex/KeyError FIX ---
-#                     # 인덱스 이름이 'Date'가 아닌 경우 'Date'로 명시적으로 설정
-#                     if vix_raw.index.name != 'Date':
-#                         vix_raw.index.name = 'Date'
-                    
-#                     vix_temp = vix_raw.reset_index() # 이제 'Date' 컬럼이 확실히 생성됨
-
-#                     # 'Close' 또는 'Adj Close' 컬럼을 찾아 사용
-#                     col_to_use = None
-#                     if 'Close' in vix_temp.columns:
-#                         col_to_use = 'Close'
-#                     elif 'Adj Close' in vix_temp.columns: # 혹시 모를 대체 컬럼
-#                         col_to_use = 'Adj Close'
-                    
-#                     if 'Date' in vix_temp.columns and col_to_use: # 'Date'와 값 컬럼 모두 존재하는지 확인
-#                         vix_processed = vix_temp[['Date', col_to_use]].rename(columns={col_to_use: 'VIX_Close'})
-#                         vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # datetime.datetime으로 변환
-#                         st.success("✅ VIX 데이터 로드 완료 (FinanceDataReader)!")
-#                     else:
-#                         st.warning("⚠️ VIX 데이터에 필요한 'Date' 또는 'Close'/'Adj Close' 컬럼이 없습니다. 예측에 포함되지 않습니다.")
-#                         vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close'])
-#                     # --- END MultiIndex/KeyError FIX ---
-
-#             except Exception as e:
-#                 st.warning(f"⚠️ VIX 데이터 로드 중 오류 발생 (FinanceDataReader): {e}. 예측에 포함되지 않습니다.")
-#                 vix_processed = pd.DataFrame(columns=['Date', 'VIX_Close']) # 오류 발생 시 빈 데이터프레임으로 초기화
-            
-#             # ------------------------
-#             # ✨ 모멘텀
-#             # ------------------------
-#             df_stock['Momentum'] = df_stock['Close'].diff()
-
-#             # Date 컬럼 타입 통일
-#             df_stock['Date'] = pd.to_datetime(df_stock['Date'])
-#             vix_processed['Date'] = pd.to_datetime(vix_processed['Date']) # vix_processed['Date']는 이미 위에서 pd.to_datetime 처리됨
-#             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
-            
-#             # 🟢 핵심 수정: 뉴스 그룹핑 후 reset_index() 추가
-#             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
-            
-#             # 병합
-#             df_merge = pd.merge(df_stock, vix_processed, on='Date', how='left') # vix_processed 사용
-#             df_merge = pd.merge(df_merge, filtered_news_grouped, on='Date', how='left').fillna(0)
-
-#             # ------------------------
-#             # ✨ 회귀 예측
-#             # ------------------------
-#             X = df_merge[['Sentiment_Score', 'Momentum', 'VIX_Close']].fillna(0).values
-#             y = df_merge['Close'].values
-
-#             if len(X) > 5:
-#                 model = LinearRegression()
-#                 model.fit(X, y)
-#                 y_pred = model.predict(X)
-#                 df_merge['Predicted_Close'] = y_pred
-
-#                 fig, ax = plt.subplots(figsize=(12, 6))
-#                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close')
-#                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--')
-#                 ax.set_title(f"{company_name} Stock Prediction (NEWS + MOMENTUM + VIX)")
-#                 ax.legend()
-#                 ax.grid(True)
-#                 plt.xticks(rotation=45)
-#                 st.pyplot(fig)
-
-#                 st.metric("회귀계수 (감성)", f"{model.coef_[0]:.2f}")
-#                 st.metric("회귀계수 (모멘텀)", f"{model.coef_[1]:.2f}")
-#                 st.metric("회귀계수 (VIX)", f"{model.coef_[2]:.2f}")
-#             else:
-#                 st.warning("데이터가 부족하여 예측을 수행할 수 없습니다.")
-
-#         st.markdown("---")
-#         st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
