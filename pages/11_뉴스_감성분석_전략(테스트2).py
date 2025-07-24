@@ -16,11 +16,11 @@ import urllib.parse
 # ✨ 페이지 설정
 # ------------------------
 st.set_page_config(page_title="뉴스 감성분석 + 모멘텀 + VIX 전략", layout="wide")
-st.title("뉴스 감성 + 모멘텀 + VIX 결합 주가 예측 전략")
+    st.title("뉴스 감성 분석 전략")
 
 st.markdown("""
-네이버 뉴스, VIX(변동성 지수), 모멘텀 데이터를 결합하여
-기업의 주가를 더 정교하게 예측하는 통합 전략 예제입니다.
+네이버 뉴스를 크롤링하여 VIX(변동성 지수), 모멘텀 데이터를 결합하여
+기업의 주가를 더 정교하게 예측하는 통합 전략입니다.
 """)
 
 # ------------------------
@@ -44,8 +44,8 @@ def load_sentiment_model():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         
-        st.success(f"✅ 감성 분석 모델 '{model_name}' 로드 완료! (장치: {device})")
-        st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
+        st.success(f"✅ 감성 분석 모델 '{model_name}'를 사용하고 있습니다. (기반장치:{device})")
+        # st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
         
         return tokenizer, model, device
     except Exception as e:
@@ -275,7 +275,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 y_pred = model.predict(X)
                 df_merge['Predicted_Close'] = y_pred
 
-                st.subheader("� 주가 예측 결과")
+                st.subheader("⬆️주가 예측 결과")
                 fig, ax = plt.subplots(figsize=(12, 6))
                 ax.plot(df_merge['Date'], df_merge['Close'], label='Actual Close', color='blue')
                 ax.plot(df_merge['Date'], df_merge['Predicted_Close'], label='Predicted Close', linestyle='--', color='red')
