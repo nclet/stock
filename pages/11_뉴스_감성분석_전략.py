@@ -9,7 +9,6 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.linear_model import LinearRegression
 import urllib.parse
-# from huggingface_hub import login # Streamlit Secrets를 사용하므로 명시적 login은 필요 없습니다.
 
 # ------------------------
 # ✨ 페이지 설정
@@ -28,45 +27,40 @@ st.markdown("""
 @st.cache_resource
 def load_sentiment_model():
     # Streamlit Secrets에서 Hugging Face 토큰 가져오기
-    # secrets.toml 파일에 HF_TOKEN = "your_token_here" 로 설정되어 있어야 합니다.
     hf_token = st.secrets.get("HF_TOKEN")
 
-    # 'snunlp/KR-FinBert-SC' 모델로 변경
     model_name = "snunlp/KR-FinBert-SC"
     
     try:
-        # 모델을 로드할 때 device_map을 'cpu'로 명시
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
         model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='cpu')
         
-        # GPU 사용 가능 여부 확인 및 모델을 GPU로 이동
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         
         st.success(f"✅ 감성 분석 모델 : '{model_name}' (장치: {device})")
-        st.write(f"모델 라벨 맵핑: {model.config.id2label}") # 라벨 맵핑 확인 필수!
+        st.write(f"모델 라벨 맵핑: {model.config.id2label}")
         
         return tokenizer, model, device
     except Exception as e:
         st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
         st.info("Hugging Face 토큰이 Streamlit Secrets에 올바르게 설정되었는지, 라이브러리 버전이 최신인지 확인해주세요.")
-        st.stop() # 모델 로드 실패 시 앱 중단
+        st.stop()
         return None, None, None
 
 tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
     if not text:
-        return 0.0 # 빈 텍스트는 0점 (중립)
+        return 0.0
     
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-    # 입력 데이터를 모델이 있는 장치로 이동
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
         outputs = sentiment_model(**inputs)
     
-    probabilities = torch.softmax(outputs.logits, dim=1)[0] # 첫 번째 샘플의 확률
+    probabilities = torch.softmax(outputs.logits, dim=1)[0]
 
     neg_idx = None
     neu_idx = None
@@ -91,21 +85,27 @@ def analyze_sentiment(text):
 # ✨ 종목 선택 UI
 # ------------------------
 @st.cache_data
-def get_company_list_from_csv():
-    # 'all_listed_shares_naver_crawled.csv' 파일을 읽을 때 'Code' 컬럼을 문자열로 명시
-    df = pd.read_csv('all_listed_shares_naver_crawled.csv', dtype={'종목코드': str})
-    # 컬럼 이름을 표준화합니다.
-    df.columns = ['Code', 'Name', 'Market', 'corp_code', 'Shares']
-    # 'Code' 컬럼의 모든 값을 6자리 문자열로 패딩하여 확실하게 처리합니다.
-    df['Code'] = df['Code'].str.zfill(6)
-    return df
-
-company_list = get_company_list_from_csv()
+def get_company_list(market):
+    """
+    FinanceDataReader를 사용하여 시장별 주식 종목 목록을 가져옵니다.
+    오류 발생 시 앱을 중단합니다.
+    """
+    try:
+        # FinanceDataReader의 StockListing 함수를 사용합니다.
+        df = fdr.StockListing(market)
+        # 종목코드가 6자리로 표시되도록 문자열로 변환합니다.
+        df['Code'] = df['Code'].astype(str).str.zfill(6)
+        st.success(f"✅ {market} 시장 종목 목록 로드 완료!")
+        return df
+    except Exception as e:
+        st.error(f"❌ 종목 목록을 가져오는 중 오류가 발생했습니다: {e}")
+        st.info("네트워크 연결을 확인하거나 FinanceDataReader 라이브러리가 최신 버전인지 확인해보세요.")
+        st.stop()
+        return pd.DataFrame()
 
 market_option = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"])
-
-# 선택된 시장에 해당하는 회사 목록만 필터링합니다.
-company_names = company_list[company_list['Market'] == market_option]['Name'].tolist()
+company_list = get_company_list(market_option)
+company_names = company_list['Name'].tolist()
 
 if "selected_company" not in st.session_state:
     st.session_state.selected_company = "삼성전자" if "삼성전자" in company_names else company_names[0]
@@ -117,7 +117,6 @@ company_name = st.selectbox(
     key="selected_company"
 )
 
-# 선택된 회사 이름으로 종목 코드를 찾습니다.
 stock_code = company_list.loc[company_list['Name'] == st.session_state.selected_company, 'Code'].values[0]
 
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
@@ -274,7 +273,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 plt.xticks(rotation=45)
                 st.pyplot(fig)
 
-                st.subheader("📈 회귀 모델 계수")
+                st.subheader("� 회귀 모델 계수")
                 st.metric("감성 점수 회귀계수", f"{model.coef_[0]:.2f}")
                 st.metric("모멘텀 회귀계수", f"{model.coef_[1]:.2f}")
                 st.metric("VIX 회귀계수", f"{model.coef_[2]:.2f}")
@@ -283,7 +282,6 @@ if st.button("🚀 크롤링 및 분석 시작"):
 
         st.markdown("---")
         st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
-
 
 # import streamlit as st
 # import pandas as pd
