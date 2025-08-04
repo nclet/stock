@@ -4,6 +4,7 @@ import requests
 import datetime
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import urllib.parse
@@ -14,6 +15,33 @@ import time
 st.set_page_config(layout="wide")
 st.title("📈 암호화폐 투자 지표 백테스팅")
 st.write("##### 업비트 KRW 마켓의 다양한 암호화폐에 대해 백테스팅을 실행할 수 있습니다.")
+
+# ------------------------
+# ✨ 한글 폰트 설정
+# ------------------------
+def get_korean_font():
+    font_path = ""
+    for font in fm.findSystemFonts(fontpaths=None, fontext='ttf'):
+        if 'NanumGothic' in font:
+            font_path = font
+            break
+        elif 'Malgun Gothic' in font:
+            font_path = font
+            break
+        elif 'AppleGothic' in font:
+            font_path = font
+            break
+    
+    if font_path:
+        fm.fontManager.addfont(font_path)
+        plt.rc('font', family=fm.FontProperties(fname=font_path).get_name())
+        plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지
+        st.info(f"✅ 한글 폰트 '{fm.FontProperties(fname=font_path).get_name()}'가 성공적으로 설정되었습니다.")
+    else:
+        st.warning("⚠️ 시스템에 한글 폰트(나눔고딕, 맑은고딕 등)가 설치되어 있지 않습니다. 차트의 한글이 깨질 수 있습니다.")
+
+get_korean_font()
+
 
 # ------------------------
 # ✨ 암호화폐 종목 목록 로드 (Upbit API)
