@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import datetime, timedelta
-import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
@@ -29,17 +28,13 @@ st.markdown("""
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    # Streamlit Secrets에서 Hugging Face 토큰 가져오기
     hf_token = st.secrets.get("HF_TOKEN")
-
     model_name = "snunlp/KR-FinBert-SC"
     
     try:
-        # device_map='cpu'로 명시하여 메모리 오류 방지
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
         model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='cpu')
         
-        # GPU 사용 가능 여부 확인 및 모델 이동
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         
@@ -87,20 +82,49 @@ def analyze_sentiment(text):
     return sentiment_score
 
 # ------------------------
+# ✨ 암호화폐 종목 목록 로드 (Upbit API)
+# ------------------------
+@st.cache_data
+def get_upbit_markets():
+    """
+    Upbit API에서 원화(KRW) 마켓에 있는 모든 암호화폐 목록을 가져옵니다.
+    """
+    url = "https://api.upbit.com/v1/market/all"
+    try:
+        response = requests.get(url, params={'isDetails': 'false'})
+        response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+        markets = response.json()
+        
+        # KRW 마켓만 필터링하고 코인 이름으로 매핑
+        krw_markets = {market['korean_name']: market['market'] for market in markets if market['market'].startswith('KRW-')}
+        
+        if not krw_markets:
+            st.error("❌ Upbit API에서 원화 마켓 목록을 가져오지 못했습니다.")
+            st.info("Upbit API 서버 상태를 확인하거나 잠시 후 다시 시도해주세요.")
+            st.stop()
+        
+        return krw_markets
+    
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Upbit API 연결 오류: {e}")
+        st.info("인터넷 연결 상태를 확인하거나 Upbit 서버에 문제가 있을 수 있습니다.")
+        st.stop()
+        return {}
+    except JSONDecodeError as e:
+        st.error(f"❌ Upbit API 응답 파싱 오류: {e}")
+        st.stop()
+        return {}
+
+crypto_list = get_upbit_markets()
+company_names = list(crypto_list.keys())
+
+# ------------------------
 # ✨ 암호화폐 종목 선택 UI
 # ------------------------
-crypto_list = {
-    '비트코인': 'KRW-BTC',
-    '이더리움': 'KRW-ETH',
-    '리플': 'KRW-XRP',
-    '월드코인': 'KRW-WLD',
-    '솔라나': 'KRW-SOL'
-}
-company_names = list(crypto_list.keys())
+# 기본값 설정
 default_crypto = "비트코인"
-
 if "selected_company" not in st.session_state or st.session_state.selected_company not in company_names:
-    st.session_state.selected_company = default_crypto
+    st.session_state.selected_company = default_crypto if default_crypto in company_names else company_names[0]
 
 company_name = st.selectbox(
     "✅ 분석할 암호화폐 선택",
@@ -109,6 +133,7 @@ company_name = st.selectbox(
     key="selected_company"
 )
 
+# 선택된 코인 이름으로 Upbit market 코드를 찾음
 stock_code = crypto_list.get(st.session_state.selected_company)
 
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
@@ -160,16 +185,14 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
 # ------------------------
 # ✨ Upbit API 함수
 # ------------------------
+@st.cache_data
 def get_upbit_candles(market, start_date, end_date):
     """
     Upbit API를 통해 일별 캔들 데이터를 가져와 DataFrame으로 반환합니다.
-    Upbit API는 날짜로 조회하는 기능이 없어, 원하는 기간을 얻기 위해 여러 번 호출해야 할 수 있습니다.
     """
     base_url = "https://api.upbit.com/v1/candles/days"
     df_list = []
     current_date = end_date
-    
-    # API 요청 횟수를 제한하여 무한 루프를 방지
     max_requests = 10 
     requests_count = 0
     
@@ -177,7 +200,7 @@ def get_upbit_candles(market, start_date, end_date):
         params = {
             'market': market,
             'to': (current_date + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'),
-            'count': 200 # 최대 200개까지 한번에 가져오기
+            'count': 200
         }
         
         response = requests.get(base_url, params=params)
@@ -192,7 +215,6 @@ def get_upbit_candles(market, start_date, end_date):
             temp_df = temp_df.rename(columns={'trade_price': 'Close'})
             df_list.append(temp_df)
             
-            # 다음 요청을 위해 가장 오래된 날짜를 기준으로 설정
             current_date = temp_df['Date'].min() - timedelta(days=1)
             requests_count += 1
             
@@ -231,15 +253,10 @@ if st.button("🚀 크롤링 및 분석 시작"):
         st.error("❌ 뉴스 데이터를 가져오지 못했습니다. 검색 기간이나 암호화폐명을 확인해주세요.")
     else:
         filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-
         st.success("✅ 뉴스 감성 분석 완료!")
         st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
 
-        # ------------------------
-        # ✨ 암호화폐 가격 데이터 로드 (Upbit API)
-        # ------------------------
         st.info(f"📈 {company_name} 가격 데이터를 Upbit API로 로드 중입니다...")
-        
         df_asset = get_upbit_candles(stock_code, start_date, end_date)
             
         if df_asset.empty:
@@ -249,20 +266,13 @@ if st.button("🚀 크롤링 및 분석 시작"):
             df_asset['Date'] = pd.to_datetime(df_asset['Date'])
             st.success("✅ 암호화폐 가격 데이터 로드 완료 (Upbit API)!")
 
-            # ------------------------
-            # ✨ 모멘텀 및 데이터 병합
-            # ------------------------
             df_asset['Momentum'] = df_asset['Close'].diff()
             df_asset['Date'] = pd.to_datetime(df_asset['Date'])
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             
             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
-            
             df_merge = pd.merge(df_asset, filtered_news_grouped, on='Date', how='left').fillna(0)
-
-            # ------------------------
-            # ✨ 회귀 예측
-            # ------------------------
+            
             X = df_merge[['Sentiment_Score', 'Momentum']].fillna(0).values
             y = df_merge['Close'].values
 
