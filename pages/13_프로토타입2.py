@@ -9,6 +9,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.linear_model import LinearRegression
 import urllib.parse
+from json.decoder import JSONDecodeError
 
 # ------------------------
 # ✨ 페이지 설정
@@ -89,16 +90,15 @@ def analyze_sentiment(text):
 # ✨ 암호화폐 종목 선택 UI
 # ------------------------
 crypto_list = {
-    '비트코인': 'BTC/KRW',
-    '이더리움': 'ETH/KRW',
-    '리플': 'XRP/KRW',
-    '월드코인': 'WLD/KRW',
-    '솔라나': 'SOL/KRW'
+    '비트코인': 'KRW-BTC',
+    '이더리움': 'KRW-ETH',
+    '리플': 'KRW-XRP',
+    '월드코인': 'KRW-WLD',
+    '솔라나': 'KRW-SOL'
 }
 company_names = list(crypto_list.keys())
 default_crypto = "비트코인"
 
-# 오류 해결: session_state에 저장된 값이 현재 목록에 없으면 기본값으로 재설정
 if "selected_company" not in st.session_state or st.session_state.selected_company not in company_names:
     st.session_state.selected_company = default_crypto
 
@@ -144,7 +144,6 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
             title = item.get('title', '')
             pub_date = item.get('pubDate', '')
             try:
-                # 날짜 형식을 파싱하여 datetime 객체로 변환
                 pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
             except Exception:
                 pub_date_dt = None
@@ -159,6 +158,58 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ------------------------
+# ✨ Upbit API 함수
+# ------------------------
+def get_upbit_candles(market, start_date, end_date):
+    """
+    Upbit API를 통해 일별 캔들 데이터를 가져와 DataFrame으로 반환합니다.
+    Upbit API는 날짜로 조회하는 기능이 없어, 원하는 기간을 얻기 위해 여러 번 호출해야 할 수 있습니다.
+    """
+    base_url = "https://api.upbit.com/v1/candles/days"
+    df_list = []
+    current_date = end_date
+    
+    # API 요청 횟수를 제한하여 무한 루프를 방지
+    max_requests = 10 
+    requests_count = 0
+    
+    while current_date >= start_date and requests_count < max_requests:
+        params = {
+            'market': market,
+            'to': (current_date + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'),
+            'count': 200 # 최대 200개까지 한번에 가져오기
+        }
+        
+        response = requests.get(base_url, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if not data:
+                break
+                
+            temp_df = pd.DataFrame(data)
+            temp_df['Date'] = pd.to_datetime(temp_df['candle_date_time_kst']).dt.date
+            temp_df = temp_df.rename(columns={'trade_price': 'Close'})
+            df_list.append(temp_df)
+            
+            # 다음 요청을 위해 가장 오래된 날짜를 기준으로 설정
+            current_date = temp_df['Date'].min() - timedelta(days=1)
+            requests_count += 1
+            
+        else:
+            st.error(f"Upbit API 요청 실패: 상태 코드 {response.status_code}")
+            return pd.DataFrame()
+
+    if not df_list:
+        return pd.DataFrame()
+
+    df_final = pd.concat(df_list, ignore_index=True)
+    df_final = df_final.sort_values('Date').drop_duplicates(subset='Date', keep='first')
+    df_final = df_final[(df_final['Date'] >= start_date) & (df_final['Date'] <= end_date)].reset_index(drop=True)
+    
+    return df_final[['Date', 'Close']]
+
+# ------------------------
 # ✨ 실행 버튼
 # ------------------------
 max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=30, step=10)
@@ -166,7 +217,6 @@ max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=
 if st.button("🚀 크롤링 및 분석 시작"):
     with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
         all_news = pd.DataFrame()
-        # 여러 페이지의 뉴스를 반복적으로 가져옴
         for start_idx in range(1, max_news + 1, 100):
             count = min(100, max_news - start_idx + 1)
             df_part = get_naver_news_api(company_name, display=count, start=start_idx)
@@ -175,56 +225,44 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 break
         
         all_news = all_news.dropna(subset=['Date'])
-        # 날짜 필터링
         filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
 
     if filtered_news.empty:
         st.error("❌ 뉴스 데이터를 가져오지 못했습니다. 검색 기간이나 암호화폐명을 확인해주세요.")
     else:
-        # 감성 분석 점수 계산
         filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
 
         st.success("✅ 뉴스 감성 분석 완료!")
         st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values(by='Date', ascending=False))
 
         # ------------------------
-        # ✨ 암호화폐 가격 데이터 로드
+        # ✨ 암호화폐 가격 데이터 로드 (Upbit API)
         # ------------------------
-        st.info(f"📈 {company_name} 가격 데이터를 로드 중입니다...")
+        st.info(f"📈 {company_name} 가격 데이터를 Upbit API로 로드 중입니다...")
         
-        try:
-            # FinanceDataReader를 사용하여 암호화폐 가격 데이터 로드
-            df_asset = fdr.DataReader(stock_code, start_date, end_date)
-        except Exception as e:
-            st.error(f"❌ 암호화폐 가격 데이터를 가져오지 못했습니다: {e}")
-            st.info("종목 코드나 날짜 범위를 확인해주세요.")
-            st.stop()
+        df_asset = get_upbit_candles(stock_code, start_date, end_date)
             
         if df_asset.empty:
             st.error("❌ 암호화폐 가격 데이터를 가져오지 못했습니다. 종목 코드나 날짜 범위를 확인해주세요.")
             st.stop()
         else:
-            df_asset = df_asset.reset_index()[['Date', 'Close']]
             df_asset['Date'] = pd.to_datetime(df_asset['Date'])
-            st.success("✅ 암호화폐 가격 데이터 로드 완료!")
+            st.success("✅ 암호화폐 가격 데이터 로드 완료 (Upbit API)!")
 
             # ------------------------
-            # ✨ 모멘텀
+            # ✨ 모멘텀 및 데이터 병합
             # ------------------------
             df_asset['Momentum'] = df_asset['Close'].diff()
-
             df_asset['Date'] = pd.to_datetime(df_asset['Date'])
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
             
             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
             
-            # 가격 데이터와 감성 데이터를 날짜 기준으로 병합
             df_merge = pd.merge(df_asset, filtered_news_grouped, on='Date', how='left').fillna(0)
 
             # ------------------------
             # ✨ 회귀 예측
             # ------------------------
-            # 감성 점수와 모멘텀을 사용하여 회귀 분석 실행
             X = df_merge[['Sentiment_Score', 'Momentum']].fillna(0).values
             y = df_merge['Close'].values
 
