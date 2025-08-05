@@ -39,7 +39,6 @@ plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반�
 # ✨ FRED API 설정
 # ------------------------
 try:
-    # 이 부분이 이전 오류의 원인이었습니다. 올바르게 수정되었습니다.
     FRED_API_KEY = st.secrets["FRED_API_KEY"]
     fred = Fred(api_key=FRED_API_KEY)
 except KeyError:
@@ -267,7 +266,7 @@ def calculate_technical_indicators(df):
 @st.cache_data(ttl=3600)
 def load_fred_indicators(start_date, end_date):
     """
-    FRED API에서 CPI, 한국 10년물 국채 금리, 미국 10년물 국채 금리 데이터를 가져옵니다.
+    FRED API에서 CPI와 미국 10년물 국채 금리 데이터를 가져옵니다.
     """
     econ_data = {}
     econ_errors = []
@@ -283,15 +282,7 @@ def load_fred_indicators(start_date, end_date):
     except Exception as e:
         econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
 
-    # 2. 한국 10년물 국채 금리 (IRLTLT01KRM156N) - 월별
-    try:
-        korea_10y = fetch_fred_series_with_retry('IRLTLT01KRM156N', start_date, end_date)
-        econ_data['KR_10Y_Yield'] = korea_10y.rename("KR_10Y_Yield")
-        st.info(f"✅ 한국 10년물 국채 금리 로드: {korea_10y.index.min().date()} ~ {korea_10y.index.max().date()}")
-    except Exception as e:
-        econ_errors.append(f"❌ 한국 10년물 국채 금리 로드 중 오류 발생: {e}")
-
-    # 3. 미국 10년물 국채 금리 (GS10) - 일별
+    # 2. 미국 10년물 국채 금리 (GS10) - 일별
     try:
         us_10y = fetch_fred_series_with_retry('GS10', start_date, end_date)
         econ_data['US_10Y_Yield'] = us_10y.rename("US_10Y_Yield")
@@ -311,8 +302,7 @@ def load_fred_indicators(start_date, end_date):
             econ_df = pd.concat([econ_df, series], axis=1)
 
     econ_df.index = pd.to_datetime(econ_df.index)
-    # 월별 데이터를 일별 데이터로 채우기 (CPI, 한국 10년물)
-    # 이 부분에서 데이터가 부족할 경우 NaN이 발생하고, 이후 dropna에서 제거됩니다.
+    # 월별 데이터를 일별 데이터로 채우기 (CPI)
     econ_df = econ_df.resample('D').ffill()
     econ_df = econ_df.dropna(how='all') # 모든 컬럼이 NaN인 행 제거
 
@@ -334,7 +324,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
         if df.empty:
             st.error("데이터 로드에 실패하여 예측을 진행할 수 없습니다.")
             st.stop()
-        
+
         # 기술적 지표 계산
         df_with_indicators = calculate_technical_indicators(df.copy())
         
@@ -489,55 +479,70 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     """)
 
     # ------------------------
-    # ✨ 3. 거시 경제 지표 시각화 (FRED 데이터)
+    # ✨ 3. 거시 경제 지표 시각화 (FRED 데이터) - 분리된 차트
     # ------------------------
     st.subheader("🌍 거시 경제 지표와 암호화폐 가격 비교")
     
-    # FRED 데이터 로드
-    with st.spinner("📊 거시 경제 지표 데이터를 불러오는 중..."):
-        # 기본 시작 날짜를 10년 전으로 설정
-        default_fred_start_date = datetime.today() - timedelta(days=365 * 10) 
-        df_fred = load_fred_indicators(default_fred_start_date, end_date)
+    # FRED 데이터 로드 (기본 시작 날짜를 10년 전으로 설정)
+    default_fred_start_date = datetime.today() - timedelta(days=365 * 10) 
+    df_fred = load_fred_indicators(default_fred_start_date, end_date)
 
     if not df_fred.empty:
-        # 암호화폐 가격 데이터와 FRED 데이터를 날짜 기준으로 병합
-        # FRED 데이터는 이미 일별로 ffill 되어 있으므로, 인덱스 기준으로 병합
-        df_combined = pd.merge(df_results[['실제 가격']], df_fred, left_index=True, right_index=True, how='inner')
-        df_combined = df_combined.dropna() # 병합 후 NaN 값 제거
+        # --- 3-1. 암호화폐 가격 vs. 소비자물가지수 (CPI) ---
+        st.markdown("#### 📈 암호화폐 가격 vs. 소비자물가지수 (CPI)")
+        df_cpi_combined = pd.merge(df_results[['실제 가격']], df_fred[['CPI']], 
+                                   left_index=True, right_index=True, how='inner')
+        df_cpi_combined = df_cpi_combined.dropna()
 
-        if df_combined.empty:
-            st.warning("선택된 기간에 암호화폐 가격과 거시 경제 지표를 모두 포함하는 데이터가 충분하지 않습니다. 날짜 범위를 조정해 보세요.")
+        if df_cpi_combined.empty:
+            st.warning("선택된 기간에 암호화폐 가격과 CPI 데이터를 모두 포함하는 데이터가 충분하지 않습니다. 날짜 범위를 조정해 보세요.")
         else:
-            st.success(f"✅ 암호화폐 가격과 거시 경제 지표 결합 데이터 로드 완료! ({df_combined.index.min().date()} ~ {df_combined.index.max().date()})")
-            # 4개의 서브플롯: 암호화폐 가격, CPI, 한국 10년물 국채 금리, 미국 10년물 국채 금리
-            fig_macro = make_subplots(rows=4, cols=1, shared_xaxes=True,
-                                      vertical_spacing=0.08,
-                                      row_width=[0.25, 0.25, 0.25, 0.25])
+            st.success(f"✅ 암호화폐 가격-CPI 결합 데이터 로드 완료! ({df_cpi_combined.index.min().date()} ~ {df_cpi_combined.index.max().date()})")
+            fig_cpi = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                    vertical_spacing=0.1,
+                                    row_width=[0.5, 0.5])
 
-            # 1행: 암호화폐 실제 가격
-            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['실제 가격'],
-                                           mode='lines', name=f'{company_name} 실제 가격', line=dict(color='blue')), row=1, col=1)
-            fig_macro.update_yaxes(title_text=f"{company_name} 가격", row=1, col=1)
+            fig_cpi.add_trace(go.Scatter(x=df_cpi_combined.index, y=df_cpi_combined['실제 가격'],
+                                         mode='lines', name=f'{company_name} 실제 가격', line=dict(color='blue')), row=1, col=1)
+            fig_cpi.update_yaxes(title_text=f"{company_name} 가격", row=1, col=1)
 
-            # 2행: CPI
-            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['CPI'],
-                                           mode='lines', name='소비자물가지수 (CPI)', line=dict(color='orange')), row=2, col=1)
-            fig_macro.update_yaxes(title_text="CPI", row=2, col=1)
+            fig_cpi.add_trace(go.Scatter(x=df_cpi_combined.index, y=df_cpi_combined['CPI'],
+                                         mode='lines', name='소비자물가지수 (CPI)', line=dict(color='orange')), row=2, col=1)
+            fig_cpi.update_yaxes(title_text="CPI", row=2, col=1)
 
-            # 3행: 한국 10년물 국채 금리
-            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['KR_10Y_Yield'],
-                                           mode='lines', name='한국 10년물 국채 금리', line=dict(color='purple')), row=3, col=1)
-            fig_macro.update_yaxes(title_text="한국 10년물 금리 (%)", row=3, col=1)
+            fig_cpi.update_layout(height=600, title_text=f"{company_name} 가격과 CPI 비교",
+                                  xaxis_rangeslider_visible=False)
+            fig_cpi.update_xaxes(showgrid=True, tickangle=45)
+            st.plotly_chart(fig_cpi, use_container_width=True)
+        
+        st.markdown("---") # 구분선 추가
 
-            # 4행: 미국 10년물 국채 금리
-            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['US_10Y_Yield'],
-                                           mode='lines', name='미국 10년물 국채 금리', line=dict(color='green')), row=4, col=1)
-            fig_macro.update_yaxes(title_text="미국 10년물 금리 (%)", row=4, col=1)
+        # --- 3-2. 암호화폐 가격 vs. 미국 10년물 국채 금리 ---
+        st.markdown("#### 📈 암호화폐 가격 vs. 미국 10년물 국채 금리")
+        df_us10y_combined = pd.merge(df_results[['실제 가격']], df_fred[['US_10Y_Yield']], 
+                                     left_index=True, right_index=True, how='inner')
+        df_us10y_combined = df_us10y_combined.dropna()
 
-            fig_macro.update_layout(height=900, title_text=f"{company_name} 가격과 거시 경제 지표 비교",
+        if df_us10y_combined.empty:
+            st.warning("선택된 기간에 암호화폐 가격과 미국 10년물 국채 금리 데이터를 모두 포함하는 데이터가 충분하지 않습니다. 날짜 범위를 조정해 보세요.")
+        else:
+            st.success(f"✅ 암호화폐 가격-미국 10년물 국채 금리 결합 데이터 로드 완료! ({df_us10y_combined.index.min().date()} ~ {df_us10y_combined.index.max().date()})")
+            fig_us10y = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                      vertical_spacing=0.1,
+                                      row_width=[0.5, 0.5])
+
+            fig_us10y.add_trace(go.Scatter(x=df_us10y_combined.index, y=df_us10y_combined['실제 가격'],
+                                          mode='lines', name=f'{company_name} 실제 가격', line=dict(color='blue')), row=1, col=1)
+            fig_us10y.update_yaxes(title_text=f"{company_name} 가격", row=1, col=1)
+
+            fig_us10y.add_trace(go.Scatter(x=df_us10y_combined.index, y=df_us10y_combined['US_10Y_Yield'],
+                                          mode='lines', name='미국 10년물 국채 금리', line=dict(color='green')), row=2, col=1)
+            fig_us10y.update_yaxes(title_text="미국 10년물 금리 (%)", row=2, col=1)
+
+            fig_us10y.update_layout(height=600, title_text=f"{company_name} 가격과 미국 10년물 국채 금리 비교",
                                     xaxis_rangeslider_visible=False)
-            fig_macro.update_xaxes(showgrid=True, tickangle=45)
-            st.plotly_chart(fig_macro, use_container_width=True)
+            fig_us10y.update_xaxes(showgrid=True, tickangle=45)
+            st.plotly_chart(fig_us10y, use_container_width=True)
 
     else:
         st.warning("거시 경제 지표를 로드할 수 없어 시각화를 건너킵니다. FRED API 키를 확인하거나 날짜 범위를 조정해 보세요.")
@@ -550,6 +555,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 # import streamlit as st
 # import pandas as pd
