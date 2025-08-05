@@ -4,7 +4,7 @@ import requests
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
+# import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -22,31 +22,15 @@ Upbit API를 통해 암호화폐 가격 데이터를 가져와 LSTM 딥러닝 �
 """)
 
 # ------------------------
-# ✨ 한글 폰트 설정
+# ✨ 한글 폰트 설정 (제거됨)
 # ------------------------
-def get_korean_font():
-    """matplotlib에서 한글 폰트 설정을 시도합니다."""
-    font_path = ""
-    for font in fm.findSystemFonts(fontpaths=None, fontext='ttf'):
-        if 'NanumGothic' in font:
-            font_path = font
-            break
-        elif 'Malgun Gothic' in font:
-            font_path = font
-            break
-        elif 'AppleGothic' in font:
-            font_path = font
-            break
-    
-    if font_path:
-        fm.fontManager.addfont(font_path)
-        plt.rc('font', family=fm.FontProperties(fname=font_path).get_name())
-        plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지
-        st.info(f"✅ 한글 폰트 '{fm.FontProperties(fname=font_path).get_name()}'가 성공적으로 설정되었습니다.")
-    else:
-        st.warning("⚠️ 시스템에 한글 폰트(나눔고딕, 맑은고딕 등)가 설치되어 있지 않습니다. 차트의 한글이 깨질 수 있습니다.")
+# 기존 한글 폰트 설정 함수 및 호출 코드 제거됨.
+# Streamlit Cloud 환경에서 기본 폰트가 한글을 지원하지 않을 경우,
+# 차트의 한글 텍스트가 깨져 보일 수 있습니다.
+# 이 경우, Streamlit 앱 배포 환경에 한글 폰트를 설치하거나
+# Plotly 등 다른 시각화 라이브러리를 고려할 수 있습니다.
+plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반적인 설정이므로 유지)
 
-get_korean_font()
 
 # ------------------------
 # ✨ 암호화폐 종목 목록 로드 (Upbit API)
@@ -255,9 +239,6 @@ if st.button("🚀 LSTM 모델 학습 및 예측 실행"):
                             verbose=0) # Streamlit에서는 verbose를 0으로 설정하여 출력 줄임
         
         st.success("✅ LSTM 모델 학습 완료!")
-        # st.write(f"최종 학습 손실 (Loss): {history.history['loss'][-1]:.4f}")
-        # if 'val_loss' in history.history:
-        #     st.write(f"최종 검증 손실 (Validation Loss): {history.history['val_loss'][-1]:.4f}")
 
     with st.spinner("가격 예측 중..."):
         # 예측 수행
@@ -314,4 +295,3 @@ if st.button("🚀 LSTM 모델 학습 및 예측 실행"):
     - **학습/테스트 분할**: 전체 데이터 중 일부를 학습에 사용하고, 나머지는 모델이 얼마나 잘 예측하는지 평가하는 데 사용합니다.
     - **예측의 한계**: 암호화폐 시장은 변동성이 매우 크고 다양한 외부 요인에 의해 영향을 받으므로, 딥러닝 모델도 완벽하게 예측하기는 어렵습니다. 이 앱은 예측 모델의 개념을 보여주는 예시이며, 실제 투자에 활용하기에는 추가적인 연구와 검증이 필요합니다.
     """)
-
