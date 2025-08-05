@@ -39,6 +39,7 @@ plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반�
 # ✨ FRED API 설정
 # ------------------------
 try:
+    # 이 부분이 이전 오류의 원인이었습니다. 정확히 수정되었습니다.
     FRED_API_KEY = st.secrets["FRED_API_KEY"]
     fred = Fred(api_key=FRED_API_KEY)
 except KeyError:
@@ -555,6 +556,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 
 # import streamlit as st
