@@ -4,7 +4,7 @@ import requests
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
-# import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거
+# import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거 (요청에 따라)
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -14,6 +14,8 @@ import time
 from fredapi import Fred # FRED API를 위한 라이브러리
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import urllib.error # HTTPError를 위해 임포트
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots # make_subplots 임포트 추가
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="암호화폐 예측 및 지표 분석", layout="wide")
@@ -544,6 +546,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 
 # import streamlit as st
