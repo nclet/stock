@@ -4,46 +4,6 @@ import requests
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
-from json.decoder import JSONDecodeError
-import time
-from fredapi import Fred # FRED API를 위한 라이브러리
-from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
-import urllib.error # HTTPError를 위해 임포트
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots # make_subplots 임포트 추가
-
-# --- 페이지 설정 ---
-st.set_page_config(page_title="암호화폐 예측 및 지표 분석", layout="wide")
-st.title("📈 암호화폐 LSTM 예측 및 다양한 지표 분석")
-
-st.markdown("""
-Upbit API를 통해 암호화폐 가격 데이터를 가져와 LSTM 딥러닝 모델로 미래 가격을 예측하고,
-다양한 기술적 지표, 온체인 데이터(설명), 거시 경제 지표를 함께 시각화하여 분석합니다.
-""")
-
-# ------------------------
-# ✨ 한글 폰트 설정 (제거됨)
-# ------------------------
-# Streamlit Cloud 환경에서 기본 폰트가 한글을 지원하지 않을 경우,
-# 차트의 한글 텍스트가 깨져 보일 수 있습니다.
-# 이 경우, Streamlit 앱 배포 환경에 한글 폰트를 설치하거나
-# Plotly 등 다른 시각화 라이브러리를 고려할 수 있습니다.
-plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반적인 설정이므로 유지)
-
-# ------------------------
-# ✨ FRED API 설정
-# ------------------------
-try:
-    FRED_API_KEY = st.secrets["FRED_API_KEimport streamlit as st
-import pandas as pd
-import requests
-from datetime import datetime, timedelta
-import numpy as np
-import matplotlib.pyplot as plt
 # import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거 (요청에 따라)
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -591,8 +551,6 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
-
-
 
 
 # import streamlit as st
