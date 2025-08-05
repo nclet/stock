@@ -266,7 +266,7 @@ def calculate_technical_indicators(df):
 @st.cache_data(ttl=3600)
 def load_fred_indicators(start_date, end_date):
     """
-    FRED API에서 CPI, 달러 인덱스, 미국 10년 국채 금리 데이터를 가져옵니다.
+    FRED API에서 CPI, 한국 10년물 국채 금리, 미국 10년물 국채 금리 데이터를 가져옵니다.
     """
     econ_data = {}
     econ_errors = []
@@ -277,32 +277,23 @@ def load_fred_indicators(start_date, end_date):
     # 1. 소비자물가지수 (CPIAUCSL) - 월별
     try:
         cpi = fetch_fred_series_with_retry('CPIAUCSL', start_date, end_date)
-        if cpi is None or cpi.empty: # fetch_fred_series_with_retry가 ValueError를 발생시키므로 이 체크는 불필요하지만 안전을 위해 유지
-            econ_errors.append("❌ 소비자물가지수(CPI) 데이터 로드 실패: 'CPIAUCSL'.")
-        else:
-            econ_data['CPI'] = cpi.rename("CPI")
-    except Exception as e: # fetch_fred_series_with_retry에서 발생한 ValueError를 여기서 잡음
+        econ_data['CPI'] = cpi.rename("CPI")
+    except Exception as e:
         econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
 
-    # 2. 광범위 무역 가중 달러 인덱스 (DTWEXB) - 일별
+    # 2. 한국 10년물 국채 금리 (IRLTLT01KRM156N) - 월별
     try:
-        dollar_index = fetch_fred_series_with_retry('DTWEXB', start_date, end_date)
-        if dollar_index is None or dollar_index.empty:
-            econ_errors.append("❌ 달러 인덱스 데이터 로드 실패: 'DTWEXB'.")
-        else:
-            econ_data['Dollar_Index'] = dollar_index.rename("Dollar_Index")
+        korea_10y = fetch_fred_series_with_retry('IRLTLT01KRM156N', start_date, end_date)
+        econ_data['KR_10Y_Yield'] = korea_10y.rename("KR_10Y_Yield")
     except Exception as e:
-        econ_errors.append(f"❌ 달러 인덱스 로드 중 오류 발생: {e}")
+        econ_errors.append(f"❌ 한국 10년물 국채 금리 로드 중 오류 발생: {e}")
 
     # 3. 미국 10년물 국채 금리 (GS10) - 일별
     try:
         us_10y = fetch_fred_series_with_retry('GS10', start_date, end_date)
-        if us_10y is None or us_10y.empty:
-            econ_errors.append("❌ 미국 10년물 금리 데이터 로드 실패: 'GS10'.")
-        else:
-            econ_data['US_10Y_Yield'] = us_10y.rename("US_10Y_Yield")
+        econ_data['US_10Y_Yield'] = us_10y.rename("US_10Y_Yield")
     except Exception as e:
-        econ_errors.append(f"❌ 미국 10년물 금리 로드 중 오류 발생: {e}")
+        econ_errors.append(f"❌ 미국 10년물 국채 금리 로드 중 오류 발생: {e}")
 
     if econ_errors:
         for err in econ_errors:
@@ -316,7 +307,7 @@ def load_fred_indicators(start_date, end_date):
             econ_df = pd.concat([econ_df, series], axis=1)
 
     econ_df.index = pd.to_datetime(econ_df.index)
-    # 월별 데이터를 일별 데이터로 채우기 (CPI)
+    # 월별 데이터를 일별 데이터로 채우기 (CPI, 한국 10년물)
     econ_df = econ_df.resample('D').ffill()
     econ_df = econ_df.dropna(how='all') # 모든 컬럼이 NaN인 행 제거
 
@@ -510,7 +501,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
         if df_combined.empty:
             st.warning("선택된 기간에 암호화폐 가격과 거시 경제 지표를 모두 포함하는 데이터가 충분하지 않습니다. 날짜 범위를 조정해 보세요.")
         else:
-            # 4개의 서브플롯: 암호화폐 가격, CPI, 달러 인덱스, 미국 10년물 금리
+            # 4개의 서브플롯: 암호화폐 가격, CPI, 한국 10년물 국채 금리, 미국 10년물 국채 금리
             fig_macro = make_subplots(rows=4, cols=1, shared_xaxes=True,
                                       vertical_spacing=0.08,
                                       row_width=[0.25, 0.25, 0.25, 0.25])
@@ -525,10 +516,10 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
                                            mode='lines', name='소비자물가지수 (CPI)', line=dict(color='orange')), row=2, col=1)
             fig_macro.update_yaxes(title_text="CPI", row=2, col=1)
 
-            # 3행: 달러 인덱스
-            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['Dollar_Index'],
-                                           mode='lines', name='달러 인덱스', line=dict(color='purple')), row=3, col=1)
-            fig_macro.update_yaxes(title_text="달러 인덱스", row=3, col=1)
+            # 3행: 한국 10년물 국채 금리
+            fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['KR_10Y_Yield'],
+                                           mode='lines', name='한국 10년물 국채 금리', line=dict(color='purple')), row=3, col=1)
+            fig_macro.update_yaxes(title_text="한국 10년물 금리 (%)", row=3, col=1)
 
             # 4행: 미국 10년물 국채 금리
             fig_macro.add_trace(go.Scatter(x=df_combined.index, y=df_combined['US_10Y_Yield'],
@@ -541,7 +532,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
             st.plotly_chart(fig_macro, use_container_width=True)
 
     else:
-        st.warning("거시 경제 지표를 로드할 수 없어 시각화를 건너뜁니다. FRED API 키를 확인하거나 날짜 범위를 조정해 보세요.")
+        st.warning("거시 경제 지표를 로드할 수 없어 시각화를 건너킵니다. FRED API 키를 확인하거나 날짜 범위를 조정해 보세요.")
 
     st.markdown("---")
     st.write("### 📝 추가 참고 사항")
@@ -551,6 +542,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 
 # import streamlit as st
