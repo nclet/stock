@@ -4,6 +4,46 @@ import requests
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+from json.decoder import JSONDecodeError
+import time
+from fredapi import Fred # FRED API를 위한 라이브러리
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import urllib.error # HTTPError를 위해 임포트
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots # make_subplots 임포트 추가
+
+# --- 페이지 설정 ---
+st.set_page_config(page_title="암호화폐 예측 및 지표 분석", layout="wide")
+st.title("📈 암호화폐 LSTM 예측 및 다양한 지표 분석")
+
+st.markdown("""
+Upbit API를 통해 암호화폐 가격 데이터를 가져와 LSTM 딥러닝 모델로 미래 가격을 예측하고,
+다양한 기술적 지표, 온체인 데이터(설명), 거시 경제 지표를 함께 시각화하여 분석합니다.
+""")
+
+# ------------------------
+# ✨ 한글 폰트 설정 (제거됨)
+# ------------------------
+# Streamlit Cloud 환경에서 기본 폰트가 한글을 지원하지 않을 경우,
+# 차트의 한글 텍스트가 깨져 보일 수 있습니다.
+# 이 경우, Streamlit 앱 배포 환경에 한글 폰트를 설치하거나
+# Plotly 등 다른 시각화 라이브러리를 고려할 수 있습니다.
+plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반적인 설정이므로 유지)
+
+# ------------------------
+# ✨ FRED API 설정
+# ------------------------
+try:
+    FRED_API_KEY = st.secrets["FRED_API_KEimport streamlit as st
+import pandas as pd
+import requests
+from datetime import datetime, timedelta
+import numpy as np
+import matplotlib.pyplot as plt
 # import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거 (요청에 따라)
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -49,16 +89,21 @@ except KeyError:
 @retry(
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(3),
-    retry=retry_if_exception_type((urllib.error.HTTPError, ConnectionResetError)),
+    retry=retry_if_exception_type((urllib.error.HTTPError, ConnectionResetError, ValueError)), # ValueError 추가
     reraise=True
 )
 def fetch_fred_series_with_retry(series_id, start_date, end_date):
     """
     FRED API에서 데이터를 가져오는 함수에 재시도 로직을 추가합니다.
+    데이터가 없거나 비어있으면 ValueError를 발생시켜 재시도를 유도합니다.
     """
     if fred:
-        return fred.get_series(series_id, start_date, end_date)
-    return None
+        series = fred.get_series(series_id, start_date, end_date)
+        if series is None or series.empty:
+            # 명시적으로 ValueError를 발생시켜 tenacity 재시도 유도
+            raise ValueError(f"FRED series '{series_id}' returned no data for the period {start_date} to {end_date}.")
+        return series
+    return None # FRED 객체가 없을 경우
 
 # ------------------------
 # ✨ 암호화폐 종목 목록 로드 (Upbit API)
@@ -272,11 +317,11 @@ def load_fred_indicators(start_date, end_date):
     # 1. 소비자물가지수 (CPIAUCSL) - 월별
     try:
         cpi = fetch_fred_series_with_retry('CPIAUCSL', start_date, end_date)
-        if cpi is None or cpi.empty:
+        if cpi is None or cpi.empty: # fetch_fred_series_with_retry가 ValueError를 발생시키므로 이 체크는 불필요하지만 안전을 위해 유지
             econ_errors.append("❌ 소비자물가지수(CPI) 데이터 로드 실패: 'CPIAUCSL'.")
         else:
             econ_data['CPI'] = cpi.rename("CPI")
-    except Exception as e:
+    except Exception as e: # fetch_fred_series_with_retry에서 발생한 ValueError를 여기서 잡음
         econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
 
     # 2. 광범위 무역 가중 달러 인덱스 (DTWEXB) - 일별
@@ -418,7 +463,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     # 5개의 서브플롯: 가격(LSTM), 모멘텀, RSI, MACD, OBV
     fig_tech = make_subplots(rows=5, cols=1, shared_xaxes=True, 
                              vertical_spacing=0.05,
-                             row_width=[0.15, 0.15, 0.15, 0.15, 0.4]) # 비율 조정
+                             row_width=[0.4, 0.15, 0.15, 0.15, 0.15]) # 비율 조정
 
     # 1행: 실제 가격 및 LSTM 예측
     fig_tech.add_trace(go.Scatter(x=df_results.index, y=df_results['실제 가격'], 
@@ -546,6 +591,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 
 
