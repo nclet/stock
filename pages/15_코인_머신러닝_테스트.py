@@ -278,6 +278,7 @@ def load_fred_indicators(start_date, end_date):
     try:
         cpi = fetch_fred_series_with_retry('CPIAUCSL', start_date, end_date)
         econ_data['CPI'] = cpi.rename("CPI")
+        st.info(f"✅ CPI 데이터 로드: {cpi.index.min().date()} ~ {cpi.index.max().date()}")
     except Exception as e:
         econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
 
@@ -285,6 +286,7 @@ def load_fred_indicators(start_date, end_date):
     try:
         korea_10y = fetch_fred_series_with_retry('IRLTLT01KRM156N', start_date, end_date)
         econ_data['KR_10Y_Yield'] = korea_10y.rename("KR_10Y_Yield")
+        st.info(f"✅ 한국 10년물 국채 금리 로드: {korea_10y.index.min().date()} ~ {korea_10y.index.max().date()}")
     except Exception as e:
         econ_errors.append(f"❌ 한국 10년물 국채 금리 로드 중 오류 발생: {e}")
 
@@ -292,6 +294,7 @@ def load_fred_indicators(start_date, end_date):
     try:
         us_10y = fetch_fred_series_with_retry('GS10', start_date, end_date)
         econ_data['US_10Y_Yield'] = us_10y.rename("US_10Y_Yield")
+        st.info(f"✅ 미국 10년물 국채 금리 로드: {us_10y.index.min().date()} ~ {us_10y.index.max().date()}")
     except Exception as e:
         econ_errors.append(f"❌ 미국 10년물 국채 금리 로드 중 오류 발생: {e}")
 
@@ -490,7 +493,9 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     
     # FRED 데이터 로드
     with st.spinner("📊 거시 경제 지표 데이터를 불러오는 중..."):
-        df_fred = load_fred_indicators(start_date, end_date)
+        # 기본 시작 날짜를 10년 전으로 설정
+        default_fred_start_date = datetime.today() - timedelta(days=365 * 10) 
+        df_fred = load_fred_indicators(default_fred_start_date, end_date)
 
     if not df_fred.empty:
         # 암호화폐 가격 데이터와 FRED 데이터를 날짜 기준으로 병합
@@ -501,6 +506,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
         if df_combined.empty:
             st.warning("선택된 기간에 암호화폐 가격과 거시 경제 지표를 모두 포함하는 데이터가 충분하지 않습니다. 날짜 범위를 조정해 보세요.")
         else:
+            st.success(f"✅ 암호화폐 가격과 거시 경제 지표 결합 데이터 로드 완료! ({df_combined.index.min().date()} ~ {df_combined.index.max().date()})")
             # 4개의 서브플롯: 암호화폐 가격, CPI, 한국 10년물 국채 금리, 미국 10년물 국채 금리
             fig_macro = make_subplots(rows=4, cols=1, shared_xaxes=True,
                                       vertical_spacing=0.08,
@@ -542,6 +548,7 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
     - **모델 복잡도**: 더 많은 피처를 사용할수록 모델의 복잡도가 증가하며, 과적합(Overfitting) 위험이 커질 수 있습니다. 적절한 정규화(Regularization) 기법(예: Dropout)과 검증을 통해 이를 관리해야 합니다.
     - **해석의 어려움**: 다양한 팩터를 포함할수록 모델의 '블랙박스' 특성이 강해져 예측 결과의 원인을 해석하기 어려워질 수 있습니다.
     """)
+
 
 
 
