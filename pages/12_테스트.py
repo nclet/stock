@@ -12,12 +12,12 @@ from plotly.subplots import make_subplots # make_subplots 임포트 추가
 import time # 시간 지연을 위해 추가
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="암호화폐 vs. CPI 영향 분석", layout="wide")
-st.title("📈 암호화폐 가격과 미국 CPI 발표 영향 분석")
+st.set_page_config(page_title="암호화폐 vs. 거시 지표 분석", layout="wide")
+st.title("� 암호화폐 가격과 미국 거시 경제 지표 영향 분석")
 
 st.markdown("""
-Upbit API를 통해 암호화폐 가격 데이터를 가져오고, FRED API를 통해 미국 소비자물가지수(CPI) 데이터를 가져와
-지난 7년간 CPI 발표 시점의 암호화폐 가격 움직임을 시각화하여 분석합니다.
+Upbit API를 통해 암호화폐 가격 데이터를 가져오고, FRED API를 통해 미국 소비자물가지수(CPI) 및
+미국 국채 장단기 금리 스프레드 데이터를 가져와 특정 시점의 암호화폐 가격 움직임을 분석하고 시각화합니다.
 """)
 
 # ------------------------
@@ -143,7 +143,7 @@ def load_crypto_data(symbol, start_date, end_date):
     # 요청 횟수를 제한하여 무한 루프 방지 및 API 호출 제한 준수
     max_requests = (end_date - start_date).days // 200 + 2 # 대략적인 필요한 요청 횟수 + 여유분
     
-    st.info(f"� 업비트에서 **{symbol}** 데이터를 수집하고 있습니다...")
+    st.info(f"🔄 업비트에서 **{symbol}** 데이터를 수집하고 있습니다...")
     progress_bar = st.progress(0)
     
     for i in range(max_requests):
@@ -203,31 +203,75 @@ def load_crypto_data(symbol, start_date, end_date):
     return df_final
 
 # ------------------------
-# ✨ FRED CPI 데이터 로드 함수
+# ✨ FRED 거시 경제 데이터 로드 함수 (CPI 및 국채 금리)
 # ------------------------
 @st.cache_data(ttl=3600)
-def load_fred_cpi_data(start_date, end_date):
+def load_fred_macro_data(start_date, end_date):
     """
-    FRED API에서 소비자물가지수 (CPIAUCSL) 데이터를 가져옵니다.
+    FRED API에서 소비자물가지수 (CPIAUCSL), 미국 10년물 국채 금리 (GS10),
+    미국 2년물 국채 금리 (GS2) 데이터를 가져와 장단기 금리 스프레드를 계산합니다.
     """
+    econ_data = {}
+    econ_errors = []
+
     if not fred: # FRED API 키가 없으면 함수 종료
         return pd.DataFrame()
 
-    st.info("🔄 FRED CPI 데이터 수집 중...")
+    st.info("🔄 FRED 거시 경제 데이터 수집 중...")
 
-    # 소비자물가지수 (CPIAUCSL) - 월별
+    # 1. 소비자물가지수 (CPIAUCSL) - 월별
     try:
-        cpi_series = fetch_fred_series_with_retry('CPIAUCSL', start_date, end_date)
-        if cpi_series is not None and not cpi_series.empty:
-            cpi_series = cpi_series.rename("CPI")
-            st.success(f"✅ CPI 데이터 로드 완료! ({cpi_series.index.min().date()} ~ {cpi_series.index.max().date()})")
-            return cpi_series
-        else:
-            st.warning("선택된 기간에 CPI 데이터를 충분히 불러오지 못했습니다. 날짜 범위를 조정해 보세요.")
-            return pd.DataFrame()
+        cpi = fetch_fred_series_with_retry('CPIAUCSL', start_date, end_date)
+        econ_data['CPI'] = cpi.rename("CPI")
+        st.info(f"✅ CPI 데이터 로드: {cpi.index.min().date()} ~ {cpi.index.max().date()}")
     except Exception as e:
-        st.error(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
+        econ_errors.append(f"❌ 소비자물가지수(CPI) 로드 중 오류 발생: {e}")
+
+    # 2. 미국 10년물 국채 금리 (GS10) - 일별
+    try:
+        us_10y = fetch_fred_series_with_retry('GS10', start_date, end_date)
+        econ_data['US_10Y_Yield'] = us_10y.rename("US_10Y_Yield")
+        st.info(f"✅ 미국 10년물 국채 금리 로드: {us_10y.index.min().date()} ~ {us_10y.index.max().date()}")
+    except Exception as e:
+        econ_errors.append(f"❌ 미국 10년물 국채 금리 로드 중 오류 발생: {e}")
+
+    # 3. 미국 2년물 국채 금리 (GS2) - 일별
+    try:
+        us_2y = fetch_fred_series_with_retry('GS2', start_date, end_date)
+        econ_data['US_2Y_Yield'] = us_2y.rename("US_2Y_Yield")
+        st.info(f"✅ 미국 2년물 국채 금리 로드: {us_2y.index.min().date()} ~ {us_2y.index.max().date()}")
+    except Exception as e:
+        econ_errors.append(f"❌ 미국 2년물 국채 금리 로드 중 오류 발생: {e}")
+
+    if econ_errors:
+        for err in econ_errors:
+            st.error(err)
+        st.warning("일부 거시 경제 지표 데이터 로드에 실패했습니다. 해당 그래프가 올바르게 표시되지 않을 수 있습니다.")
         return pd.DataFrame()
+
+    econ_df = pd.DataFrame()
+    for key, series in econ_data.items():
+        if not series.empty:
+            econ_df = pd.concat([econ_df, series], axis=1)
+
+    econ_df.index = pd.to_datetime(econ_df.index)
+    # 월별 데이터를 일별 데이터로 채우기 (CPI)
+    econ_df = econ_df.resample('D').ffill()
+    econ_df = econ_df.dropna(how='all') # 모든 컬럼이 NaN인 행 제거
+
+    # 장단기 금리 스프레드 계산
+    if 'US_10Y_Yield' in econ_df.columns and 'US_2Y_Yield' in econ_df.columns:
+        econ_df['US_Yield_Spread'] = econ_df['US_10Y_Yield'] - econ_df['US_2Y_Yield']
+    else:
+        st.warning("미국 국채 장단기 금리 스프레드를 계산할 수 없습니다. 10년물 또는 2년물 금리 데이터가 부족합니다.")
+        econ_df['US_Yield_Spread'] = np.nan
+
+    if econ_df.empty:
+        st.warning("선택된 기간에 유효한 거시 경제 지표 데이터를 충분히 불러오지 못했습니다. 날짜 범위를 조정해 보세요.")
+        return pd.DataFrame()
+
+    st.success(f"✅ 거시 경제 지표 데이터 로드 완료! ({econ_df.index.min().date()} ~ {econ_df.index.max().date()})")
+    return econ_df
 
 
 # ------------------------
@@ -256,7 +300,7 @@ def analyze_cpi_impact(df_crypto, cpi_series, window_days=7):
             
             analysis_results.append({
                 'CPI 발표일': cpi_date.strftime('%Y-%m-%d'),
-                'CPI 값': cpi_series.loc[cpi_date],
+                'CPI 값': f"{cpi_series.loc[cpi_date]:.2f}",
                 f'{company_name} 가격 (발표일)': f"{crypto_price_on_cpi_date:,.2f}",
                 f'{company_name} 가격 ({window_days}일 후)': f"{crypto_price_future:,.2f}",
                 f'가격 변화율 ({window_days}일, %)': f"{price_change_percent:,.2f}%"
@@ -269,6 +313,61 @@ def analyze_cpi_impact(df_crypto, cpi_series, window_days=7):
     df_analysis = pd.DataFrame(analysis_results)
     
     st.success("✅ CPI 발표 시점 암호화폐 가격 변화 분석 완료!")
+    return df_analysis
+
+# ------------------------
+# ✨ 장단기 금리 스프레드 특정 시점 암호화폐 가격 영향 분석 함수
+# ------------------------
+def analyze_yield_spread_impact(df_crypto, df_fred_macro, window_days=7):
+    """
+    미국 국채 장단기 금리 스프레드 데이터 포인트를 기준으로 암호화폐 가격의 변화를 분석합니다.
+    """
+    st.info(f"🔄 장단기 금리 스프레드 시점 암호화폐 가격 변화 분석 중 (기준일 후 {window_days}일 기준)...")
+    
+    analysis_results = []
+    
+    # 장단기 금리 스프레드 데이터가 있는 날짜들을 기준으로 분석
+    # FRED 금리 데이터는 일별이므로, 매일의 스프레드 변화를 기준으로 할 수 있지만,
+    # CPI와 유사하게 월별 데이터 포인트(월말)를 기준으로 분석하는 것이 일반적입니다.
+    # 여기서는 df_fred_macro의 인덱스(일별)를 모두 사용하되,
+    # 실제 스프레드 값이 존재하는 날짜들만 필터링하여 사용합니다.
+    
+    # 장단기 금리 스프레드 데이터가 유효한 날짜만 추출
+    spread_dates = df_fred_macro['US_Yield_Spread'].dropna().index
+
+    # 분석할 날짜 간격을 조정 (예: 매월 1일 또는 특정 간격)
+    # 여기서는 모든 유효한 스프레드 날짜를 사용하되, 너무 많으면 샘플링을 고려할 수 있습니다.
+    # 일단 모든 유효한 날짜를 사용합니다.
+    
+    for current_date in spread_dates:
+        # 현재 날짜의 암호화폐 가격
+        crypto_price_on_date = df_crypto['close'].asof(current_date)
+        
+        # 현재 날짜의 장단기 금리 스프레드 값
+        yield_spread_value = df_fred_macro.loc[current_date, 'US_Yield_Spread']
+        
+        # 현재 날짜로부터 window_days 후의 암호화폐 가격
+        future_date = current_date + timedelta(days=window_days)
+        crypto_price_future = df_crypto['close'].asof(future_date)
+        
+        if pd.notna(crypto_price_on_date) and pd.notna(crypto_price_future) and pd.notna(yield_spread_value):
+            price_change_percent = ((crypto_price_future - crypto_price_on_date) / crypto_price_on_date) * 100
+            
+            analysis_results.append({
+                '기준일': current_date.strftime('%Y-%m-%d'),
+                '장단기 금리 스프레드': f"{yield_spread_value:.2f}",
+                f'{company_name} 가격 (기준일)': f"{crypto_price_on_date:,.2f}",
+                f'{company_name} 가격 ({window_days}일 후)': f"{crypto_price_future:,.2f}",
+                f'가격 변화율 ({window_days}일, %)': f"{price_change_percent:,.2f}%"
+            })
+            
+    if not analysis_results:
+        st.warning("⚠️ 장단기 금리 스프레드 데이터와 암호화폐 가격 데이터가 겹치는 유효한 분석 기간이 부족합니다. 날짜 범위를 조정해 보세요.")
+        return pd.DataFrame()
+
+    df_analysis = pd.DataFrame(analysis_results)
+    
+    st.success("✅ 장단기 금리 스프레드 시점 암호화폐 가격 변화 분석 완료!")
     return df_analysis
 
 
@@ -284,21 +383,22 @@ if st.button("🚀 데이터 로드 및 분석 실행"):
             st.error("암호화폐 데이터 로드에 실패하여 분석을 진행할 수 없습니다.")
             st.stop()
 
-        # FRED CPI 데이터 로드
-        cpi_series = load_fred_cpi_data(start_date, end_date)
+        # FRED 거시 경제 데이터 로드 (CPI, 10년물, 2년물)
+        df_fred_macro = load_fred_macro_data(start_date, end_date)
 
-        if cpi_series.empty:
-            st.error("FRED CPI 데이터를 로드할 수 없어 분석을 진행할 수 없습니다. FRED API 키를 확인하거나 날짜 범위를 조정해 보세요.")
+        if df_fred_macro.empty:
+            st.error("FRED 거시 경제 데이터를 로드할 수 없어 분석을 진행할 수 없습니다. FRED API 키를 확인하거나 날짜 범위를 조정해 보세요.")
             st.stop()
 
-    # CPI 영향 분석 실행
-    df_cpi_impact = analyze_cpi_impact(df_crypto, cpi_series, window_days=7)
+    # --- CPI 발표 시점 분석 및 시각화 ---
+    st.subheader("📊 CPI 발표 시점 암호화폐 가격 영향 분석")
+    df_cpi_impact = analyze_cpi_impact(df_crypto, df_fred_macro['CPI'].dropna(), window_days=7)
 
     if not df_cpi_impact.empty:
-        st.subheader("📊 CPI 발표 시점 암호화폐 가격 변화 (표)")
+        st.markdown("#### 📈 CPI 발표 시점 암호화폐 가격 변화 (표)")
         st.dataframe(df_cpi_impact)
 
-        st.subheader(f"📈 {company_name} 가격 추이 및 CPI 발표 시점")
+        st.markdown(f"#### 📈 {company_name} 가격 추이 및 CPI 발표 시점")
         fig_price_cpi = go.Figure()
 
         # 암호화폐 가격 라인
@@ -306,7 +406,7 @@ if st.button("🚀 데이터 로드 및 분석 실행"):
                                            mode='lines', name=f'{company_name} 가격', line=dict(color='blue')))
         
         # CPI 발표 시점 세로선 추가
-        for cpi_date in cpi_series.index:
+        for cpi_date in df_fred_macro['CPI'].dropna().index:
             if cpi_date in df_crypto.index: # 암호화폐 데이터에 해당 날짜가 있는 경우에만 표시
                 fig_price_cpi.add_vline(x=cpi_date, line_width=1, line_dash="dot", line_color="red",
                                         annotation_text=f"CPI({cpi_date.strftime('%Y-%m')})",
@@ -318,12 +418,49 @@ if st.button("🚀 데이터 로드 및 분석 실행"):
                                     xaxis_rangeslider_visible=True) # 범위 슬라이더 추가
         fig_price_cpi.update_xaxes(showgrid=True, tickangle=45)
         st.plotly_chart(fig_price_cpi, use_container_width=True)
+    else:
+        st.warning("CPI 분석을 위한 데이터가 부족합니다. 날짜 범위를 확인하거나 FRED API 키를 점검하세요.")
+    
+    st.markdown("---") # 구분선 추가
+
+    # --- 장단기 금리 스프레드 특정 시점 분석 및 시각화 ---
+    st.subheader("📊 미국 국채 장단기 금리 스프레드 추이 및 암호화폐 가격 영향 분석")
+    df_yield_spread_impact = analyze_yield_spread_impact(df_crypto, df_fred_macro, window_days=7)
+
+    if not df_yield_spread_impact.empty:
+        st.markdown("#### 📈 장단기 금리 스프레드 시점 암호화폐 가격 변화 (표)")
+        st.dataframe(df_yield_spread_impact)
+
+        st.markdown(f"#### 📈 {company_name} 가격 추이 및 장단기 금리 스프레드 변화 시점")
+        fig_price_spread = go.Figure()
+
+        # 암호화폐 가격 라인
+        fig_price_spread.add_trace(go.Scatter(x=df_crypto.index, y=df_crypto['close'],
+                                              mode='lines', name=f'{company_name} 가격', line=dict(color='blue')))
+        
+        # 장단기 금리 스프레드 데이터 포인트 세로선 추가
+        # 여기서는 스프레드 값이 존재하는 모든 날짜를 기준으로 합니다.
+        for spread_date in df_fred_macro['US_Yield_Spread'].dropna().index:
+            if spread_date in df_crypto.index: # 암호화폐 데이터에 해당 날짜가 있는 경우에만 표시
+                fig_price_spread.add_vline(x=spread_date, line_width=1, line_dash="dot", line_color="purple",
+                                            annotation_text=f"스프레드({spread_date.strftime('%Y-%m-%d')})",
+                                            annotation_position="top right",
+                                            annotation_font_size=10,
+                                            annotation_font_color="purple")
+
+        fig_price_spread.update_layout(height=600, title_text=f"{company_name} 가격 추이와 장단기 금리 스프레드 변화 시점",
+                                       xaxis_rangeslider_visible=True) # 범위 슬라이더 추가
+        fig_price_spread.update_xaxes(showgrid=True, tickangle=45)
+        st.plotly_chart(fig_price_spread, use_container_width=True)
+    else:
+        st.warning("장단기 금리 스프레드 분석을 위한 데이터가 부족합니다. 날짜 범위를 확인하거나 FRED API 키를 점검하세요.")
 
     st.markdown("---")
     st.write("### 📝 참고 사항")
     st.write("""
     - **FRED API 키**: `.streamlit/secrets.toml` 파일에 `FRED_API_KEY = "YOUR_FRED_API_KEY"` 형식으로 FRED API 키를 설정해야 합니다.
     - **데이터 기간**: 이 앱은 기본적으로 지난 7년간의 데이터를 사용합니다. 원하는 기간으로 조정하여 데이터를 확인해 보세요.
-    - **CPI 발표일**: FRED에서 제공하는 월별 CPI 데이터의 인덱스 날짜를 CPI 발표일로 간주하고 분석을 수행합니다. 실제 발표일과는 약간의 차이가 있을 수 있습니다.
-    - **가격 변화율**: CPI 발표일의 종가와 발표일로부터 7일 후의 종가를 기준으로 계산됩니다. 주말이나 공휴일로 인해 7일 후의 정확한 데이터가 없는 경우, 가장 가까운 유효한 날짜의 데이터가 사용됩니다 (`asof` 메서드).
+    - **CPI/스프레드 기준일**: FRED에서 제공하는 데이터의 인덱스 날짜를 기준으로 분석을 수행합니다. 실제 발표일/변화 시점과는 약간의 차이가 있을 수 있습니다.
+    - **가격 변화율**: 기준일의 종가와 기준일로부터 7일 후의 종가를 기준으로 계산됩니다. 주말이나 공휴일로 인해 7일 후의 정확한 데이터가 없는 경우, 가장 가까운 유효한 날짜의 데이터가 사용됩니다 (`asof` 메서드).
+    - **장단기 금리 스프레드**: 10년물 국채 금리에서 2년물 국채 금리를 뺀 값입니다. 이 값이 0보다 작아지면 (음수가 되면) '장단기 금리 역전'이라고 하며, 이는 종종 경기 침체의 전조로 해석되기도 합니다.
     """)
