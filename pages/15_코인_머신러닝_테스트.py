@@ -392,8 +392,13 @@ if st.button("🚀 LSTM 모델 학습 및 지표 시각화 실행"):
 
         test_predict_plot = np.empty_like(data)
         test_predict_plot[:, :] = np.nan
-        test_predict_plot[len(train_predict) + (look_back * 2):len(data), :] = test_predict
+        test_start = train_size + look_back
+        test_predict_plot[test_start:test_start + len(test_predict), :] = test_predict
 
+        st.write("데이터 길이:", len(data))
+        st.write("Train 예측 길이:", len(train_predict))
+        st.write("Test 예측 시작 인덱스:", test_start)
+        st.write("Test 예측 길이:", len(test_predict))
         # 날짜 인덱스 매핑
         dates = df.index
         df_results = pd.DataFrame(index=dates)
