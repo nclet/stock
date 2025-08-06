@@ -4,7 +4,6 @@ import requests
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
-# import matplotlib.font_manager as fm # 한글 폰트 관련 모듈 제거 (요청에 따라)
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -19,21 +18,14 @@ from plotly.subplots import make_subplots # make_subplots 임포트 추가
 
 # --- 페이지 설정 ---
 st.set_page_config(page_title="암호화폐 예측 및 지표 분석", layout="wide")
-st.title("📈 암호화폐 LSTM 예측 및 거시 경제 지표 영향 분석")
+st.title("📈 암호화폐 LSTM 예측 및 경제 데이터 분석")
 
 st.markdown("""
-Upbit API를 통해 암호화폐 가격 데이터를 가져와 LSTM 딥러닝 모델로 미래 가격을 예측하고,
+코인을 LSTM 딥러닝 모델로 미래 가격을 예측하고,
 미국 소비자물가지수(CPI) 및 미국 국채 장단기 금리 스프레드 발표/변화 시점의 암호화폐 가격 움직임을 분석하고 시각화합니다.
 """)
+st.write("에포크와 데이터 기간이 커지면 분석 속도가 늦어질 수 있습니다.")
 
-# ------------------------
-# ✨ 한글 폰트 설정 (matplotlib용 - 필요시 주석 해제)
-# ------------------------
-# Streamlit Cloud 환경에서 기본 폰트가 한글을 지원하지 않을 경우,
-# 차트의 한글 텍스트가 깨져 보일 수 있습니다.
-# 이 경우, Streamlit 앱 배포 환경에 한글 폰트를 설치하거나
-# Plotly 등 다른 시각화 라이브러리를 고려할 수 있습니다.
-plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지 (일반적인 설정이므로 유지)
 
 # ------------------------
 # ✨ FRED API 설정
@@ -124,9 +116,9 @@ company_name = st.selectbox(
 )
 symbol = crypto_list.get(st.session_state.selected_company)
 
-# 날짜 설정 (기본 7년치 데이터)
+# 날짜 설정 (기본 5년치 데이터)
 default_end_date = datetime.today()
-default_start_date = default_end_date - timedelta(days=365 * 7) # 기본 7년치 데이터
+default_start_date = default_end_date - timedelta(days=365 * 5) # 기본 5년치 데이터
 start_date = st.date_input("데이터 시작 날짜", default_start_date)
 end_date = st.date_input("데이터 종료 날짜", default_end_date)
 
