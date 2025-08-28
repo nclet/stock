@@ -221,7 +221,7 @@ def calculate_technical_indicators(df):
     df = df.copy()  # 원본 데이터프레임 손상 방지
     
     # RSI (Relative Strength Index)
-    df['change'] = df['close'].diff()
+    df['change'] = df['Close'].diff()
     df['gain'] = df['change'].apply(lambda x: x if x > 0 else 0)
     df['loss'] = df['change'].apply(lambda x: abs(x) if x < 0 else 0)
     df['avg_gain'] = df['gain'].rolling(window=14).mean()
@@ -230,25 +230,25 @@ def calculate_technical_indicators(df):
     df['RSI'] = 100 - (100 / (1 + df['rs']))
     
     # Bollinger Bands
-    df['MA20'] = df['close'].rolling(window=20).mean()
-    df['stddev'] = df['close'].rolling(window=20).std()
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['stddev'] = df['Close'].rolling(window=20).std()
     df['BB_upper'] = df['MA20'] + (df['stddev'] * 2)
     df['BB_lower'] = df['MA20'] - (df['stddev'] * 2)
     
     # MACD (Moving Average Convergence Divergence)
-    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['ema_12'] = df['Close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = df['ema_12'] - df['ema_26']
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
     # Golden/Dead Cross (5일선과 20일선)
-    df['MA5'] = df['close'].rolling(window=5).mean()
+    df['MA5'] = df['Close'].rolling(window=5).mean()
     df['Golden_Dead_Cross'] = 0
     df['Golden_Dead_Cross'] = np.where((df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 1, df['Golden_Dead_Cross'])
     df['Golden_Dead_Cross'] = np.where((df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), -1, df['Golden_Dead_Cross'])
     
     # 다음 날 가격을 예측하기 위한 타겟 변수
-    df['target'] = df['close'].shift(-1)
+    df['target'] = df['Close'].shift(-1)
     
     return df
 
@@ -340,7 +340,7 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
     
     with st.spinner("LSTM과 LightGBM 모델 학습 중..."):
         # LSTM 예측값 생성을 위한 데이터셋 준비
-        lstm_data_for_pred = df_model['close'].values
+        lstm_data_for_pred = df_model['Close'].values
         lstm_scaler = MinMaxScaler(feature_range=(0, 1))
         scaled_lstm_data = lstm_scaler.fit_transform(lstm_data_for_pred.reshape(-1, 1))
         
