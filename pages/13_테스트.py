@@ -36,6 +36,7 @@ st.markdown("""
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
+    # Streamlit Cloud 배포를 위해 허깅페이스 토큰을 secrets에서 가져옵니다.
     hf_token = st.secrets.get("HF_TOKEN")
     model_name = "snunlp/KR-FinBert-SC"
     
@@ -56,6 +57,7 @@ def load_sentiment_model():
         st.stop()
         return None, None, None
 
+# Streamlit 앱 시작 시 모델 로드
 tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
@@ -63,22 +65,26 @@ def analyze_sentiment(text):
     if not text:
         return 0.0
     
+    # 텍스트를 토큰화하고 모델에 입력
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
         outputs = sentiment_model(**inputs)
     
+    # 소프트맥스 함수를 적용하여 확률로 변환
     probabilities = torch.softmax(outputs.logits, dim=1)[0]
 
     neg_idx = None
     pos_idx = None
+    # 모델의 라벨 맵핑을 기반으로 긍정/부정 인덱스 찾기
     for idx, label in sentiment_model.config.id2label.items():
         if 'negative' in label.lower() or '부정' in label:
             neg_idx = idx
         elif 'positive' in label.lower() or '긍정' in label:
             pos_idx = idx
     
+    # 긍정 점수에서 부정 점수를 빼서 최종 감성 점수 계산
     negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
     positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
 
@@ -212,6 +218,8 @@ def get_upbit_candles(market, count=1000):
 def calculate_technical_indicators(df):
     """RSI, 볼린저밴드, MACD, 골든/데드 크로스 지표를 계산합니다."""
     
+    df = df.copy()  # 원본 데이터프레임 손상 방지
+    
     # RSI (Relative Strength Index)
     df['change'] = df['close'].diff()
     df['gain'] = df['change'].apply(lambda x: x if x > 0 else 0)
@@ -305,8 +313,8 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
             st.stop()
         
         # 날짜 형식 통일 및 데이터 병합
-        df_asset['Date'] = pd.to_datetime(df_asset['Date'])
-        filtered_news['Date'] = pd.to_datetime(filtered_news['Date'])
+        df_asset['Date'] = pd.to_datetime(df_asset['Date']).dt.date
+        filtered_news['Date'] = pd.to_datetime(filtered_news['Date']).dt.date
         
         filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
         df_final = pd.merge(df_asset, filtered_news_grouped, on='Date', how='left').fillna(0)
@@ -314,38 +322,40 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
         # 기술적 지표 계산
         df_final = calculate_technical_indicators(df_final)
         df_final = df_final.dropna().reset_index(drop=True)
-
+        
+        # 날짜 범위를 다시 필터링
+        df_model = df_final[(df_final['Date'] >= pd.to_datetime(start_date).date()) & (df_final['Date'] <= pd.to_datetime(end_date).date())]
+        
         st.success("✅ 가격 및 기술적 지표 데이터 로드 및 전처리 완료!")
-        st.dataframe(df_final.tail())
+        st.dataframe(df_model.tail())
         
     st.markdown("---")
     st.subheader("2. 하이브리드 모델 학습")
     
-    if len(df_final) < timesteps + 5:
+    if len(df_model) < timesteps + 5:
         st.warning(f"데이터가 부족하여 모델을 학습할 수 없습니다. (필요 데이터: 최소 {timesteps+5}개)")
         st.stop()
 
     with st.spinner("LSTM과 LightGBM 모델 학습 중..."):
-        # 데이터셋 분리
-        df_model = df_final[(df_final['Date'] >= pd.to_datetime(start_date)) & (df_final['Date'] <= pd.to_datetime(end_date))]
-        
-        # LSTM 데이터 준비
+        # LSTM 데이터 준비 및 학습
         lstm_data = df_model['close'].values
         lstm_model, lstm_scaler = build_lstm_model(lstm_data, timesteps)
         
         # LSTM 예측값 생성 (LightGBM의 입력으로 사용)
-        lstm_predictions = []
-        for i in range(len(lstm_data) - timesteps):
-            input_seq = lstm_data[i:i+timesteps].reshape(1, timesteps, 1)
-            scaled_input = lstm_scaler.transform(input_seq.reshape(-1, 1)).reshape(1, timesteps, 1)
-            prediction_scaled = lstm_model.predict(scaled_input, verbose=0)
-            prediction = lstm_scaler.inverse_transform(prediction_scaled)[0][0]
-            lstm_predictions.append(prediction)
+        lstm_predictions_temp = []
+        for i in range(len(lstm_data)):
+            if i < timesteps:
+                lstm_predictions_temp.append(np.nan)
+            else:
+                input_seq = lstm_data[i-timesteps:i]
+                scaled_input = lstm_scaler.transform(input_seq.reshape(-1, 1))
+                prediction_scaled = lstm_model.predict(scaled_input.reshape(1, timesteps, 1), verbose=0)
+                prediction = lstm_scaler.inverse_transform(prediction_scaled)[0][0]
+                lstm_predictions_temp.append(prediction)
         
         # LSTM 예측값을 데이터프레임에 추가
-        lstm_predictions_df = pd.DataFrame({'lstm_pred': [np.nan] * timesteps + lstm_predictions}, index=df_model.index)
-        df_model = pd.concat([df_model, lstm_predictions_df], axis=1)
-
+        df_model['lstm_pred'] = lstm_predictions_temp
+        
         # LightGBM 데이터 준비
         features = ['Sentiment_Score', 'RSI', 'BB_upper', 'BB_lower', 'MACD', 'MACD_Signal', 'Golden_Dead_Cross', 'lstm_pred']
         
@@ -393,7 +403,7 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
         st.markdown("---")
         st.subheader("4. 모델 피처 중요도")
         feature_importance = pd.DataFrame({
-            'Feature': features,
+            'Feature': lgbm_model.feature_name_,
             'Importance': lgbm_model.feature_importances_
         }).sort_values(by='Importance', ascending=False)
         st.bar_chart(feature_importance.set_index('Feature'))
