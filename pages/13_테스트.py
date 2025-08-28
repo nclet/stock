@@ -235,12 +235,14 @@ def main():
     # Sidebar for parameters
     st.sidebar.header("모델 파라미터 설정")
     period = st.sidebar.selectbox("데이터 기간", ["100일", "300일", "500일"], index=1)
-    max_news = st.sidebar.slider("뉴스 검색 건수", min_value=10, max_value=100, value=50, step=10)
+    news_period = st.sidebar.selectbox("감성 분석 기간", ["1일", "3일", "5일", "7일"], index=1)
+    lstm_epochs = st.sidebar.slider("LSTM 에포크 수", min_value=10, max_value=100, value=30, step=5)
     timesteps = st.sidebar.slider("LSTM 시퀀스 길이", min_value=5, max_value=30, value=15, step=1)
-    lstm_epochs = st.sidebar.slider("LSTM 에포크 수", min_value=10, max_value=50, value=20, step=5)
-    
+
     count_map = {"100일": 100, "300일": 300, "500일": 500}
     data_count = count_map.get(period, 300)
+    
+    news_days = int(news_period.replace('일', ''))
 
     if st.button("🚀 하이브리드 모델 분석 시작"):
         st.subheader("1. 데이터 수집 및 전처리")
@@ -256,13 +258,16 @@ def main():
             df_asset = calculate_technical_indicators(df_asset)
 
         with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
+            end_date = datetime.now().date()
+            start_date = end_date - timedelta(days=news_days)
+            date_range = [start_date + timedelta(days=i) for i in range(news_days + 1)]
+            
             all_news = pd.DataFrame()
-            for start_idx in range(1, max_news + 1, 100):
-                count = min(100, max_news - start_idx + 1)
-                df_part = get_naver_news_api(company_name, display=count, start=start_idx)
+            for date_day in date_range:
+                date_str = date_day.strftime("%Y.%m.%d")
+                df_part = get_naver_news_api(f"{company_name} {date_str}", display=50)
+                df_part['Date'] = date_day
                 all_news = pd.concat([all_news, df_part], ignore_index=True)
-                if len(df_part) < count:
-                    break
             
             all_news = all_news.dropna(subset=['Date'])
             sentiment_results = all_news['Title'].apply(lambda x: analyze_sentiment(x))
