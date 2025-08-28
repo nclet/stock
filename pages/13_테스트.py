@@ -321,7 +321,6 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
         
         # 기술적 지표 계산
         df_final = calculate_technical_indicators(df_final)
-        df_final = df_final.dropna().reset_index(drop=True)
         
         # 날짜 범위를 다시 필터링
         df_model = df_final[(df_final['Date'] >= pd.to_datetime(start_date).date()) & (df_final['Date'] <= pd.to_datetime(end_date).date())]
@@ -332,35 +331,52 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
     st.markdown("---")
     st.subheader("2. 하이브리드 모델 학습")
     
-    if len(df_model) < timesteps + 5:
-        st.warning(f"데이터가 부족하여 모델을 학습할 수 없습니다. (필요 데이터: 최소 {timesteps+5}개)")
+    # LSTM 데이터 준비 및 학습
+    # 학습에 필요한 최소 데이터 수량 체크
+    required_data_count = timesteps + 50  # LSTM 훈련에 필요한 데이터 + 예측에 사용할 데이터
+    if len(df_model) < required_data_count:
+        st.warning(f"데이터가 부족하여 모델을 학습할 수 없습니다. (필요 데이터: 최소 {required_data_count}개)")
         st.stop()
-
+    
     with st.spinner("LSTM과 LightGBM 모델 학습 중..."):
-        # LSTM 데이터 준비 및 학습
-        lstm_data = df_model['close'].values
-        lstm_model, lstm_scaler = build_lstm_model(lstm_data, timesteps)
+        # LSTM 예측값 생성을 위한 데이터셋 준비
+        lstm_data_for_pred = df_model['close'].values
+        lstm_scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_lstm_data = lstm_scaler.fit_transform(lstm_data_for_pred.reshape(-1, 1))
         
-        # LSTM 예측값 생성 (LightGBM의 입력으로 사용)
-        lstm_predictions_temp = []
-        for i in range(len(lstm_data)):
+        # LSTM 모델 학습 (훈련에 필요한 충분한 데이터 사용)
+        generator_train = TimeseriesGenerator(scaled_lstm_data, scaled_lstm_data, length=timesteps, batch_size=1)
+        lstm_model = Sequential([
+            LSTM(50, activation='relu', input_shape=(timesteps, 1)),
+            Dense(1)
+        ])
+        lstm_model.compile(optimizer='adam', loss='mean_squared_error')
+        lstm_model.fit(generator_train, epochs=5, verbose=0)
+        
+        # LSTM 예측값 생성 (전체 데이터셋에 대해)
+        lstm_predictions = []
+        for i in range(len(scaled_lstm_data)):
             if i < timesteps:
-                lstm_predictions_temp.append(np.nan)
+                lstm_predictions.append(np.nan)
             else:
-                input_seq = lstm_data[i-timesteps:i]
-                scaled_input = lstm_scaler.transform(input_seq.reshape(-1, 1))
-                prediction_scaled = lstm_model.predict(scaled_input.reshape(1, timesteps, 1), verbose=0)
-                prediction = lstm_scaler.inverse_transform(prediction_scaled)[0][0]
-                lstm_predictions_temp.append(prediction)
+                input_seq = scaled_lstm_data[i-timesteps:i]
+                prediction = lstm_model.predict(input_seq.reshape(1, timesteps, 1), verbose=0)[0][0]
+                lstm_predictions.append(prediction)
         
-        # LSTM 예측값을 데이터프레임에 추가
-        df_model['lstm_pred'] = lstm_predictions_temp
+        # 스케일링된 예측값을 원래 가격 범위로 복원
+        lstm_predictions_original = lstm_scaler.inverse_transform(np.array(lstm_predictions).reshape(-1, 1)).flatten()
+        df_model['lstm_pred'] = lstm_predictions_original
         
         # LightGBM 데이터 준비
         features = ['Sentiment_Score', 'RSI', 'BB_upper', 'BB_lower', 'MACD', 'MACD_Signal', 'Golden_Dead_Cross', 'lstm_pred']
         
+        # LSTM 예측값과 다른 기술적 지표로 인해 발생한 NaN 값 제거
         df_model = df_model.dropna(subset=features + ['target'])
         
+        if df_model.empty:
+            st.error("❌ 데이터 전처리 후 학습에 사용할 데이터가 없습니다. 검색 기간을 넓혀주세요.")
+            st.stop()
+            
         X = df_model[features]
         y = df_model['target']
 
@@ -371,7 +387,7 @@ if st.button("🚀 하이브리드 모델 분석 시작"):
         
         # LightGBM 모델 학습
         lgbm_model = lgb.LGBMRegressor(random_state=42)
-        lgbm_model.fit(X_train, y_train)
+        lgbm_model.fit(X_train, y_train, feature_name=features)
 
     st.success("✅ 하이브리드 모델 학습 완료!")
     
