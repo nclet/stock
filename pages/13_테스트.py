@@ -369,11 +369,11 @@ def main():
             """)
 
             # Visualization
-            df_test = df_model.iloc[split_idx:].copy()
-            df_test['Predicted_Close'] = final_predictions
+            df_test = df_final.iloc[split_idx:].copy() # df_final을 사용하도록 수정
+            df_test.loc[df_test.index, 'Predicted_Close'] = pd.Series(final_predictions, index=X_test.index)
             
             fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df_test['date'], df_test['target'], label='실제 가격 (Actual)', color='blue')
+            ax.plot(df_test['date'], df_test['close'], label='실제 가격 (Actual)', color='blue')
             ax.plot(df_test['date'], df_test['Predicted_Close'], label='예측 가격 (Predicted)', linestyle='--', color='red')
             
             ax.set_title(f"{company_name} 하이브리드 모델 가격 예측")
