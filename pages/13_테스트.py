@@ -2,42 +2,43 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from datetime import datetime, timedelta
+import torch
+from torch import nn
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_percentage_error, r2_score
+import lightgbm as lgb
+import pyupbit
+import urllib.parse
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import torch
-import urllib.parse
-from json.decoder import JSONDecodeError
-import pyupbit
-import lightgbm as lgb
-from sklearn.preprocessing import MinMaxScaler
+from datetime import datetime, timedelta
+import warnings
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_percentage_error
-import warnings
+from sklearn.preprocessing import MinMaxScaler
+from json.decoder import JSONDecodeError
 
-# 불필요한 경고 메시지를 무시하도록 설정합니다.
+# Ignore unnecessary warnings
 warnings.filterwarnings('ignore')
 
-# ------------------------
-# ✨ 페이지 설정
-# ------------------------
-st.set_page_config(page_title="암호화폐 하이브리드 예측 모델", layout="wide")
-st.title("암호화폐 하이브리드 가격 예측 모델")
+# ----------------------
+# Streamlit App Setup
+# ----------------------
+st.set_page_config(page_title="Crypto Sentiment Predictor", layout="wide")
+st.title("📊 하이브리드 암호화폐 가격 예측 모델")
 
 st.markdown("""
-네이버 뉴스 감성, 기술적 지표, 그리고 하이브리드 모델(LSTM + LightGBM)을 결합하여
-주요 암호화폐의 가격을 예측하는 전략입니다.
+이 모델은 네이버 뉴스 감성, 기술적 지표, 그리고 하이브리드 모델(LSTM + LightGBM)을 결합하여
+주요 암호화폐의 가격을 예측합니다.
 """)
 
-# ------------------------
-# ✨ 감성 분석 모델 로드
-# ------------------------
+# ----------------------
+# Hugging Face Sentiment Model Loading
+# ----------------------
 @st.cache_resource
 def load_sentiment_model():
-    """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    # Streamlit Cloud 배포를 위해 허깅페이스 토큰을 secrets에서 가져옵니다.
+    """Loads a Korean sentiment analysis model from Hugging Face."""
     hf_token = st.secrets.get("HF_TOKEN")
     model_name = "snunlp/KR-FinBert-SC"
     
@@ -48,38 +49,36 @@ def load_sentiment_model():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         
-        st.success(f"✅ 감성 분석 모델 : '{model_name}' (장치: {device})")
+        st.success(f"✅ 감성 분석 모델 '{model_name}' (장치: {device}) 로드 완료")
         st.write(f"모델 라벨 맵핑: {model.config.id2label}")
         
         return tokenizer, model, device
     except Exception as e:
         st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
         st.info("Hugging Face 토큰이 Streamlit Secrets에 올바르게 설정되었는지, 라이브러리 버전이 최신인지 확인해주세요.")
-        st.stop()
         return None, None, None
 
-# Streamlit 앱 시작 시 모델 로드
 tokenizer, sentiment_model, device = load_sentiment_model()
 
+# ----------------------
+# Sentiment Analysis Function
+# ----------------------
 def analyze_sentiment(text):
-    """주어진 텍스트의 감성 점수를 계산합니다."""
+    """Calculates sentiment scores for the given text."""
     if not text:
         return {'positive': 0.0, 'neutral': 0.0, 'negative': 0.0, 'sentiment_score': 0.0}
     
-    # 텍스트를 토큰화하고 모델에 입력
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     with torch.no_grad():
         outputs = sentiment_model(**inputs)
     
-    # 소프트맥스 함수를 적용하여 확률로 변환
     probabilities = torch.softmax(outputs.logits, dim=1)[0]
 
     neg_idx = None
     pos_idx = None
     neu_idx = None
-    # 모델의 라벨 맵핑을 기반으로 긍정/부정 인덱스 찾기
     for idx, label in sentiment_model.config.id2label.items():
         if 'negative' in label.lower() or '부정' in label:
             neg_idx = idx
@@ -88,7 +87,6 @@ def analyze_sentiment(text):
         elif 'neutral' in label.lower() or '중립' in label:
             neu_idx = idx
     
-    # 긍정, 중립, 부정 점수를 반환
     pos_score = probabilities[pos_idx].item() if pos_idx is not None else 0
     neu_score = probabilities[neu_idx].item() if neu_idx is not None else 0
     neg_score = probabilities[neg_idx].item() if neg_idx is not None else 0
@@ -102,21 +100,18 @@ def analyze_sentiment(text):
         'sentiment_score': sentiment_score
     }
 
-# ------------------------
-# ✨ 암호화폐 종목 목록 로드 (Upbit API)
-# ------------------------
+# ----------------------
+# Upbit API Integration
+# ----------------------
 @st.cache_data
 def get_upbit_markets():
-    """
-    Upbit API에서 원화(KRW) 마켓에 있는 모든 암호화폐 목록을 가져옵니다.
-    """
+    """Fetches all KRW crypto markets from Upbit."""
     url = "https://api.upbit.com/v1/market/all"
     try:
         response = requests.get(url, params={'isDetails': 'false'})
-        response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+        response.raise_for_status()
         markets = response.json()
         
-        # KRW 마켓만 필터링하고 코인 이름으로 매핑
         krw_markets = {market['korean_name']: market['market'] for market in markets if market['market'].startswith('KRW-')}
         
         if not krw_markets:
@@ -139,32 +134,11 @@ def get_upbit_markets():
 crypto_list = get_upbit_markets()
 company_names = list(crypto_list.keys())
 
-# ------------------------
-# ✨ 암호화폐 종목 선택 UI
-# ------------------------
-# 기본값 설정
-default_crypto = "비트코인"
-if "selected_company" not in st.session_state or st.session_state.selected_company not in company_names:
-    st.session_state.selected_company = default_crypto if default_crypto in company_names else company_names[0]
-
-company_name = st.selectbox(
-    "✅ 분석할 암호화폐 선택",
-    company_names,
-    index=company_names.index(st.session_state.selected_company),
-    key="selected_company"
-)
-
-# 선택된 코인 이름으로 Upbit market 코드를 찾음
-stock_code = crypto_list.get(st.session_state.selected_company)
-
-start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=30))
-end_date = st.date_input("뉴스 검색 종료일", datetime.now())
-
-# ------------------------
-# ✨ 네이버 뉴스 API 함수
-# ------------------------
+# ----------------------
+# Naver News API
+# ----------------------
 def get_naver_news_api(query, display=30, start=1, sort="date"):
-    """네이버 뉴스 검색 API를 호출하여 데이터를 가져옵니다."""
+    """Fetches news data from Naver News API."""
     try:
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
@@ -203,242 +177,213 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
         return pd.DataFrame()
 
-# ------------------------
-# ✨ Upbit API 함수 (수정)
-# ------------------------
-@st.cache_data
-def get_upbit_candles(market, count=1000):
-    """
-    Upbit API를 통해 일별 캔들 데이터를 충분히 가져옵니다.
-    기술적 지표 계산을 위해 많은 데이터가 필요합니다.
-    """
-    df = pyupbit.get_ohlcv(market, interval="day", count=count)
-    if df is None or df.empty:
-        st.error(f"❌ {market} 데이터를 가져오지 못했습니다. 종목 코드나 Upbit 서버 상태를 확인해주세요.")
-        return pd.DataFrame()
-    
-    df = df.reset_index().rename(columns={'index': 'Date'})
-    df['Date'] = pd.to_datetime(df['Date']).dt.date
-    df = df.rename(columns={'trade_price': 'Close'})
-    return df
-
-# ------------------------
-# ✨ 기술적 지표 계산 함수 (추가)
-# ------------------------
+# ----------------------
+# Technical Indicators Calculation
+# ----------------------
 def calculate_technical_indicators(df):
-    """RSI, 볼린저밴드, MACD, 골든/데드 크로스 지표를 계산합니다."""
-    
-    df = df.copy()  # 원본 데이터프레임 손상 방지
+    """Calculates RSI, Bollinger Bands, MACD, and Volatility."""
+    df = df.copy()
     
     # RSI (Relative Strength Index)
-    df['change'] = df['Close'].diff()
+    df['change'] = df['close'].diff()
     df['gain'] = df['change'].apply(lambda x: x if x > 0 else 0)
     df['loss'] = df['change'].apply(lambda x: abs(x) if x < 0 else 0)
     df['avg_gain'] = df['gain'].rolling(window=14).mean()
     df['avg_loss'] = df['loss'].rolling(window=14).mean()
-    df['rs'] = df['avg_gain'] / (df['avg_loss'] + 1e-8) # 0으로 나누는 오류 방지
+    df['rs'] = df['avg_gain'] / (df['avg_loss'] + 1e-8)
     df['RSI'] = 100 - (100 / (1 + df['rs']))
     
     # Bollinger Bands
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['stddev'] = df['Close'].rolling(window=20).std()
+    df['MA20'] = df['close'].rolling(window=20).mean()
+    df['stddev'] = df['close'].rolling(window=20).std()
     df['BB_upper'] = df['MA20'] + (df['stddev'] * 2)
     df['BB_lower'] = df['MA20'] - (df['stddev'] * 2)
     
     # MACD (Moving Average Convergence Divergence)
-    df['ema_12'] = df['Close'].ewm(span=12, adjust=False).mean()
-    df['ema_26'] = df['Close'].ewm(span=26, adjust=False).mean()
+    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = df['ema_12'] - df['ema_26']
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+
+    # Volatility
+    df['Daily_Return'] = df['close'].pct_change()
+    df['Volatility'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252)
     
-    # Golden/Dead Cross (5일선과 20일선)
-    df['MA5'] = df['Close'].rolling(window=5).mean()
-    df['Golden_Dead_Cross'] = 0
-    df['Golden_Dead_Cross'] = np.where((df['MA5'] > df['MA20']) & (df['MA5'].shift(1) <= df['MA20'].shift(1)), 1, df['Golden_Dead_Cross'])
-    df['Golden_Dead_Cross'] = np.where((df['MA5'] < df['MA20']) & (df['MA5'].shift(1) >= df['MA20'].shift(1)), -1, df['Golden_Dead_Cross'])
-    
-    # 다음 날 가격을 예측하기 위한 타겟 변수
-    df['target'] = df['Close'].shift(-1)
+    # Target variable for next day's price prediction
+    df['target'] = df['close'].shift(-1)
     
     return df
 
-# ------------------------
-# ✨ LSTM 모델 함수 (추가)
-# ------------------------
-def build_lstm_model(input_dim, timesteps, epochs):
-    """LSTM 모델을 빌드하고 학습시킵니다."""
-    model = Sequential([
-        LSTM(50, activation='relu', input_shape=(timesteps, input_dim)),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    return model
+# ----------------------
+# Main App Logic
+# ----------------------
+def main():
+    # Crypto selection UI
+    default_crypto = "비트코인"
+    if "selected_company" not in st.session_state or st.session_state.selected_company not in company_names:
+        st.session_state.selected_company = default_crypto if default_crypto in company_names else company_names[0]
 
-# ------------------------
-# ✨ 실행 버튼
-# ------------------------
-max_news = st.slider("최대 뉴스 건수", min_value=10, max_value=100, value=50, step=10)
-timesteps = st.slider("LSTM 타임스텝 (과거 N일 데이터)", min_value=5, max_value=30, value=15, step=1)
-lstm_epochs = st.slider("LSTM 학습 에포크 수", min_value=10, max_value=50, value=20, step=5)
-
-if st.button("🚀 하이브리드 모델 분석 시작"):
-    st.subheader("1. 데이터 수집 및 전처리")
-    
-    with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
-        all_news = pd.DataFrame()
-        for start_idx in range(1, max_news + 1, 100):
-            count = min(100, max_news - start_idx + 1)
-            df_part = get_naver_news_api(company_name, display=count, start=start_idx)
-            all_news = pd.concat([all_news, df_part], ignore_index=True)
-            if len(df_part) < count:
-                break
-        
-        all_news = all_news.dropna(subset=['Date'])
-        filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
-        
-    if filtered_news.empty:
-        st.error("❌ 뉴스 데이터를 가져오지 못했습니다. 검색 기간이나 암호화폐명을 확인해주세요.")
-        st.stop()
-    else:
-        sentiment_results = filtered_news['Title'].apply(lambda x: analyze_sentiment(x))
-        sentiment_df = pd.json_normalize(sentiment_results)
-        filtered_news = pd.concat([filtered_news, sentiment_df], axis=1)
-        st.success("✅ 뉴스 감성 분석 완료!")
-        st.dataframe(filtered_news[['Date', 'Title', 'sentiment_score', 'positive', 'neutral', 'negative']].sort_values(by='Date', ascending=False).head())
-
-    with st.spinner("가격 및 기술적 지표 데이터 로드 중..."):
-        df_asset = get_upbit_candles(stock_code, count=500)
-        if df_asset.empty:
-            st.error("❌ 암호화폐 가격 데이터를 가져오지 못했습니다.")
-            st.stop()
-        
-        # 날짜 형식 통일 및 데이터 병합
-        df_asset['Date'] = pd.to_datetime(df_asset['Date']).dt.date
-        filtered_news['Date'] = pd.to_datetime(filtered_news['Date']).dt.date
-        
-        news_grouped = filtered_news.groupby('Date').agg(
-            positive_sentiment=('positive', 'mean'),
-            neutral_sentiment=('neutral', 'mean'),
-            negative_sentiment=('negative', 'mean')
-        ).reset_index()
-        
-        df_final = pd.merge(df_asset, news_grouped, on='Date', how='left').fillna(0)
-        
-        # 기술적 지표 계산
-        df_final = calculate_technical_indicators(df_final)
-        
-        # 날짜 범위를 다시 필터링
-        df_model = df_final[(df_final['Date'] >= pd.to_datetime(start_date).date()) & (df_final['Date'] <= pd.to_datetime(end_date).date())]
-        
-        st.success("✅ 가격 및 기술적 지표 데이터 로드 및 전처리 완료!")
-        st.dataframe(df_model.tail())
-        
-    st.markdown("---")
-    st.subheader("2. 하이브리드 모델 학습")
-    
-    # LSTM 데이터 준비 및 학습
-    features_lstm = ['Close']
-    X_lstm = df_model[features_lstm].values
-    
-    scaler_lstm = MinMaxScaler()
-    scaled_lstm_data = scaler_lstm.fit_transform(X_lstm)
-    
-    generator_train = TimeseriesGenerator(
-        scaled_lstm_data,
-        scaled_lstm_data,
-        length=timesteps,
-        batch_size=1
+    company_name = st.selectbox(
+        "✅ 분석할 암호화폐 선택",
+        company_names,
+        index=company_names.index(st.session_state.selected_company),
+        key="selected_company"
     )
-    
-    # LSTM 모델 학습
-    lstm_model = build_lstm_model(input_dim=len(features_lstm), timesteps=timesteps, epochs=lstm_epochs)
-    
-    # LSTM 모델 학습
-    with st.spinner("LSTM 모델 학습 중..."):
-        lstm_model.fit(generator_train, epochs=lstm_epochs, verbose=0)
-    st.success("✅ LSTM 모델 학습 완료!")
-    
-    # LSTM 예측값 생성
-    lstm_predictions = []
-    for i in range(len(scaled_lstm_data)):
-        if i < timesteps:
-            lstm_predictions.append(np.nan)
-        else:
-            input_seq = scaled_lstm_data[i - timesteps:i].reshape(1, timesteps, len(features_lstm))
-            prediction_scaled = lstm_model.predict(input_seq, verbose=0)[0][0]
-            lstm_predictions.append(prediction_scaled)
 
-    lstm_predictions_original = scaler_lstm.inverse_transform(np.array(lstm_predictions).reshape(-1, 1)).flatten()
-    df_model['lstm_pred'] = lstm_predictions_original
+    stock_code = crypto_list.get(st.session_state.selected_company)
 
-    # LightGBM 데이터 준비
-    features_lgbm = ['positive_sentiment', 'neutral_sentiment', 'negative_sentiment',
-                   'RSI', 'BB_upper', 'BB_lower', 'MACD', 'MACD_Signal', 'Golden_Dead_Cross', 'lstm_pred']
+    # Sidebar for parameters
+    st.sidebar.header("모델 파라미터 설정")
+    period = st.sidebar.selectbox("데이터 기간", ["100일", "300일", "500일"], index=1)
+    max_news = st.sidebar.slider("뉴스 검색 건수", min_value=10, max_value=100, value=50, step=10)
+    timesteps = st.sidebar.slider("LSTM 시퀀스 길이", min_value=5, max_value=30, value=15, step=1)
+    lstm_epochs = st.sidebar.slider("LSTM 에포크 수", min_value=10, max_value=50, value=20, step=5)
     
-    df_model = df_model.dropna(subset=features_lgbm + ['target'])
-    
-    if df_model.empty:
-        st.error("❌ 데이터 전처리 후 학습에 사용할 데이터가 없습니다. 검색 기간을 넓혀주세요.")
-        st.stop()
-        
-    X = df_model[features_lgbm]
-    y = df_model['target']
+    count_map = {"100일": 100, "300일": 300, "500일": 500}
+    data_count = count_map.get(period, 300)
 
-    # 학습/테스트 데이터 분리
-    split_idx = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
-    
-    with st.spinner("LightGBM 모델 학습 중..."):
-        lgbm_model = lgb.LGBMRegressor(random_state=42)
-        lgbm_model.fit(X_train, y_train, feature_name=features_lgbm)
+    if st.button("🚀 하이브리드 모델 분석 시작"):
+        st.subheader("1. 데이터 수집 및 전처리")
+        
+        with st.spinner("가격 데이터 로드 및 전처리 중..."):
+            df_asset = pyupbit.get_ohlcv(stock_code, interval="day", count=data_count)
+            if df_asset is None or df_asset.empty:
+                st.error(f"❌ {stock_code} 데이터를 가져오지 못했습니다. 종목 코드나 Upbit 서버 상태를 확인해주세요.")
+                st.stop()
+            
+            df_asset = df_asset.reset_index().rename(columns={'index': 'date', 'trade_price': 'close', 'open': 'open', 'high': 'high', 'low': 'low', 'volume': 'volume'})
+            df_asset['date'] = pd.to_datetime(df_asset['date']).dt.date
+            df_asset = calculate_technical_indicators(df_asset)
 
-    st.success("✅ LightGBM 모델 학습 완료!")
-    
-    st.markdown("---")
-    st.subheader("3. 최종 예측 및 모델 성능 평가")
+        with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
+            all_news = pd.DataFrame()
+            for start_idx in range(1, max_news + 1, 100):
+                count = min(100, max_news - start_idx + 1)
+                df_part = get_naver_news_api(company_name, display=count, start=start_idx)
+                all_news = pd.concat([all_news, df_part], ignore_index=True)
+                if len(df_part) < count:
+                    break
+            
+            all_news = all_news.dropna(subset=['Date'])
+            sentiment_results = all_news['Title'].apply(lambda x: analyze_sentiment(x))
+            sentiment_df = pd.json_normalize(sentiment_results)
+            all_news = pd.concat([all_news, sentiment_df], axis=1)
 
-    if X_test.empty:
-        st.warning("테스트 데이터가 부족합니다. 뉴스 검색 기간을 늘려주세요.")
-    else:
-        # LightGBM으로 최종 예측 수행
-        final_predictions = lgbm_model.predict(X_test)
-        
-        # 성능 지표 계산 및 출력
-        rmse = np.sqrt(mean_squared_error(y_test, final_predictions))
-        mape = mean_absolute_percentage_error(y_test, final_predictions) * 100
-        r2 = r2_score(y_test, final_predictions)
-        
-        st.markdown(f"""
-        - **RMSE (제곱근 평균 제곱 오차):** `{rmse:.2f}`
-        - **MAPE (평균 절대 백분율 오차):** `{mape:.2f}%`
-        - **R² (결정 계수):** `{r2:.2f}`
-        """)
-        st.info("💡 **모델 성능 해석:** RMSE는 예측값과 실제값의 차이를, MAPE는 백분율 오차를 나타냅니다. R²는 모델이 얼마나 잘 설명하는지를 보여주며 1에 가까울수록 좋습니다.")
+            news_grouped = all_news.groupby('Date').agg(
+                positive=('positive', 'mean'),
+                neutral=('neutral', 'mean'),
+                negative=('negative', 'mean')
+            ).reset_index()
 
-        # 시각화
-        df_test = df_model.iloc[split_idx:].copy()
-        df_test['Predicted_Close'] = final_predictions
-        
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(df_test['Date'], df_test['target'], label='실제 가격 (Actual)', color='blue')
-        ax.plot(df_test['Date'], df_test['Predicted_Close'], label='예측 가격 (Predicted)', linestyle='--', color='red')
-        
-        ax.set_title(f"{company_name} 하이브리드 모델 가격 예측")
-        ax.set_xlabel("날짜")
-        ax.set_ylabel("종가")
-        ax.legend()
-        ax.grid(True)
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-        
-        # 피처 중요도 시각화
+            news_grouped.rename(columns={'Date': 'date'}, inplace=True)
+            df_final = pd.merge(df_asset, news_grouped, on='date', how='left').fillna(0)
+            st.success("✅ 뉴스 감성 분석 완료 및 데이터 병합!")
+            st.dataframe(df_final[['date', 'close', 'positive', 'neutral', 'negative']].tail())
+            
         st.markdown("---")
-        st.subheader("4. 모델 피처 중요도")
-        feature_importance = pd.DataFrame({
-            'Feature': lgbm_model.feature_name_,
-            'Importance': lgbm_model.feature_importances_
-        }).sort_values(by='Importance', ascending=False)
-        st.bar_chart(feature_importance.set_index('Feature'))
+        st.subheader("2. 하이브리드 모델 학습")
+        
+        # LSTM 데이터 준비 및 학습
+        features_lstm = ['close']
+        X_lstm = df_final[features_lstm].values
+        scaler_lstm = MinMaxScaler(feature_range=(0,1))
+        scaled_lstm_data = scaler_lstm.fit_transform(X_lstm)
+        
+        generator_train = TimeseriesGenerator(
+            scaled_lstm_data, scaled_lstm_data, length=timesteps, batch_size=1
+        )
+        
+        model_lstm = Sequential([
+            LSTM(50, activation='relu', input_shape=(timesteps, len(features_lstm))),
+            Dense(1)
+        ])
+        model_lstm.compile(optimizer='adam', loss='mean_squared_error')
+        
+        with st.spinner("LSTM 모델 학습 중..."):
+            model_lstm.fit(generator_train, epochs=lstm_epochs, verbose=0)
+        
+        lstm_predictions = []
+        for i in range(len(scaled_lstm_data)):
+            if i < timesteps:
+                lstm_predictions.append(np.nan)
+            else:
+                input_seq = scaled_lstm_data[i - timesteps:i].reshape(1, timesteps, len(features_lstm))
+                prediction_scaled = model_lstm.predict(input_seq, verbose=0)[0][0]
+                lstm_predictions.append(prediction_scaled)
 
-        st.info("💡 **모델 해석:** `RSI`, `MACD`, `볼린저밴드`와 같은 기술적 지표가 가격 예측에 가장 큰 영향을 미칩니다. `Sentiment_Score`와 `lstm_pred`도 의미 있는 영향을 미치는 것을 확인할 수 있습니다.")
+        lstm_predictions_original = scaler_lstm.inverse_transform(np.array(lstm_predictions).reshape(-1, 1)).flatten()
+        df_final['lstm_pred'] = lstm_predictions_original
+        
+        # LightGBM 데이터 준비
+        features_lgbm = [
+            'open', 'high', 'low', 'close', 'volume', 'positive', 'neutral', 'negative', 
+            'RSI', 'BB_upper', 'BB_lower', 'MACD', 'MACD_Signal', 'Volatility', 'lstm_pred'
+        ]
+        
+        df_model = df_final.dropna(subset=features_lgbm + ['target'])
+        
+        if df_model.empty:
+            st.error("❌ 데이터 전처리 후 학습에 사용할 데이터가 없습니다. 기간을 늘려주세요.")
+            st.stop()
+            
+        X = df_model[features_lgbm]
+        y = df_model['target']
+
+        split_idx = int(len(X) * 0.8)
+        X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+        
+        with st.spinner("LightGBM 모델 학습 중..."):
+            lgbm_model = lgb.LGBMRegressor(random_state=42)
+            lgbm_model.fit(X_train, y_train, feature_name=features_lgbm)
+
+        st.success("✅ 하이브리드 모델 학습 완료!")
+        
+        st.markdown("---")
+        st.subheader("3. 최종 예측 및 모델 성능 평가")
+
+        if X_test.empty:
+            st.warning("테스트 데이터가 부족합니다. 기간을 늘려주세요.")
+        else:
+            final_predictions = lgbm_model.predict(X_test)
+            
+            # Performance metrics
+            rmse = np.sqrt(mean_squared_error(y_test, final_predictions))
+            mape = mean_absolute_percentage_error(y_test, final_predictions) * 100
+            r2 = r2_score(y_test, final_predictions)
+            
+            st.markdown(f"""
+            - **RMSE (제곱근 평균 제곱 오차):** `{rmse:.2f}`
+            - **MAPE (평균 절대 백분율 오차):** `{mape:.2f}%`
+            - **R² (결정 계수):** `{r2:.2f}`
+            """)
+
+            # Visualization
+            df_test = df_model.iloc[split_idx:].copy()
+            df_test['Predicted_Close'] = final_predictions
+            
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(df_test['date'], df_test['target'], label='실제 가격 (Actual)', color='blue')
+            ax.plot(df_test['date'], df_test['Predicted_Close'], label='예측 가격 (Predicted)', linestyle='--', color='red')
+            
+            ax.set_title(f"{company_name} 하이브리드 모델 가격 예측")
+            ax.set_xlabel("날짜")
+            ax.set_ylabel("종가")
+            ax.legend()
+            ax.grid(True)
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
+            
+            # Feature Importance
+            st.markdown("---")
+            st.subheader("4. 모델 피처 중요도")
+            feature_importance = pd.DataFrame({
+                'Feature': lgbm_model.feature_name_,
+                'Importance': lgbm_model.feature_importances_
+            }).sort_values(by='Importance', ascending=False)
+            st.bar_chart(feature_importance.set_index('Feature'))
+            
+            st.info("💡 **모델 해석:** `RSI`, `MACD`, `볼린저밴드`와 같은 기술적 지표가 가격 예측에 가장 큰 영향을 미칩니다. 뉴스 감성 점수와 LSTM 예측값도 중요한 영향을 미치는 것을 확인할 수 있습니다.")
+            
+if __name__ == "__main__":
+    main()
