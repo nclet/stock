@@ -229,22 +229,27 @@ def main():
         index=company_names.index(st.session_state.selected_company),
         key="selected_company"
     )
-
     stock_code = crypto_list.get(st.session_state.selected_company)
 
-    # Sidebar for parameters
-    st.sidebar.header("모델 파라미터 설정")
-    period = st.sidebar.selectbox("데이터 기간", ["100일", "300일", "500일"], index=1)
-    news_period = st.sidebar.selectbox("감성 분석 기간", ["1일", "3일", "5일", "7일"], index=1)
-    lstm_epochs = st.sidebar.slider("LSTM 에포크 수", min_value=10, max_value=100, value=30, step=5)
-    timesteps = st.sidebar.slider("LSTM 시퀀스 길이", min_value=5, max_value=30, value=15, step=1)
+    # Main area for parameters
+    st.markdown("---")
+    st.subheader("⚙️ 모델 파라미터 설정")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        period = st.selectbox("📊 가격 데이터 기간", ["100일", "300일", "500일"], index=1)
+        news_period = st.selectbox("📰 감성 분석 기간", ["1일", "3일", "5일", "7일"], index=1)
+    with col2:
+        lstm_epochs = st.slider("📈 LSTM 에포크 수", min_value=10, max_value=100, value=30, step=5)
+        timesteps = st.slider("⏳ LSTM 시퀀스 길이", min_value=5, max_value=30, value=15, step=1)
 
     count_map = {"100일": 100, "300일": 300, "500일": 500}
     data_count = count_map.get(period, 300)
-    
     news_days = int(news_period.replace('일', ''))
 
-    if st.button("🚀 하이브리드 모델 분석 시작"):
+    st.markdown("---")
+
+    if st.button("🚀 하이브리드 모델 분석 시작", use_container_width=True):
         st.subheader("1. 데이터 수집 및 전처리")
         
         with st.spinner("가격 데이터 로드 및 전처리 중..."):
