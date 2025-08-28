@@ -19,3 +19,4 @@ sentencepiece
 xgboost
 accelerate
 pyupbit
+lightgbm
