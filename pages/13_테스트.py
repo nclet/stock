@@ -31,8 +31,8 @@ st.set_page_config(page_title="Crypto Sentiment & Trend Predictor", layout="wide
 st.title("📊 하이브리드 암호화폐 가격 예측 모델 (고급)")
 
 st.markdown("""
-이 모델은 **기술적 지표**, **뉴스 감성**, **시장 심리(Fear & Greed Index)**, 그리고 **구글 트렌드** 데이터를 결합하여
-주요 암호화폐의 가격을 예측합니다.
+이 모델은 **기술적 지표**, **뉴스 감성**, **시장 심리(Fear & Greed Index)**, **구글 트렌드**, 그리고
+**온체인 데이터(크립토퀀트)**를 결합하여 주요 암호화폐의 가격을 예측합니다.
 """)
 
 # ----------------------
@@ -180,6 +180,39 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ----------------------
+# CryptoQuant API
+# ----------------------
+@st.cache_data
+def get_cryptoquant_data(metric, window, asset):
+    """
+    Fetches data from CryptoQuant free API.
+    Note: Requires a CryptoQuant API key in st.secrets.
+    """
+    try:
+        api_key = st.secrets["cryptoquant"]["api_key"]
+    except KeyError:
+        st.warning("❌ CryptoQuant API 키가 Streamlit Secrets에 설정되지 않았습니다. 온체인 데이터는 불러오지 않습니다.")
+        return pd.DataFrame()
+
+    url = f"https://api.cryptoquant.com/v1/{asset}/network-data/{metric}?window={window}"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json().get('data', [])
+        df = pd.DataFrame(data)
+        if not df.empty:
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df.rename(columns={'value': f'cq_{metric}'}, inplace=True)
+            return df[['date', f'cq_{metric}']]
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ CryptoQuant API 연결 오류: {e}")
+    except JSONDecodeError as e:
+        st.error(f"❌ CryptoQuant API 응답 파싱 오류: {e}")
+    return pd.DataFrame()
+
+# ----------------------
 # Fear & Greed Index
 # ----------------------
 @st.cache_data
@@ -216,7 +249,6 @@ def get_google_trends(keyword, start_date, end_date):
         st.error(f"❌ 구글 트렌드 데이터를 가져오는 중 오류가 발생했습니다: {e}")
     return pd.DataFrame()
 
-
 # ----------------------
 # Technical Indicators Calculation
 # ----------------------
@@ -224,7 +256,7 @@ def calculate_technical_indicators(df):
     """Calculates RSI, Bollinger Bands, MACD, and Volatility."""
     df = df.copy()
     
-    # RSI (Relative Strength Index)
+    # RSI (Relative Stength Index)
     df['change'] = df['close'].diff()
     df['gain'] = df['change'].apply(lambda x: x if x > 0 else 0)
     df['loss'] = df['change'].apply(lambda x: abs(x) if x < 0 else 0)
@@ -328,19 +360,22 @@ def main():
             news_grouped.rename(columns={'Date': 'date'}, inplace=True)
             df_final = pd.merge(df_asset, news_grouped, on='date', how='left').fillna(0)
             
-        with st.spinner("Fear & Greed Index, 구글 트렌드 데이터 로드 중..."):
+        with st.spinner("Fear & Greed Index, 구글 트렌드, 크립토퀀트 데이터 로드 중..."):
             df_fng = get_fear_greed_index()
             df_fng['date'] = df_fng['date'].dt.date
-            
             df_final = pd.merge(df_final, df_fng, on='date', how='left').fillna(0)
 
-            # Convert keyword to lowercase for consistency with pytrends
             keyword_to_search = company_name.lower()
             df_trends = get_google_trends(keyword_to_search, df_final['date'].min(), df_final['date'].max())
             df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
-            
             df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
-
+            
+            # Add CryptoQuant data
+            # Note: CryptoQuant free API is limited. Replace with your desired metric and asset.
+            df_cq = get_cryptoquant_data(metric='exchange_flow_in_all', window='day', asset='btc') # Example: btc
+            if not df_cq.empty:
+                df_final = pd.merge(df_final, df_cq, on='date', how='left').fillna(0)
+                
         st.success("✅ 모든 데이터 수집 및 병합 완료!")
         st.dataframe(df_final[['date', 'close', 'positive', 'fng_index', 'google_trends']].tail())
             
@@ -384,6 +419,10 @@ def main():
             'RSI', 'BB_upper', 'BB_lower', 'MACD', 'MACD_Signal', 'Volatility', 'lstm_pred',
             'fng_index', 'google_trends'
         ]
+        
+        # Check if CryptoQuant data exists and add it to features
+        if 'cq_exchange_flow_in_all' in df_final.columns:
+            features_lgbm.append('cq_exchange_flow_in_all')
         
         df_model = df_final.dropna(subset=features_lgbm + ['target'])
         
@@ -442,7 +481,7 @@ def main():
             
             st.markdown("---")
             st.subheader("4. 추가 지표 시각화")
-
+            
             # F&G Index Visualization
             fig_fng, ax_fng = plt.subplots(figsize=(12, 4))
             ax_fng.plot(df_final['date'], df_final['fng_index'], label='Fear & Greed Index', color='purple')
@@ -464,6 +503,18 @@ def main():
             ax_trends.grid(True)
             plt.xticks(rotation=45)
             st.pyplot(fig_trends)
+            
+            # CryptoQuant Data Visualization
+            if 'cq_exchange_flow_in_all' in df_final.columns:
+                fig_cq, ax_cq = plt.subplots(figsize=(12, 4))
+                ax_cq.plot(df_final['date'], df_final['cq_exchange_flow_in_all'], label='거래소로 유입된 코인량', color='darkgreen')
+                ax_cq.set_title(f"크립토퀀트 - 거래소로 유입된 {company_name} 수량")
+                ax_cq.set_xlabel("날짜")
+                ax_cq.set_ylabel("코인 수량")
+                ax_cq.legend()
+                ax_cq.grid(True)
+                plt.xticks(rotation=45)
+                st.pyplot(fig_cq)
 
             # Feature Importance
             st.markdown("---")
