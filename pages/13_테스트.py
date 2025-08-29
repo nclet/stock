@@ -450,7 +450,7 @@ def main():
             
             # Performance metrics
             rmse = np.sqrt(mean_squared_error(y_test, final_predictions))
-            # Corrected the typo in the function name
+            # The correct function name is mean_absolute_percentage_error
             mape = mean_absolute_percentage_error(y_test, final_predictions) * 100
             r2 = r2_score(y_test, final_predictions)
             
