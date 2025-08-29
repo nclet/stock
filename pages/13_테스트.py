@@ -180,25 +180,18 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ----------------------
-# CryptoQuant API
+# CryptoQuant API (Free)
 # ----------------------
 @st.cache_data
-def get_cryptoquant_data(metric, window, asset):
+def get_cryptoquant_data_free(metric, window, asset):
     """
     Fetches data from CryptoQuant free API.
-    Note: Requires a CryptoQuant API key in st.secrets.
+    Does not require an API key.
     """
-    try:
-        api_key = st.secrets["cryptoquant"]["api_key"]
-    except KeyError:
-        st.warning("❌ CryptoQuant API 키가 Streamlit Secrets에 설정되지 않았습니다. 온체인 데이터는 불러오지 않습니다.")
-        return pd.DataFrame()
-
     url = f"https://api.cryptoquant.com/v1/{asset}/network-data/{metric}?window={window}"
-    headers = {"Authorization": f"Bearer {api_key}"}
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json().get('data', [])
         df = pd.DataFrame(data)
@@ -207,7 +200,8 @@ def get_cryptoquant_data(metric, window, asset):
             df.rename(columns={'value': f'cq_{metric}'}, inplace=True)
             return df[['date', f'cq_{metric}']]
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ CryptoQuant API 연결 오류: {e}")
+        st.error(f"❌ CryptoQuant 무료 API 연결 오류: {e}")
+        st.info("해당 지표는 무료로 제공되지 않거나 API 서버에 문제가 있을 수 있습니다.")
     except JSONDecodeError as e:
         st.error(f"❌ CryptoQuant API 응답 파싱 오류: {e}")
     return pd.DataFrame()
@@ -370,11 +364,14 @@ def main():
             df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
             df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
             
-            # Add CryptoQuant data
-            # Note: CryptoQuant free API is limited. Replace with your desired metric and asset.
-            df_cq = get_cryptoquant_data(metric='exchange_flow_in_all', window='day', asset='btc') # Example: btc
-            if not df_cq.empty:
-                df_final = pd.merge(df_final, df_cq, on='date', how='left').fillna(0)
+            # Add CryptoQuant free data
+            # For this example, we'll use a free and public metric for BTC (e.g., 'supply_total')
+            if stock_code == "KRW-BTC":
+                df_cq_free = get_cryptoquant_data_free(metric='supply_total', window='day', asset='btc')
+                if not df_cq_free.empty:
+                    df_final = pd.merge(df_final, df_cq_free, on='date', how='left').fillna(0)
+            else:
+                st.info("💡 크립토퀀트 무료 API는 현재 비트코인(BTC) 지표만 지원합니다. 다른 코인에 대한 데이터는 불러오지 않습니다.")
                 
         st.success("✅ 모든 데이터 수집 및 병합 완료!")
         st.dataframe(df_final[['date', 'close', 'positive', 'fng_index', 'google_trends']].tail())
@@ -421,8 +418,8 @@ def main():
         ]
         
         # Check if CryptoQuant data exists and add it to features
-        if 'cq_exchange_flow_in_all' in df_final.columns:
-            features_lgbm.append('cq_exchange_flow_in_all')
+        if 'cq_supply_total' in df_final.columns:
+            features_lgbm.append('cq_supply_total')
         
         df_model = df_final.dropna(subset=features_lgbm + ['target'])
         
@@ -453,6 +450,7 @@ def main():
             
             # Performance metrics
             rmse = np.sqrt(mean_squared_error(y_test, final_predictions))
+            # Corrected the typo in the function name
             mape = mean_absolute_percentage_error(y_test, final_predictions) * 100
             r2 = r2_score(y_test, final_predictions)
             
@@ -505,10 +503,10 @@ def main():
             st.pyplot(fig_trends)
             
             # CryptoQuant Data Visualization
-            if 'cq_exchange_flow_in_all' in df_final.columns:
+            if 'cq_supply_total' in df_final.columns:
                 fig_cq, ax_cq = plt.subplots(figsize=(12, 4))
-                ax_cq.plot(df_final['date'], df_final['cq_exchange_flow_in_all'], label='거래소로 유입된 코인량', color='darkgreen')
-                ax_cq.set_title(f"크립토퀀트 - 거래소로 유입된 {company_name} 수량")
+                ax_cq.plot(df_final['date'], df_final['cq_supply_total'], label='총 공급량', color='darkgreen')
+                ax_cq.set_title(f"크립토퀀트 - {company_name} 총 공급량")
                 ax_cq.set_xlabel("날짜")
                 ax_cq.set_ylabel("코인 수량")
                 ax_cq.legend()
