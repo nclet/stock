@@ -221,7 +221,7 @@
 # # ----------------------
 # # Technical Indicators Calculation
 # # ----------------------
-# def calculate_technical_indicators(df):
+# def calculate_technical_indicators(df, ma_periods):
 #     """Calculates RSI, Bollinger Bands, MACD, and Volatility."""
 #     df = df.copy()
     
@@ -250,6 +250,10 @@
 #     df['Daily_Return'] = df['close'].pct_change()
 #     df['Volatility'] = df['Daily_Return'].rolling(window=20).std() * np.sqrt(252)
     
+#     # Additional Moving Averages based on user input
+#     for period in ma_periods:
+#         df[f'MA{period}'] = df['close'].rolling(window=period).mean()
+
 #     # Target variable for next day's price prediction
 #     df['target'] = df['close'].shift(-1)
     
@@ -284,6 +288,20 @@
 #         lstm_epochs = st.slider("📈 LSTM 에포크 수", min_value=10, max_value=100, value=30, step=5)
 #         timesteps = st.slider("⏳ LSTM 시퀀스 길이", min_value=5, max_value=30, value=15, step=1)
 
+#     st.markdown("---")
+#     st.subheader("⚙️ 피처 엔지니어링 설정")
+
+#     col3, col4 = st.columns(2)
+#     with col3:
+#         lag_period = st.slider("⏪ 지연 피처(Lag Features) 기간", min_value=1, max_value=10, value=3, step=1, help="과거 N일 전의 데이터를 새로운 피처로 추가합니다.")
+#     with col4:
+#         ma_periods = st.multiselect(
+#             "🧮 추가 이동평균(MA) 기간",
+#             options=[5, 10, 50, 100],
+#             default=[5, 50],
+#             help="모델에 추가할 이동평균 기간을 선택하세요."
+#         )
+
 #     count_map = {"100일": 100, "300일": 300, "500일": 500}
 #     data_count = count_map.get(period, 300)
 #     news_days = int(news_period.replace('일', ''))
@@ -301,7 +319,12 @@
             
 #             df_asset = df_asset.reset_index().rename(columns={'index': 'date', 'trade_price': 'close', 'open': 'open', 'high': 'high', 'low': 'low', 'volume': 'volume'})
 #             df_asset['date'] = pd.to_datetime(df_asset['date']).dt.date
-#             df_asset = calculate_technical_indicators(df_asset)
+#             df_asset = calculate_technical_indicators(df_asset, ma_periods)
+            
+#             # Add Lag Features
+#             for lag in range(1, lag_period + 1):
+#                 df_asset[f'close_lag_{lag}'] = df_asset['close'].shift(lag)
+#                 df_asset[f'volume_lag_{lag}'] = df_asset['volume'].shift(lag)
 
 #         with st.spinner("뉴스 크롤링 및 감성 분석 중..."):
 #             end_date_news = datetime.now().date()
@@ -327,22 +350,25 @@
 #             ).reset_index()
 
 #             news_grouped.rename(columns={'Date': 'date'}, inplace=True)
-#             df_final = pd.merge(df_asset, news_grouped, on='date', how='left').fillna(0)
+#             df_final = pd.merge(df_asset, news_grouped, on='date', how='left')
             
 #         with st.spinner("Fear & Greed Index 및 구글 트렌드 데이터 로드 중..."):
 #             df_fng = get_fear_greed_index()
 #             df_fng['date'] = df_fng['date'].dt.date
-#             df_final = pd.merge(df_final, df_fng, on='date', how='left').fillna(0)
+#             df_final = pd.merge(df_final, df_fng, on='date', how='left')
 
 #             keyword_to_search = company_name.lower()
 #             df_trends = get_google_trends(keyword_to_search, df_final['date'].min(), df_final['date'].max())
             
 #             if not df_trends.empty:
 #                 df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
-#                 df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
+#                 df_final = pd.merge(df_final, df_trends, on='date', how='left')
 #             else:
 #                 st.warning("⚠️ 구글 트렌드 데이터를 불러오는 데 실패했습니다. 해당 지표를 제외하고 분석을 진행합니다.")
-                
+            
+#         # 결측치를 이전 값으로 채우기
+#         df_final = df_final.ffill().bfill()
+        
 #         st.success("✅ 모든 데이터 수집 및 병합 완료!")
 #         st.dataframe(df_final[['date', 'close', 'positive', 'fng_index', 'google_trends']].tail())
             
@@ -387,10 +413,17 @@
 #             'fng_index', 'google_trends'
 #         ]
         
+#         # Add dynamic features
+#         for period in ma_periods:
+#             features_lgbm.append(f'MA{period}')
+#         for lag in range(1, lag_period + 1):
+#             features_lgbm.append(f'close_lag_{lag}')
+#             features_lgbm.append(f'volume_lag_{lag}')
+        
 #         df_model = df_final.dropna(subset=features_lgbm + ['target'])
         
 #         if df_model.empty:
-#             st.error("❌ 데이터 전처리 후 학습에 사용할 데이터가 없습니다. 기간을 늘려주세요.")
+#             st.error("❌ 데이터 전처리 후 학습에 사용할 데이터가 없습니다. 기간을 늘려주거나 피처 설정을 조정해주세요.")
 #             st.stop()
             
 #         X = df_model[features_lgbm]
@@ -780,12 +813,20 @@ def main():
     with col3:
         lag_period = st.slider("⏪ 지연 피처(Lag Features) 기간", min_value=1, max_value=10, value=3, step=1, help="과거 N일 전의 데이터를 새로운 피처로 추가합니다.")
     with col4:
-        ma_periods = st.multiselect(
-            "🧮 추가 이동평균(MA) 기간",
-            options=[5, 10, 50, 100],
-            default=[5, 50],
-            help="모델에 추가할 이동평균 기간을 선택하세요."
+        ma_input = st.text_input(
+            "🧮 추가 이동평균(MA) 기간 (콤마로 구분)",
+            "5, 20, 50, 100",
+            help="예: 5, 20, 50. 0부터 120까지의 정수를 입력하세요."
         )
+        try:
+            ma_periods = [int(p.strip()) for p in ma_input.split(',') if p.strip().isdigit() and 0 <= int(p.strip()) <= 120]
+        except ValueError:
+            st.error("❌ 이동평균 기간에 유효한 숫자를 입력해주세요.")
+            ma_periods = []
+        if not ma_periods:
+            st.warning("⚠️ 유효한 이동평균 기간이 없습니다. 기본값(20일)만 사용합니다.")
+            ma_periods = [20]
+
 
     count_map = {"100일": 100, "300일": 300, "500일": 500}
     data_count = count_map.get(period, 300)
@@ -938,37 +979,37 @@ def main():
             r2 = r2_score(y_test, final_predictions)
             
             st.markdown(f"""
-            - **RMSE (제곱근 평균 제곱 오차):** `{rmse:.2f}`
-            - **MAPE (평균 절대 백분율 오차):** `{mape:.2f}%`
-            - **R² (결정 계수):** `{r2:.2f}`
+            - **RMSE (Root Mean Squared Error):** `{rmse:.2f}`
+            - **MAPE (Mean Absolute Percentage Error):** `{mape:.2f}%`
+            - **R² (R-squared):** `{r2:.2f}`
             """)
 
             # Visualization
-            st.subheader("📈 가격 예측 차트")
+            st.subheader("📈 Price Prediction Chart")
             df_test = df_final.iloc[split_idx:].copy()
             df_test.loc[df_test.index, 'Predicted_Close'] = pd.Series(final_predictions, index=X_test.index)
             
             fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df_test['date'], df_test['close'], label='실제 가격 (Actual)', color='blue')
-            ax.plot(df_test['date'], df_test['Predicted_Close'], label='예측 가격 (Predicted)', linestyle='--', color='red')
+            ax.plot(df_test['date'], df_test['close'], label='Actual', color='blue')
+            ax.plot(df_test['date'], df_test['Predicted_Close'], label='Predicted', linestyle='--', color='red')
             
-            ax.set_title(f"{company_name} 하이브리드 모델 가격 예측")
-            ax.set_xlabel("날짜")
-            ax.set_ylabel("종가")
+            ax.set_title(f"Hybrid Model Price Prediction for {company_name}")
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Closing Price")
             ax.legend()
             ax.grid(True)
             plt.xticks(rotation=45)
             st.pyplot(fig)
             
             st.markdown("---")
-            st.subheader("4. 추가 지표 시각화")
+            st.subheader("4. Additional Indicator Visualization")
             
             # F&G Index Visualization
             fig_fng, ax_fng = plt.subplots(figsize=(12, 4))
             ax_fng.plot(df_final['date'], df_final['fng_index'], label='Fear & Greed Index', color='purple')
             ax_fng.set_title("Fear & Greed Index")
-            ax_fng.set_xlabel("날짜")
-            ax_fng.set_ylabel("지수 (0-100)")
+            ax_fng.set_xlabel("Date")
+            ax_fng.set_ylabel("Index (0-100)")
             ax_fng.legend()
             ax_fng.grid(True)
             plt.xticks(rotation=45)
@@ -977,9 +1018,9 @@ def main():
             # Google Trends Visualization
             fig_trends, ax_trends = plt.subplots(figsize=(12, 4))
             ax_trends.plot(df_final['date'], df_final['google_trends'], label='Google Trends', color='orange')
-            ax_trends.set_title("Google 검색 트렌드")
-            ax_trends.set_xlabel("날짜")
-            ax_trends.set_ylabel("상대적 검색량")
+            ax_trends.set_title("Google Search Trends")
+            ax_trends.set_xlabel("Date")
+            ax_trends.set_ylabel("Relative Search Volume")
             ax_trends.legend()
             ax_trends.grid(True)
             plt.xticks(rotation=45)
