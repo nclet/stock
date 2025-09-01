@@ -200,6 +200,8 @@ def get_cryptoquant_data_free(metric, window, asset):
             df.rename(columns={'value': f'cq_{metric}'}, inplace=True)
             return df[['date', f'cq_{metric}']]
     except requests.exceptions.RequestException as e:
+        # This error handles the 401 Unauthorized issue you reported.
+        # The program will continue running without this data.
         st.error(f"❌ CryptoQuant 무료 API 연결 오류: {e}")
         st.info("해당 지표는 무료로 제공되지 않거나 API 서버에 문제가 있을 수 있습니다.")
     except JSONDecodeError as e:
@@ -232,6 +234,7 @@ def get_fear_greed_index():
 def get_google_trends(keyword, start_date, end_date):
     """Fetches Google Trends data for a keyword."""
     pytrends = TrendReq(hl='ko-KR', tz=360)
+    df = pd.DataFrame() # Initialize an empty DataFrame
     try:
         pytrends.build_payload([keyword], cat=0, timeframe=f'{start_date.strftime("%Y-%m-%d")} {end_date.strftime("%Y-%m-%d")}', geo='', gprop='')
         df = pytrends.interest_over_time()
@@ -241,6 +244,7 @@ def get_google_trends(keyword, start_date, end_date):
             return df[['date', 'google_trends']]
     except Exception as e:
         st.error(f"❌ 구글 트렌드 데이터를 가져오는 중 오류가 발생했습니다: {e}")
+        st.info("429 오류는 잠시 후 다시 시도하면 해결될 수 있습니다.")
     return pd.DataFrame()
 
 # ----------------------
@@ -361,9 +365,14 @@ def main():
 
             keyword_to_search = company_name.lower()
             df_trends = get_google_trends(keyword_to_search, df_final['date'].min(), df_final['date'].max())
-            df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
-            df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
             
+            # Add a check to handle cases where Google Trends data is not available
+            if not df_trends.empty:
+                df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
+                df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
+            else:
+                st.warning("⚠️ 구글 트렌드 데이터를 불러오는 데 실패했습니다. 해당 지표를 제외하고 분석을 진행합니다.")
+                
             # Add CryptoQuant free data
             # For this example, we'll use a free and public metric for BTC (e.g., 'supply_total')
             if stock_code == "KRW-BTC":
