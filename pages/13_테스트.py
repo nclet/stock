@@ -31,8 +31,8 @@ st.set_page_config(page_title="Crypto Sentiment & Trend Predictor", layout="wide
 st.title("📊 하이브리드 암호화폐 가격 예측 모델 (고급)")
 
 st.markdown("""
-이 모델은 **기술적 지표**, **뉴스 감성**, **시장 심리(Fear & Greed Index)**, **구글 트렌드**, 그리고
-**온체인 데이터(크립토퀀트)**를 결합하여 주요 암호화폐의 가격을 예측합니다.
+이 모델은 **기술적 지표**, **뉴스 감성**, **시장 심리(Fear & Greed Index)**, 그리고
+**구글 트렌드**를 결합하여 주요 암호화폐의 가격을 예측합니다.
 """)
 
 # ----------------------
@@ -180,35 +180,6 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ----------------------
-# CryptoQuant API (Free)
-# ----------------------
-@st.cache_data
-def get_cryptoquant_data_free(metric, window, asset):
-    """
-    Fetches data from CryptoQuant free API.
-    Does not require an API key.
-    """
-    url = f"https://api.cryptoquant.com/v1/{asset}/network-data/{metric}?window={window}"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json().get('data', [])
-        df = pd.DataFrame(data)
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['date']).dt.date
-            df.rename(columns={'value': f'cq_{metric}'}, inplace=True)
-            return df[['date', f'cq_{metric}']]
-    except requests.exceptions.RequestException as e:
-        # This error handles the 401 Unauthorized issue you reported.
-        # The program will continue running without this data.
-        st.error(f"❌ CryptoQuant 무료 API 연결 오류: {e}")
-        st.info("해당 지표는 무료로 제공되지 않거나 API 서버에 문제가 있을 수 있습니다.")
-    except JSONDecodeError as e:
-        st.error(f"❌ CryptoQuant API 응답 파싱 오류: {e}")
-    return pd.DataFrame()
-
-# ----------------------
 # Fear & Greed Index
 # ----------------------
 @st.cache_data
@@ -234,7 +205,7 @@ def get_fear_greed_index():
 def get_google_trends(keyword, start_date, end_date):
     """Fetches Google Trends data for a keyword."""
     pytrends = TrendReq(hl='ko-KR', tz=360)
-    df = pd.DataFrame() # Initialize an empty DataFrame
+    df = pd.DataFrame()
     try:
         pytrends.build_payload([keyword], cat=0, timeframe=f'{start_date.strftime("%Y-%m-%d")} {end_date.strftime("%Y-%m-%d")}', geo='', gprop='')
         df = pytrends.interest_over_time()
@@ -358,7 +329,7 @@ def main():
             news_grouped.rename(columns={'Date': 'date'}, inplace=True)
             df_final = pd.merge(df_asset, news_grouped, on='date', how='left').fillna(0)
             
-        with st.spinner("Fear & Greed Index, 구글 트렌드, 크립토퀀트 데이터 로드 중..."):
+        with st.spinner("Fear & Greed Index 및 구글 트렌드 데이터 로드 중..."):
             df_fng = get_fear_greed_index()
             df_fng['date'] = df_fng['date'].dt.date
             df_final = pd.merge(df_final, df_fng, on='date', how='left').fillna(0)
@@ -366,21 +337,11 @@ def main():
             keyword_to_search = company_name.lower()
             df_trends = get_google_trends(keyword_to_search, df_final['date'].min(), df_final['date'].max())
             
-            # Add a check to handle cases where Google Trends data is not available
             if not df_trends.empty:
                 df_trends['date'] = pd.to_datetime(df_trends['date']).dt.date
                 df_final = pd.merge(df_final, df_trends, on='date', how='left').fillna(0)
             else:
                 st.warning("⚠️ 구글 트렌드 데이터를 불러오는 데 실패했습니다. 해당 지표를 제외하고 분석을 진행합니다.")
-                
-            # Add CryptoQuant free data
-            # For this example, we'll use a free and public metric for BTC (e.g., 'supply_total')
-            if stock_code == "KRW-BTC":
-                df_cq_free = get_cryptoquant_data_free(metric='supply_total', window='day', asset='btc')
-                if not df_cq_free.empty:
-                    df_final = pd.merge(df_final, df_cq_free, on='date', how='left').fillna(0)
-            else:
-                st.info("💡 크립토퀀트 무료 API는 현재 비트코인(BTC) 지표만 지원합니다. 다른 코인에 대한 데이터는 불러오지 않습니다.")
                 
         st.success("✅ 모든 데이터 수집 및 병합 완료!")
         st.dataframe(df_final[['date', 'close', 'positive', 'fng_index', 'google_trends']].tail())
@@ -426,10 +387,6 @@ def main():
             'fng_index', 'google_trends'
         ]
         
-        # Check if CryptoQuant data exists and add it to features
-        if 'cq_supply_total' in df_final.columns:
-            features_lgbm.append('cq_supply_total')
-        
         df_model = df_final.dropna(subset=features_lgbm + ['target'])
         
         if df_model.empty:
@@ -459,7 +416,6 @@ def main():
             
             # Performance metrics
             rmse = np.sqrt(mean_squared_error(y_test, final_predictions))
-            # The correct function name is mean_absolute_percentage_error
             mape = mean_absolute_percentage_error(y_test, final_predictions) * 100
             r2 = r2_score(y_test, final_predictions)
             
@@ -511,17 +467,6 @@ def main():
             plt.xticks(rotation=45)
             st.pyplot(fig_trends)
             
-            # CryptoQuant Data Visualization
-            if 'cq_supply_total' in df_final.columns:
-                fig_cq, ax_cq = plt.subplots(figsize=(12, 4))
-                ax_cq.plot(df_final['date'], df_final['cq_supply_total'], label='총 공급량', color='darkgreen')
-                ax_cq.set_title(f"크립토퀀트 - {company_name} 총 공급량")
-                ax_cq.set_xlabel("날짜")
-                ax_cq.set_ylabel("코인 수량")
-                ax_cq.legend()
-                ax_cq.grid(True)
-                plt.xticks(rotation=45)
-                st.pyplot(fig_cq)
 
             # Feature Importance
             st.markdown("---")
