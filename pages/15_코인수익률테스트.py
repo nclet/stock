@@ -17,35 +17,7 @@ st.title("📈 암호화폐 투자 지표 백테스팅")
 st.write("##### 업비트 KRW 마켓의 다양한 암호화폐에 대해 백테스팅을 실행할 수 있습니다.")
 
 # ------------------------
-# ✨ 한글 폰트 설정
-# ------------------------
-def get_korean_font():
-    """시스템에 설치된 한글 폰트를 찾아 Matplotlib에 설정합니다."""
-    font_path = ""
-    for font in fm.findSystemFonts(fontpaths=None, fontext='ttf'):
-        if 'NanumGothic' in font:
-            font_path = font
-            break
-        elif 'Malgun Gothic' in font:
-            font_path = font
-            break
-        elif 'AppleGothic' in font:
-            font_path = font
-            break
-    
-    if font_path:
-        fm.fontManager.addfont(font_path)
-        plt.rc('font', family=fm.FontProperties(fname=font_path).get_name())
-        plt.rc('axes', unicode_minus=False) # 마이너스 폰트 깨짐 방지
-        st.info(f"✅ 한글 폰트 '{fm.FontProperties(fname=font_path).get_name()}'가 성공적으로 설정되었습니다.")
-    else:
-        st.warning("⚠️ 시스템에 한글 폰트(나눔고딕, 맑은고딕 등)가 설치되어 있지 않습니다. 차트의 한글이 깨질 수 있습니다.")
-
-get_korean_font()
-
-
-# ------------------------
-# ✨ 암호화폐 종목 목록 로드 (Upbit API)
+# 암호화폐 종목 목록 로드 (Upbit API)
 # ------------------------
 @st.cache_data
 def get_upbit_markets():
@@ -108,7 +80,7 @@ if start_date >= end_date:
     st.stop()
 
 # ------------------------
-# ✨ Upbit API 함수 (ccxt 대신 requests 사용)
+# Upbit API 함수 (ccxt 대신 requests 사용)
 # ------------------------
 @st.cache_data(ttl=3600)
 def load_crypto_data(symbol, start_date, end_date):
@@ -323,8 +295,6 @@ if st.button("🚀 백테스팅 실행"):
         df['Cumulative_Buy_And_Hold_Return'] = 1.0
         df['Buy_Signal'] = False
         df['Sell_Signal'] = False
-        df['High_Water_Mark'] = 1.0  # 최대 낙폭 계산을 위한 고점
-        df['Drawdown'] = 0.0 # 최대 낙폭 계산용
 
         in_position = False
         first_index = df.index[0]
@@ -436,17 +406,38 @@ if st.button("🚀 백테스팅 실행"):
             df.loc[current_date, 'Cumulative_Buy_And_Hold_Return'] = \
                 df['Cumulative_Buy_And_Hold_Return'].iloc[i-1] * (1 + daily_return)
 
-            # --- 최대 낙폭(MDD) 계산 ---
-            df.loc[current_date, 'High_Water_Mark'] = max(
-                df['High_Water_Mark'].iloc[i-1], df.loc[current_date, 'Cumulative_Strategy_Return']
-            )
-            df.loc[current_date, 'Drawdown'] = (df.loc[current_date, 'High_Water_Mark'] - df.loc[current_date, 'Cumulative_Strategy_Return']) / df.loc[current_date, 'High_Water_Mark']
-
         st.info(f"백테스팅 완료! 총 매수 신호: {buy_signal_count}회, 총 매도 신호: {sell_signal_count}회.")
         st.info(f"마지막 포지션 상태: {'보유 중' if in_position else '포지션 없음'}")
 
         return df
 
+    # --- MDD 계산 로직 수정 ---
+    # MDD를 전체 기간의 누적 수익률을 기반으로 정확히 계산하는 함수
+    def calculate_mdd(series):
+        if series.empty:
+            return 0, None, None
+
+        peak = series.iloc[0]
+        max_drawdown = 0
+        peak_date = series.index[0]
+        trough_date = series.index[0]
+        
+        # 전체 기간 동안의 MDD를 정확히 계산합니다.
+        for i in range(1, len(series)):
+            price = series.iloc[i]
+            date = series.index[i]
+            
+            if price > peak:
+                peak = price
+                peak_date = date
+            
+            drawdown = (peak - price) / peak
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                trough_date = date
+
+        return max_drawdown, peak_date, trough_date
+    
     st.write("### 💸 백테스팅 결과")
     results = backtest_strategy(processed_data.copy(), use_sma, use_momentum, use_rsi, use_macd, use_obv,
                                  short_ma_period, long_ma_period,
@@ -462,8 +453,11 @@ if st.button("🚀 백테스팅 실행"):
     final_strategy_return = (results['Cumulative_Strategy_Return'].iloc[-1] - 1) * 100
     final_buy_and_hold_return = (results['Cumulative_Buy_And_Hold_Return'].iloc[-1] - 1) * 100
     
-    annualized_strategy_return = (1 + final_strategy_return / 100)**(365 / total_days) - 1
-    max_drawdown = results['Drawdown'].max() * 100
+    annualized_strategy_return = (1 + final_strategy_return / 100)**(365 / total_days) - 1 if total_days > 0 else 0
+    
+    # 수정된 MDD 함수 호출
+    max_drawdown_value, max_drawdown_start_date, max_drawdown_end_date = calculate_mdd(results['Cumulative_Strategy_Return'])
+
 
     # --- 결과 요약 대시보드 ---
     st.subheader("📊 핵심 성과 지표")
@@ -475,7 +469,7 @@ if st.button("🚀 백테스팅 실행"):
     with col3:
         st.metric(label="연평균 수익률 (전략)", value=f"{annualized_strategy_return:.2f}%")
     with col4:
-        st.metric(label="최대 낙폭(MDD)", value=f"-{max_drawdown:.2f}%")
+        st.metric(label="최대 낙폭(MDD)", value=f"-{max_drawdown_value * 100:.2f}%")
 
     # --- 결과 시각화 ---
     st.subheader("📈 백테스팅 시각화")
@@ -491,96 +485,104 @@ if st.button("🚀 백테스팅 실행"):
     ax6 = fig.add_subplot(gs[5], sharex=ax1)
 
     # --- 가격 및 SMA 차트 ---
-    ax1.plot(results.index, results['Adj Close'], label=f'{company_name} 가격', color='lightgray', linewidth=1)
+    # 범례를 영어로 변경
+    ax1.plot(results.index, results['Adj Close'], label=f'{company_name} Price', color='lightgray', linewidth=1)
     if use_sma:
-        ax1.plot(results.index, results['SMA_Short'], label=f'단기 MA ({short_ma_period}일)', color='orange', linewidth=1.5)
-        ax1.plot(results.index, results['SMA_Long'], label=f'장기 MA ({long_ma_period}일)', color='purple', linewidth=1.5)
+        ax1.plot(results.index, results['SMA_Short'], label=f'Short MA ({short_ma_period}d)', color='orange', linewidth=1.5)
+        ax1.plot(results.index, results['SMA_Long'], label=f'Long MA ({long_ma_period}d)', color='purple', linewidth=1.5)
 
     buy_signals = results[results['Buy_Signal'] == True]
-    ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='매수 신호', zorder=5)
+    ax1.scatter(buy_signals.index, buy_signals['Adj Close'], marker='^', color='green', s=100, label='Buy Signal', zorder=5)
 
     sell_signals = results[results['Sell_Signal'] == True]
-    ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='매도 신호', zorder=5)
+    ax1.scatter(sell_signals.index, sell_signals['Adj Close'], marker='v', color='red', s=100, label='Sell Signal', zorder=5)
 
-    ax1.set_ylabel("가격(KRW)")
+    ax1.set_ylabel("Price (KRW)")
     ax1.legend(loc='upper left')
     ax1.grid(True)
-    ax1.set_title(f"{company_name} 가격, 이동평균선 및 매매 신호")
+    ax1.set_title(f"Price, Moving Averages and Trading Signals for {company_name}")
 
 
     # --- 누적 수익률 차트 ---
-    ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='전략 누적 수익률(%)', color='blue', linewidth=2)
-    ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='매수 후 보유(Buy & Hold) 수익률(%)', color='green', linestyle='--', linewidth=2)
-    ax2.set_ylabel("누적 수익률 (%)")
+    # 범례를 영어로 변경
+    ax2.plot(results.index, (results['Cumulative_Strategy_Return'] - 1) * 100, label='Strategy Return (%)', color='blue', linewidth=2)
+    ax2.plot(results.index, (results['Cumulative_Buy_And_Hold_Return'] - 1) * 100, label='Buy & Hold Return (%)', color='green', linestyle='--', linewidth=2)
+    ax2.set_ylabel("Cumulative Return (%)")
     ax2.legend(loc='upper left')
     ax2.grid(True)
-    ax2.set_title("누적 수익률 비교")
+    ax2.set_title("Cumulative Return Comparison")
 
 
     # --- 지표 차트 (RSI, 모멘텀, MACD, OBV) ---
+    # 범례를 영어로 변경
     if use_rsi or use_momentum:
         if use_rsi and use_momentum:
             ax3.plot(results.index, results['RSI'], label='RSI', color='cyan', linewidth=1)
-            ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI 매수 ({rsi_buy_threshold})')
-            ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI 매도 ({rsi_sell_threshold})')
-            ax3.plot(results.index, results['Momentum'], label='모멘텀', color='magenta', linewidth=1)
-            ax3.axhline(y=momentum_buy_threshold, color='lime', linestyle=':', label=f'모멘텀 매수 ({momentum_buy_threshold})')
-            ax3.axhline(y=momentum_sell_threshold, color='darkred', linestyle=':', label=f'모멘텀 매도 ({momentum_sell_threshold})')
-            ax3.set_title("RSI 및 모멘텀 지표")
-            ax3.set_ylabel("값")
+            ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI Buy ({rsi_buy_threshold})')
+            ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI Sell ({rsi_sell_threshold})')
+            ax3.plot(results.index, results['Momentum'], label='Momentum', color='magenta', linewidth=1)
+            ax3.axhline(y=momentum_buy_threshold, color='lime', linestyle=':', label=f'Momentum Buy ({momentum_buy_threshold})')
+            ax3.axhline(y=momentum_sell_threshold, color='darkred', linestyle=':', label=f'Momentum Sell ({momentum_sell_threshold})')
+            ax3.set_title("RSI and Momentum Indicators")
+            ax3.set_ylabel("Value")
             ax3.legend(loc='upper left')
             ax3.grid(True)
         elif use_rsi:
             ax3.plot(results.index, results['RSI'], label='RSI', color='cyan', linewidth=1)
-            ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI 매수 ({rsi_buy_threshold})')
-            ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI 매도 ({rsi_sell_threshold})')
-            ax3.set_title("RSI 지표")
+            ax3.axhline(y=rsi_buy_threshold, color='green', linestyle='--', label=f'RSI Buy ({rsi_buy_threshold})')
+            ax3.axhline(y=rsi_sell_threshold, color='red', linestyle='--', label=f'RSI Sell ({rsi_sell_threshold})')
+            ax3.set_title("RSI Indicator")
             ax3.set_ylabel("RSI")
             ax3.legend(loc='upper left')
             ax3.grid(True)
         elif use_momentum:
-            ax3.plot(results.index, results['Momentum'], label='모멘텀', color='magenta', linewidth=1)
-            ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'모멘텀 매수 ({momentum_buy_threshold})')
-            ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'모멘텀 매도 ({momentum_sell_threshold})')
-            ax3.set_title("모멘텀 지표")
-            ax3.set_ylabel("모멘텀 (%)")
+            ax3.plot(results.index, results['Momentum'], label='Momentum', color='magenta', linewidth=1)
+            ax3.axhline(y=momentum_buy_threshold, color='green', linestyle=':', label=f'Momentum Buy ({momentum_buy_threshold})')
+            ax3.axhline(y=momentum_sell_threshold, color='red', linestyle=':', label=f'Momentum Sell ({momentum_sell_threshold})')
+            ax3.set_title("Momentum Indicator")
+            ax3.set_ylabel("Momentum (%)")
             ax3.legend(loc='upper left')
             ax3.grid(True)
     else:
         ax3.set_visible(False)
 
     # --- MACD 차트 ---
+    # 범례를 영어로 변경
     if use_macd:
         ax4.plot(results.index, results['MACD'], label='MACD Line', color='blue', linewidth=1)
         ax4.plot(results.index, results['MACD_Signal'], label='Signal Line', color='red', linestyle='--', linewidth=1)
         macd_hist = results['MACD'] - results['MACD_Signal']
         colors = ['green' if x >= 0 else 'red' for x in macd_hist]
-        ax4.bar(results.index, macd_hist, label='MACD 히스토그램', color=colors, alpha=0.5, width=0.8)
+        ax4.bar(results.index, macd_hist, label='MACD Histogram', color=colors, alpha=0.5, width=0.8)
         ax4.axhline(y=0, color='gray', linestyle='-', linewidth=0.8)
         ax4.set_ylabel("MACD")
         ax4.legend(loc='upper left')
         ax4.grid(True)
-        ax4.set_title("MACD 지표")
+        ax4.set_title("MACD Indicator")
     else:
         ax4.set_visible(False)
 
     # --- OBV 차트 ---
+    # 범례를 영어로 변경
     if use_obv:
         ax5.plot(results.index, results['OBV'], label='OBV', color='darkgreen', linewidth=1)
         ax5.set_ylabel("OBV")
         ax5.legend(loc='upper left')
         ax5.grid(True)
-        ax5.set_title("OBV 지표")
+        ax5.set_title("OBV Indicator")
     else:
         ax5.set_visible(False)
-
+    
     # --- 누적 수익률과 최대 낙폭(MDD) 차트 ---
-    ax6.plot(results.index, (results['Cumulative_Strategy_Return']-1) * 100, label='누적 수익률(%)', color='blue', linewidth=2)
-    ax6.fill_between(results.index, (results['Cumulative_Strategy_Return']-1) * 100, (results['High_Water_Mark']-1) * 100, color='gray', alpha=0.2)
-    ax6.set_ylabel("수익률 (%)")
+    # 범례를 영어로 변경
+    peak_series = results['Cumulative_Strategy_Return'].cummax()
+    ax6.plot(results.index, (results['Cumulative_Strategy_Return']-1) * 100, label='Cumulative Return (%)', color='blue', linewidth=2)
+    ax6.fill_between(results.index, (results['Cumulative_Strategy_Return']-1) * 100, (peak_series-1) * 100, color='gray', alpha=0.2, label='Drawdown Area')
+    ax6.set_ylabel("Return (%)")
     ax6.legend(loc='upper left')
     ax6.grid(True)
-    ax6.set_title("수익률 vs. 최대 낙폭(MDD)")
+    ax6.set_title("Return vs. Maximum Drawdown (MDD)")
+
 
     fig.autofmt_xdate()
     plt.tight_layout()
@@ -590,24 +592,16 @@ if st.button("🚀 백테스팅 실행"):
     st.subheader("📝 최대 낙폭(MDD) 상세 정보")
     st.write("최대 낙폭은 고점 대비 최대 손실을 의미하며, 낮을수록 위험이 적습니다.")
     
-    # 최대 낙폭 테이블
+    # MDD 테이블
     if not results.empty:
-        max_drawdown_value = results['Drawdown'].max()
-        max_drawdown_end_date = results['Drawdown'].idxmax()
-        
-        # Drawdown 시작점 찾기
-        high_water_mark_at_mdd_end = results.loc[max_drawdown_end_date, 'High_Water_Mark']
-        max_drawdown_start_date = results[results['Cumulative_Strategy_Return'] == high_water_mark_at_mdd_end].index.max()
-        
+        # MDD 계산 결과를 사용하여 테이블 구성
         mdd_data = {
-            '기간': [f'{max_drawdown_start_date.strftime("%Y-%m-%d")} ~ {max_drawdown_end_date.strftime("%Y-%m-%d")}'],
-            '최대 낙폭': [f'{-max_drawdown_value * 100:.2f}%']
+            'Period': [f'{max_drawdown_start_date.strftime("%Y-%m-%d")} ~ {max_drawdown_end_date.strftime("%Y-%m-%d")}'],
+            'Maximum Drawdown': [f'{-max_drawdown_value * 100:.2f}%']
         }
         mdd_df = pd.DataFrame(mdd_data)
         st.dataframe(mdd_df)
-        
-
-
+    
     st.write("---")
     st.write("### 📝 참고")
     st.write(f"""
@@ -617,7 +611,7 @@ if st.button("🚀 백테스팅 실행"):
     """)
     st.write("---")
     st.write("### 백테스팅 상세 데이터 (최근 20일)")
-    display_cols = ['Adj Close', 'Buy_Signal', 'Sell_Signal', 'Position', 'Strategy_Return', 'Cumulative_Strategy_Return', 'Cumulative_Buy_And_Hold_Return', 'Drawdown']
+    display_cols = ['Adj Close', 'Buy_Signal', 'Sell_Signal', 'Position', 'Strategy_Return', 'Cumulative_Strategy_Return', 'Cumulative_Buy_And_Hold_Return']
     if use_sma: display_cols.extend(['SMA_Short', 'SMA_Long'])
     if use_rsi: display_cols.append('RSI')
     if use_momentum: display_cols.append('Momentum')
