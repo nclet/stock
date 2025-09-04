@@ -122,7 +122,8 @@ st.markdown("<h3 style='text-align: center; color: #4CAF50;'>원하는 종목과
 
 # 종목 검색 및 선택
 stock_list = fdr.StockListing('KRX')
-stock_ticker_map = stock_list.set_index('Symbol')['Name'].to_dict()
+# 이 부분을 'Symbol'에서 'Code'로 수정했습니다.
+stock_ticker_map = stock_list.set_index('Code')['Name'].to_dict()
 
 # 사용자 입력 위젯
 st.subheader("1. 종목 선택")
