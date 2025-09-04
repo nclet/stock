@@ -3,6 +3,7 @@ import streamlit as st
 
 # 주식 데이터와 그래프를 다루는 데 필요한 라이브러리들
 import FinanceDataReader as fdr
+import pyupbit
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
@@ -13,35 +14,35 @@ import datetime
 # ---------------------------------------------------------------------------------
 @st.cache_data
 def get_stock_listing():
-    """
-    FinanceDataReader에서 한국 주식 종목 전체 목록을 가져오고 캐싱합니다.
-    사용자가 종목을 쉽게 선택할 수 있도록 'Name (Code)' 형태의 'label'을 생성합니다.
-    """
+    """FinanceDataReader에서 한국 주식 종목 전체 목록을 가져옵니다."""
     try:
-        # KRX (한국 거래소) 종목 전체 목록을 가져옵니다.
         df_krx = fdr.StockListing('KRX')
         if 'Code' not in df_krx.columns:
             st.error("데이터에 'Code' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
             return pd.DataFrame()
         
-        # 'Code' 열을 문자열로 변환합니다.
         df_krx['Code'] = df_krx['Code'].astype(str)
-        # 사용자 편의를 위해 '종목명 (코드)' 형태의 레이블을 만듭니다.
         df_krx['label'] = df_krx['Name'] + ' (' + df_krx['Code'] + ')'
         return df_krx
     except Exception as e:
         st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
-        return pd.DataFrame() # 빈 데이터프레임을 반환하여 이후 오류 방지
+        return pd.DataFrame()
+
+@st.cache_data
+def get_coin_listing():
+    """pyupbit에서 원화(KRW) 코인 목록을 가져옵니다."""
+    try:
+        tickers = pyupbit.get_tickers(fiat="KRW")
+        df_coin = pd.DataFrame(tickers, columns=['Code'])
+        # 코인명과 티커를 함께 표시하기 위해 'label' 열을 생성합니다.
+        df_coin['label'] = df_coin['Code'].str.replace('KRW-', '') + ' (' + df_coin['Code'] + ')'
+        return df_coin
+    except Exception as e:
+        st.error(f"코인 리스트를 가져오는 중 오류가 발생했습니다: {e}")
+        return pd.DataFrame()
 
 def get_stock_data(ticker, start_date, end_date, period='1D'):
-    """
-    주어진 종목 코드와 날짜 범위에 대한 주식 데이터를 가져오고, 원하는 기간으로 리샘플링합니다.
-    :param ticker: 주식 종목 코드
-    :param start_date: 데이터 시작 날짜 (YYYY-MM-DD)
-    :param end_date: 데이터 종료 날짜 (YYYY-MM-DD)
-    :param period: '1D' (일봉), '1W' (주봉), '1M' (월봉) 중 하나
-    :return: 리샘플링된 주식 데이터 DataFrame, 오류 발생 시 None 반환
-    """
+    """주식 데이터를 가져오고, 원하는 기간으로 리샘플링합니다."""
     try:
         data = fdr.DataReader(ticker, start_date, end_date)
         if data.empty:
@@ -69,6 +70,31 @@ def get_stock_data(ticker, start_date, end_date, period='1D'):
             resampled_data = data
             
         return resampled_data
+    except Exception as e:
+        st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
+        return None
+
+def get_coin_data(ticker, start_date, end_date, period='day'):
+    """코인 데이터를 가져오고, 원하는 기간으로 리샘플링합니다."""
+    try:
+        # pyupbit의 get_ohlcv 함수는 count 파라미터가 필수적입니다.
+        # 날짜 범위에 맞게 count를 계산합니다.
+        days_diff = (end_date - start_date).days
+        count = days_diff + 1 if period == 'day' else int(days_diff / 7) + 1 if period == 'week' else int(days_diff / 30) + 1
+        
+        # pyupbit는 count를 200개로 제한하기 때문에, 200개가 넘어가면 자동으로 200개까지만 가져옵니다.
+        # 이 한계를 해결하기 위해 반복문을 사용할 수 있지만, 간단한 예제이므로 `count`를 그대로 사용합니다.
+        df = pyupbit.get_ohlcv(ticker=ticker, interval=period, count=count)
+
+        if df is None or df.empty:
+            st.warning(f"오류: [{ticker}] 코인에 대한 데이터를 찾을 수 없습니다. 티커나 날짜 범위를 확인해 주세요.")
+            return None
+            
+        # FinanceDataReader의 데이터프레임과 열 이름을 통일합니다.
+        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'value']
+        df.index.name = 'Date'
+        
+        return df
     except Exception as e:
         st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
         return None
@@ -146,31 +172,41 @@ def find_candle_patterns(df):
 # ---------------------------------------------------------------------------------
 # 2. Streamlit 웹 인터페이스 구성
 # ---------------------------------------------------------------------------------
-st.set_page_config(page_title="주식 캔들 패턴 분석기", layout="wide")
+st.set_page_config(page_title="주식 & 코인 캔들 패턴 분석기", layout="wide")
 
-st.markdown("<h1 style='text-align: center;'>주식 캔들 패턴 분석기</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center; color: #4CAF50;'>원하는 종목과 날짜 범위를 선택하여 차트를 분석하세요.</h3>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>주식 & 코인 캔들 패턴 분석기</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #4CAF50;'>원하는 시장과 종목, 날짜 범위를 선택하여 차트를 분석하세요.</h3>", unsafe_allow_html=True)
 
-# 종목 리스트 가져오기
-df_company = get_stock_listing()
+st.subheader("1. 분석 옵션 선택")
+selected_market = st.radio(
+    "💰 분석할 시장을 선택하세요",
+    ('주식 (KRX)', '코인 (Upbit)'),
+    horizontal=True
+)
 
-if not df_company.empty:
-    st.subheader("1. 분석 옵션 선택")
+if selected_market == '주식 (KRX)':
+    df_listing = get_stock_listing()
+    default_start_date = datetime.date.today() - datetime.timedelta(days=365)
+    period_options = ('일봉', '주봉', '월봉')
+    period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
+else: # 코인 (Upbit)
+    df_listing = get_coin_listing()
+    default_start_date = datetime.date.today() - datetime.timedelta(days=180) # 코인은 데이터가 많지 않으므로 기본 날짜를 줄였습니다.
+    period_options = ('일봉', '주봉', '월봉')
+    period_map = {'일봉': 'day', '주봉': 'week', '월봉': 'month'}
     
-    # 종목 선택
-    selected_label = st.selectbox("📊 분석할 종목", df_company["label"].tolist())
-    selected_code = df_company[df_company["label"] == selected_label]["Code"].values[0]
+if not df_listing.empty:
+    selected_label = st.selectbox(f"📊 분석할 {selected_market.split()[0]} 종목", df_listing["label"].tolist())
+    selected_code = df_listing[df_listing["label"] == selected_label]["Code"].values[0]
 
     col1, col2 = st.columns(2)
     with col1:
-        # 캔들 기간 선택 (일봉, 주봉, 월봉)
         selected_period = st.radio(
             "⏳ 차트 기간",
-            ('일봉', '주봉', '월봉'),
+            period_options,
             horizontal=True
         )
     with col2:
-        # 패턴 다중 선택
         all_pattern_options = {
             'is_hammer': '망치형 (상승)',
             'is_inverted_hammer': '역망치형 (하락)',
@@ -191,25 +227,21 @@ if not df_company.empty:
 
     st.subheader("2. 날짜 범위 선택")
     today = datetime.date.today()
-    default_start_date = today - datetime.timedelta(days=365)
-
     col3, col4 = st.columns(2)
     with col3:
         start_date = st.date_input("시작 날짜", default_start_date)
     with col4:
         end_date = st.date_input("종료 날짜", today)
 
-    # 분석 버튼
     st.markdown("---")
     if st.button("차트 분석 시작", type="primary", use_container_width=True):
         st.subheader("분석 중...")
         st.info("데이터를 불러오고 캔들 패턴을 분석하는 중입니다. 잠시만 기다려 주세요.")
         
-        # 선택된 기간에 따라 데이터를 가져옵니다.
-        period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
-        data_period = period_map[selected_period]
-        
-        df = get_stock_data(selected_code, start_date, end_date, data_period)
+        if selected_market == '주식 (KRX)':
+            df = get_stock_data(selected_code, start_date, end_date, period_map[selected_period])
+        else:
+            df = get_coin_data(selected_code, start_date, end_date, period_map[selected_period])
 
         if df is not None and not df.empty:
             df_with_patterns = find_candle_patterns(df.copy())
@@ -225,21 +257,19 @@ if not df_company.empty:
                 '흑운형': ('is_dark_cloud_cover', 'High', 'D', 'darkred', 140),
                 '유성형': ('is_shooting_star', 'High', 'v', 'magenta', 140),
                 '교수형': ('is_hanging_man', 'Low', 's', 'brown', 140),
-                '적삼병': ('is_three_white_soldiers', 'Low', 'D', 'darkgreen', 140), # Note: this is a line plot below
-                '흑삼병': ('is_three_black_crows', 'High', 'D', 'darkred', 140) # Note: this is a line plot above
+                '적삼병': ('is_three_white_soldiers', 'Low', 'D', 'darkgreen', 140),
+                '흑삼병': ('is_three_black_crows', 'High', 'D', 'darkred', 140)
             }
             
             total_patterns = 0
             st.subheader("3. 발견된 패턴 목록")
             pattern_results = {}
             
-            # 선택된 패턴만 순회하며 차트에 추가합니다.
             for pattern_label in selected_patterns:
                 if pattern_label in pattern_info:
                     col_name, y_pos, marker, color, size = pattern_info[pattern_label]
                     
                     if col_name in ['is_three_white_soldiers', 'is_three_black_crows']:
-                        # 삼중 캔들 패턴 (라인 플롯)
                         if pattern_label == '적삼병':
                             series = pd.Series(index=df.index, dtype='float64')
                             for i in range(2, len(df_with_patterns)):
@@ -264,7 +294,6 @@ if not df_company.empty:
                                 apds.append(mpf.make_addplot(series, 
                                             type='line', linestyle='solid', width=5, color='blue', label='흑삼병'))
                     else:
-                        # 단일 또는 이중 캔들 패턴 (마커 플롯)
                         candles = df_with_patterns[df_with_patterns[col_name]]
                         if not candles.empty:
                             pattern_data = pd.Series(index=df.index, dtype='float64')
@@ -291,14 +320,13 @@ if not df_company.empty:
             mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
             s = mpf.make_mpf_style(marketcolors=mc, gridcolor='gray')
             
-            # 기간에 따라 차트 제목을 동적으로 변경합니다.
             title = f'{selected_label} {selected_period} 차트'
             fig, axlist = mpf.plot(
                 df_with_patterns,
                 type='candle',
                 style=s,
                 title=title,
-                ylabel='주가',
+                ylabel='가격',
                 volume=True,
                 figratio=(15, 8),
                 addplot=apds,
