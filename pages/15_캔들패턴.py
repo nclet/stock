@@ -20,8 +20,15 @@ def get_stock_listing():
     try:
         # KRX (한국 거래소) 종목 전체 목록을 가져옵니다.
         df_krx = fdr.StockListing('KRX')
-        # 종목 코드 열의 이름을 'Code'로 통일하여 사용합니다.
-        df_krx['Code'] = df_krx['Symbol'].astype(str)
+        # FinanceDataReader의 버전이나 환경에 따라 'Symbol' 또는 'Code'로 열 이름이
+        # 반환되지만, 최신 버전에서는 'Code'를 사용하도록 수정되었습니다.
+        # 따라서 'Code' 열을 직접 사용합니다.
+        if 'Code' not in df_krx.columns:
+            st.error("데이터에 'Code' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
+            return pd.DataFrame()
+        
+        # 'Code' 열을 문자열로 변환합니다.
+        df_krx['Code'] = df_krx['Code'].astype(str)
         # 사용자 편의를 위해 '종목명 (코드)' 형태의 레이블을 만듭니다.
         df_krx['label'] = df_krx['Name'] + ' (' + df_krx['Code'] + ')'
         return df_krx
