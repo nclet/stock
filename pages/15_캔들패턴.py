@@ -265,18 +265,21 @@ if not df_listing.empty:
             df_with_patterns = find_candle_patterns(df.copy())
             apds = []
             
+            # 마커 사이즈를 100으로 통일
+            marker_size = 100
+            
             pattern_info = {
-                '망치형 (상승)': ('is_hammer', 'Low', '^', 'red', 140),
-                '역망치형 (하락)': ('is_inverted_hammer', 'High', 'v', 'blue', 140),
-                '도지형': ('is_doji', 'Close', '*', 'orange', 140),
-                '상승장악형': ('is_bullish_engulfing', 'Low', 'o', 'green', 140),
-                '하락장악형': ('is_bearish_engulfing', 'High', 'x', 'purple', 140),
-                '관통형': ('is_piercing_line', 'Low', 'D', 'darkgreen', 140),
-                '흑운형': ('is_dark_cloud_cover', 'High', 'D', 'darkred', 140),
-                '유성형': ('is_shooting_star', 'High', 'v', 'magenta', 140),
-                '교수형': ('is_hanging_man', 'Low', 's', 'brown', 140),
-                '적삼병': ('is_three_white_soldiers', 'Low', 'D', 'darkgreen', 140),
-                '흑삼병': ('is_three_black_crows', 'High', 'D', 'darkred', 140)
+                '망치형 (상승)': ('is_hammer', 'Low', '^', 'red'),
+                '역망치형 (하락)': ('is_inverted_hammer', 'High', 'v', 'blue'),
+                '도지형': ('is_doji', 'Close', '*', 'orange'),
+                '상승장악형': ('is_bullish_engulfing', 'Low', 'o', 'green'),
+                '하락장악형': ('is_bearish_engulfing', 'High', 'x', 'purple'),
+                '관통형': ('is_piercing_line', 'Low', 'D', 'darkgreen'),
+                '흑운형': ('is_dark_cloud_cover', 'High', 'D', 'darkred'),
+                'is_three_white_soldiers': ('is_three_white_soldiers', 'Low', 'D', 'darkgreen'),
+                'is_three_black_crows': ('is_three_black_crows', 'High', 'D', 'darkred'),
+                '유성형': ('is_shooting_star', 'High', 'v', 'magenta'),
+                '교수형': ('is_hanging_man', 'Low', 's', 'brown')
             }
             
             total_patterns = 0
@@ -284,49 +287,52 @@ if not df_listing.empty:
             pattern_results = {}
             
             for pattern_label in selected_patterns:
-                if pattern_label in pattern_info:
-                    col_name, y_pos, marker, color, size = pattern_info[pattern_label]
+                # 적삼병과 흑삼병은 별도로 처리
+                if pattern_label == '적삼병':
+                    series = pd.Series(index=df.index, dtype='float64')
+                    for i in range(2, len(df_with_patterns)):
+                        if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_white_soldiers']:
+                            min_low = min(df.iloc[i-2:i+1]['Low'])
+                            series.iloc[i-2:i+1] = min_low * 0.99
+                            pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
+                            total_patterns += 1
+                    if not series.dropna().empty:
+                        apds.append(mpf.make_addplot(series, 
+                                    type='line', linestyle='solid', width=5, color='red', label='적삼병'))
+                
+                elif pattern_label == '흑삼병':
+                    series = pd.Series(index=df.index, dtype='float64')
+                    for i in range(2, len(df_with_patterns)):
+                        if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_black_crows']:
+                            max_high = max(df.iloc[i-2:i+1]['High'])
+                            series.iloc[i-2:i+1] = max_high * 1.01
+                            pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
+                            total_patterns += 1
+                    if not series.dropna().empty:
+                        apds.append(mpf.make_addplot(series, 
+                                    type='line', linestyle='solid', width=5, color='blue', label='흑삼병'))
+                else:
+                    if 'is_three_white_soldiers' in pattern_info and pattern_info['is_three_white_soldiers'][0] == pattern_info[pattern_label][0]:
+                        continue
+                    if 'is_three_black_crows' in pattern_info and pattern_info['is_three_black_crows'][0] == pattern_info[pattern_label][0]:
+                        continue
                     
-                    if col_name in ['is_three_white_soldiers', 'is_three_black_crows']:
-                        if pattern_label == '적삼병':
-                            series = pd.Series(index=df.index, dtype='float64')
-                            for i in range(2, len(df_with_patterns)):
-                                if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_white_soldiers']:
-                                    min_low = min(df.iloc[i-2:i+1]['Low'])
-                                    series.iloc[i-2:i+1] = min_low * 0.99
-                                    pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
-                                    total_patterns += 1
-                            if not series.dropna().empty:
-                                apds.append(mpf.make_addplot(series, 
-                                            type='line', linestyle='solid', width=5, color='red', label='적삼병'))
+                    col_name, y_pos, marker, color = pattern_info[pattern_label]
+                    candles = df_with_patterns[df_with_patterns[col_name]]
+                    if not candles.empty:
+                        pattern_data = pd.Series(index=df.index, dtype='float64')
+                        for idx in candles.index:
+                            pattern_data.loc[idx] = candles.loc[idx, y_pos]
                         
-                        elif pattern_label == '흑삼병':
-                            series = pd.Series(index=df.index, dtype='float64')
-                            for i in range(2, len(df_with_patterns)):
-                                if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_black_crows']:
-                                    max_high = max(df.iloc[i-2:i+1]['High'])
-                                    series.iloc[i-2:i+1] = max_high * 1.01
-                                    pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
-                                    total_patterns += 1
-                            if not series.dropna().empty:
-                                apds.append(mpf.make_addplot(series, 
-                                            type='line', linestyle='solid', width=5, color='blue', label='흑삼병'))
-                    else:
-                        candles = df_with_patterns[df_with_patterns[col_name]]
-                        if not candles.empty:
-                            pattern_data = pd.Series(index=df.index, dtype='float64')
-                            for idx in candles.index:
-                                pattern_data.loc[idx] = candles.loc[idx, y_pos]
-                            
-                            apds.append(mpf.make_addplot(pattern_data, 
-                                                        type='scatter', 
-                                                        markersize=size, 
-                                                        marker=marker, 
-                                                        color=color, 
-                                                        label=pattern_label))
-                            count = len(candles)
-                            pattern_results[pattern_label] = count
-                            total_patterns += count
+                        apds.append(mpf.make_addplot(pattern_data, 
+                                                    type='scatter', 
+                                                    markersize=marker_size, 
+                                                    marker=marker, 
+                                                    color=color, 
+                                                    label=pattern_label))
+                        count = len(candles)
+                        pattern_results[pattern_label] = count
+                        total_patterns += count
 
             if total_patterns > 0:
                 for label, count in pattern_results.items():
