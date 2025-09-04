@@ -11,6 +11,24 @@ import datetime
 # ---------------------------------------------------------------------------------
 # 1. Streamlit 앱 설정 및 데이터 로드 함수
 # ---------------------------------------------------------------------------------
+@st.cache_data
+def get_stock_listing():
+    """
+    FinanceDataReader에서 한국 주식 종목 전체 목록을 가져오고 캐싱합니다.
+    사용자가 종목을 쉽게 선택할 수 있도록 'Name (Code)' 형태의 'label'을 생성합니다.
+    """
+    try:
+        # KRX (한국 거래소) 종목 전체 목록을 가져옵니다.
+        df_krx = fdr.StockListing('KRX')
+        # 종목 코드 열의 이름을 'Code'로 통일하여 사용합니다.
+        df_krx['Code'] = df_krx['Symbol'].astype(str)
+        # 사용자 편의를 위해 '종목명 (코드)' 형태의 레이블을 만듭니다.
+        df_krx['label'] = df_krx['Name'] + ' (' + df_krx['Code'] + ')'
+        return df_krx
+    except Exception as e:
+        st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
+        return pd.DataFrame() # 빈 데이터프레임을 반환하여 이후 오류 방지
+
 def get_korean_stock_data(ticker, start_date, end_date):
     """
     주어진 종목 코드와 날짜 범위에 대한 한국 주식 데이터를 가져옵니다.
@@ -20,7 +38,6 @@ def get_korean_stock_data(ticker, start_date, end_date):
     :return: 주식 데이터가 담긴 Pandas DataFrame, 오류 발생 시 None 반환
     """
     try:
-        # FinanceDataReader를 사용하여 주식 데이터를 가져옵니다.
         data = fdr.DataReader(ticker, start_date, end_date)
         if data.empty:
             st.warning(f"오류: [{ticker}] 종목에 대한 데이터를 찾을 수 없습니다. 종목 코드나 날짜 범위를 확인해 주세요.")
@@ -55,21 +72,18 @@ def find_candle_patterns(df):
         upper_shadow = high_p - max(open_p, close_p)
         lower_shadow = min(open_p, close_p) - low_p
         
-        # 망치형 (Hammer) 및 교수형 (Hanging Man)
         if lower_shadow > 2 * body_length and upper_shadow < body_length:
             if close_p > open_p:
                 df.loc[df.index[i], 'is_hammer'] = True
             elif close_p < open_p:
                 df.loc[df.index[i], 'is_hanging_man'] = True
         
-        # 역망치형 (Inverted Hammer) 및 유성형 (Shooting Star)
         if upper_shadow > 2 * body_length and lower_shadow < body_length:
             if close_p > open_p:
                 df.loc[df.index[i], 'is_inverted_hammer'] = True
             elif close_p < open_p:
                 df.loc[df.index[i], 'is_shooting_star'] = True
                 
-        # 도지 (Doji)
         if body_length < (high_p - low_p) * 0.05:
             df.loc[df.index[i], 'is_doji'] = True
 
@@ -78,16 +92,12 @@ def find_candle_patterns(df):
             prev_open, prev_close, prev_high, prev_low = df.iloc[i-1][['Open', 'Close', 'High', 'Low']]
             prev_body_midpoint = (prev_open + prev_close) / 2
             
-            # 상승 장악형 (Bullish Engulfing)
             if (prev_close < prev_open and close_p > open_p and open_p < prev_close and close_p > prev_open):
                 df.loc[df.index[i], 'is_bullish_engulfing'] = True
-            # 하락 장악형 (Bearish Engulfing)
             if (prev_close > prev_open and close_p < open_p and open_p > prev_close and close_p < prev_open):
                 df.loc[df.index[i], 'is_bearish_engulfing'] = True
-            # 관통형 (Piercing Line)
             if (prev_close < prev_open and close_p > open_p and open_p < prev_low and close_p > prev_body_midpoint and close_p < prev_open):
                 df.loc[df.index[i], 'is_piercing_line'] = True
-            # 흑운형 (Dark Cloud Cover)
             if (prev_close > prev_open and close_p < open_p and open_p > prev_high and close_p < prev_body_midpoint and close_p > prev_open):
                 df.loc[df.index[i], 'is_dark_cloud_cover'] = True
 
@@ -97,13 +107,11 @@ def find_candle_patterns(df):
             prev1_open, prev1_close = df.iloc[i-1][['Open', 'Close']]
             curr_open, curr_close = df.iloc[i][['Open', 'Close']]
             
-            # 적삼병 (Three White Soldiers)
             if (prev2_close > prev2_open and prev1_close > prev1_open and curr_close > curr_open and
                 prev1_close > prev2_close and curr_close > prev1_close and
                 prev1_open >= prev2_close and curr_open >= prev1_close):
                 df.loc[df.index[i], 'is_three_white_soldiers'] = True
                 
-            # 흑삼병 (Three Black Crows)
             if (prev2_close < prev2_open and prev1_close < prev1_open and curr_close < curr_open and
                 prev1_close < prev2_close and curr_close < prev1_close and
                 prev1_open <= prev2_close and curr_open <= prev1_close):
@@ -116,53 +124,38 @@ def find_candle_patterns(df):
 # ---------------------------------------------------------------------------------
 st.set_page_config(page_title="주식 캔들 패턴 분석기", layout="wide")
 
-# 앱 제목 및 설명
 st.markdown("<h1 style='text-align: center;'>주식 캔들 패턴 분석기</h1>", unsafe_allow_html=True)
 st.markdown("<h3 style='text-align: center; color: #4CAF50;'>원하는 종목과 날짜 범위를 선택하여 차트를 분석하세요.</h3>", unsafe_allow_html=True)
 
-# 종목 검색 및 선택
-stock_list = fdr.StockListing('KRX')
-# 이 부분을 'Symbol'에서 'Code'로 수정했습니다.
-stock_ticker_map = stock_list.set_index('Code')['Name'].to_dict()
+# 종목 리스트 가져오기
+df_company = get_stock_listing()
 
-# 사용자 입력 위젯
-st.subheader("1. 종목 선택")
-col1, col2 = st.columns(2)
-with col1:
-    user_input = st.text_input("종목 코드 입력", placeholder="예: 005930 (삼성전자)")
-with col2:
-    selected_name = None
-    if user_input in stock_ticker_map:
-        selected_name = stock_ticker_map[user_input]
-    st.write(f"선택된 종목명: **{selected_name if selected_name else '알 수 없음'}**")
+if not df_company.empty:
+    # `st.selectbox`를 사용하여 사용자에게 종목을 선택하도록 합니다.
+    selected_label = st.selectbox("📊 분석할 종목을 선택하세요", df_company["label"].tolist())
+    # 선택된 레이블에서 종목 코드를 추출합니다.
+    selected_code = df_company[df_company["label"] == selected_label]["Code"].values[0]
 
-st.subheader("2. 날짜 범위 선택")
-today = datetime.date.today()
-default_start_date = today - datetime.timedelta(days=180)
+    st.subheader("2. 날짜 범위 선택")
+    today = datetime.date.today()
+    default_start_date = today - datetime.timedelta(days=180)
 
-col3, col4 = st.columns(2)
-with col3:
-    start_date = st.date_input("시작 날짜", default_start_date)
-with col4:
-    end_date = st.date_input("종료 날짜", today)
+    col3, col4 = st.columns(2)
+    with col3:
+        start_date = st.date_input("시작 날짜", default_start_date)
+    with col4:
+        end_date = st.date_input("종료 날짜", today)
 
-# 분석 버튼
-st.markdown("---")
-if st.button("차트 분석 시작", type="primary", use_container_width=True):
-    if not user_input:
-        st.warning("종목 코드를 입력해 주세요.")
-    else:
+    # 분석 버튼
+    st.markdown("---")
+    if st.button("차트 분석 시작", type="primary", use_container_width=True):
         st.subheader("분석 중...")
         st.info("데이터를 불러오고 캔들 패턴을 분석하는 중입니다. 잠시만 기다려 주세요.")
 
-        # 데이터 가져오기
-        df = get_korean_stock_data(user_input, start_date, end_date)
+        df = get_korean_stock_data(selected_code, start_date, end_date)
 
         if df is not None:
-            # 캔들 패턴 찾기
             df_with_patterns = find_candle_patterns(df.copy())
-            
-            # 차트에 표시할 패턴 마커 및 라인 설정
             apds = []
             
             pattern_types = {
@@ -198,7 +191,6 @@ if st.button("차트 분석 시작", type="primary", use_container_width=True):
                     total_patterns += count
 
             # 삼중 캔들 패턴 라인 추가
-            # 적삼병
             three_white_soldiers_series = pd.Series(index=df.index, dtype='float64')
             for i in range(2, len(df_with_patterns)):
                 if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_white_soldiers']:
@@ -215,7 +207,6 @@ if st.button("차트 분석 시작", type="primary", use_container_width=True):
                                             color='red', 
                                             label='Three White Soldiers'))
             
-            # 흑삼병
             three_black_crows_series = pd.Series(index=df.index, dtype='float64')
             for i in range(2, len(df_with_patterns)):
                 if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_black_crows']:
@@ -232,14 +223,12 @@ if st.button("차트 분석 시작", type="primary", use_container_width=True):
                                             color='blue', 
                                             label='Three Black Crows'))
 
-            # 결과 표시
             if total_patterns > 0:
                 for label, count in pattern_results.items():
                     st.write(f"- **{label}**: {count}개 발견")
             else:
                 st.write("선택한 기간 동안 발견된 캔들 패턴이 없습니다.")
-
-            # 차트 그리기
+                
             st.subheader("4. 캔들 차트")
             mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
             s = mpf.make_mpf_style(marketcolors=mc, gridcolor='gray')
@@ -248,7 +237,7 @@ if st.button("차트 분석 시작", type="primary", use_container_width=True):
                 df_with_patterns,
                 type='candle',
                 style=s,
-                title=f'{stock_ticker_map.get(user_input, user_input)} 일봉 차트',
+                title=f'{selected_label} 일봉 차트',
                 ylabel='주가',
                 volume=True,
                 figratio=(15, 8),
