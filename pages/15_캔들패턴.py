@@ -9,34 +9,24 @@ import mplfinance as mpf
 import pandas as pd
 import datetime
 
-# 한글 폰트 설정을 위한 라이브러리 추가
-import matplotlib.font_manager as fm
-
 # ---------------------------------------------------------------------------------
 # 1. Streamlit 앱 설정 및 데이터 로드 함수
 # ---------------------------------------------------------------------------------
-# 한글 폰트 설정
-# 시스템에 설치된 한글 폰트를 찾아 설정합니다.
-# mplfinance는 matplotlib의 설정을 따르므로, 이 설정이 바로 적용됩니다.
-try:
-    # 먼저 'NanumGothic' 폰트를 찾고, 없으면 'Malgun Gothic'을 찾습니다.
-    # 두 폰트가 모두 없으면 기본 폰트를 사용합니다.
-    font_name = None
-    for font in fm.fontManager.ttflist:
-        if 'NanumGothic' in font.name:
-            font_name = font.name
-            break
-        elif 'Malgun Gothic' in font.name:
-            font_name = font.name
-            break
-
-    if font_name:
-        plt.rc('font', family=font_name)
-        plt.rc('axes', unicode_minus=False) # 음수 부호 깨짐 방지
-    else:
-        st.warning("시스템에 나눔고딕 또는 맑은 고딕 폰트가 없습니다. 차트에 글자가 깨져 보일 수 있습니다.")
-except Exception as e:
-    st.warning(f"한글 폰트 설정 중 오류가 발생했습니다: {e}")
+# 캔들 패턴에 대한 한글명과 이니셜 매핑을 정의합니다.
+# 이니셜은 범례와 멀티셀렉트 옵션에 모두 사용됩니다.
+pattern_mapping = {
+    'is_hammer': {'label': '망치형 (상승)', 'initial': '[H]'},
+    'is_inverted_hammer': {'label': '역망치형 (하락)', 'initial': '[IH]'},
+    'is_doji': {'label': '도지형', 'initial': '[D]'},
+    'is_bullish_engulfing': {'label': '상승장악형', 'initial': '[BE]'},
+    'is_bearish_engulfing': {'label': '하락장악형', 'initial': '[BEE]'},
+    'is_piercing_line': {'label': '관통형', 'initial': '[PL]'},
+    'is_dark_cloud_cover': {'label': '흑운형', 'initial': '[DCC]'},
+    'is_three_white_soldiers': {'label': '적삼병', 'initial': '[TWS]'},
+    'is_three_black_crows': {'label': '흑삼병', 'initial': '[TBC]'},
+    'is_shooting_star': {'label': '유성형', 'initial': '[SS]'},
+    'is_hanging_man': {'label': '교수형', 'initial': '[HM]'}
+}
 
 @st.cache_data
 def get_stock_listing():
@@ -55,8 +45,6 @@ def get_stock_listing():
         return pd.DataFrame()
 
 # 코인 티커를 한글명으로 매핑하는 딕셔너리입니다.
-# 모든 코인을 포함하기는 어려우므로, 일반적으로 많이 거래되는 코인 위주로 추가했습니다.
-# 필요한 경우 여기에 더 많은 코인을 추가할 수 있습니다.
 ticker_to_korean = {
     "KRW-BTC": "비트코인",
     "KRW-ETH": "이더리움",
@@ -251,22 +239,23 @@ if not df_listing.empty:
             horizontal=True
         )
     with col2:
+        # 패턴 옵션에 이니셜 추가
         all_pattern_options = {
-            'is_hammer': '망치형 (상승)',
-            'is_inverted_hammer': '역망치형 (하락)',
-            'is_doji': '도지형',
-            'is_bullish_engulfing': '상승장악형',
-            'is_bearish_engulfing': '하락장악형',
-            'is_piercing_line': '관통형',
-            'is_dark_cloud_cover': '흑운형',
-            'is_three_white_soldiers': '적삼병',
-            'is_three_black_crows': '흑삼병',
-            'is_shooting_star': '유성형',
-            'is_hanging_man': '교수형'
+            '망치형 (상승) [H]': 'is_hammer',
+            '역망치형 (하락) [IH]': 'is_inverted_hammer',
+            '도지형 [D]': 'is_doji',
+            '상승장악형 [BE]': 'is_bullish_engulfing',
+            '하락장악형 [BEE]': 'is_bearish_engulfing',
+            '관통형 [PL]': 'is_piercing_line',
+            '흑운형 [DCC]': 'is_dark_cloud_cover',
+            '적삼병 [TWS]': 'is_three_white_soldiers',
+            '흑삼병 [TBC]': 'is_three_black_crows',
+            '유성형 [SS]': 'is_shooting_star',
+            '교수형 [HM]': 'is_hanging_man'
         }
         selected_patterns = st.multiselect(
             "📈 표시할 캔들 패턴",
-            list(all_pattern_options.values())
+            list(all_pattern_options.keys())
         )
 
     st.subheader("2. 날짜 범위 선택")
@@ -291,73 +280,72 @@ if not df_listing.empty:
             df_with_patterns = find_candle_patterns(df.copy())
             apds = []
             
-            # 마커 사이즈를 100으로 통일
             marker_size = 100
             
-            pattern_info = {
-                '망치형 (상승)': ('is_hammer', 'Low', '^', 'red'),
-                '역망치형 (하락)': ('is_inverted_hammer', 'High', 'v', 'blue'),
-                '도지형': ('is_doji', 'Close', '*', 'orange'),
-                '상승장악형': ('is_bullish_engulfing', 'Low', 'o', 'green'),
-                '하락장악형': ('is_bearish_engulfing', 'High', 'x', 'purple'),
-                '관통형': ('is_piercing_line', 'Low', 'D', 'darkgreen'),
-                '흑운형': ('is_dark_cloud_cover', 'High', 'D', 'darkred'),
-                'is_three_white_soldiers': ('is_three_white_soldiers', 'Low', 'D', 'darkgreen'),
-                'is_three_black_crows': ('is_three_black_crows', 'High', 'D', 'darkred'),
-                '유성형': ('is_shooting_star', 'High', 'v', 'magenta'),
-                '교수형': ('is_hanging_man', 'Low', 's', 'brown')
+            # 차트 시각화에 사용할 패턴 정보 (컬럼명, 위치, 마커, 색상)
+            chart_pattern_info = {
+                'is_hammer': ('Low', '^', 'red'),
+                'is_inverted_hammer': ('High', 'v', 'blue'),
+                'is_doji': ('Close', '*', 'orange'),
+                'is_bullish_engulfing': ('Low', 'o', 'green'),
+                'is_bearish_engulfing': ('High', 'x', 'purple'),
+                'is_piercing_line': ('Low', 'D', 'darkgreen'),
+                'is_dark_cloud_cover': ('High', 'D', 'darkred'),
+                'is_three_white_soldiers': ('Low', 'D', 'darkgreen'),
+                'is_three_black_crows': ('High', 'D', 'darkred'),
+                'is_shooting_star': ('High', 'v', 'magenta'),
+                'is_hanging_man': ('Low', 's', 'brown')
             }
             
             total_patterns = 0
             st.subheader("3. 발견된 패턴 목록")
             pattern_results = {}
             
-            for pattern_label in selected_patterns:
-                # 적삼병과 흑삼병은 별도로 처리
-                if pattern_label == '적삼병':
+            for pattern_label_with_initials in selected_patterns:
+                # 멀티셀렉트에서 선택된 라벨을 통해 원래 컬럼명 찾기
+                col_name = all_pattern_options[pattern_label_with_initials]
+                
+                # 적삼병과 흑삼병은 선으로 표시
+                if col_name == 'is_three_white_soldiers':
                     series = pd.Series(index=df.index, dtype='float64')
                     for i in range(2, len(df_with_patterns)):
-                        if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_white_soldiers']:
+                        if df_with_patterns.loc[df_with_patterns.index[i], col_name]:
                             min_low = min(df.iloc[i-2:i+1]['Low'])
                             series.iloc[i-2:i+1] = min_low * 0.99
-                            pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
+                            pattern_results[pattern_label_with_initials] = pattern_results.get(pattern_label_with_initials, 0) + 1
                             total_patterns += 1
                     if not series.dropna().empty:
-                        apds.append(mpf.make_addplot(series, 
-                                    type='line', linestyle='solid', width=5, color='red', label='적삼병'))
+                        apds.append(mpf.make_addplot(series,
+                                                     type='line', linestyle='solid', width=5, color='red', label=pattern_label_with_initials))
                 
-                elif pattern_label == '흑삼병':
+                elif col_name == 'is_three_black_crows':
                     series = pd.Series(index=df.index, dtype='float64')
                     for i in range(2, len(df_with_patterns)):
-                        if df_with_patterns.loc[df_with_patterns.index[i], 'is_three_black_crows']:
+                        if df_with_patterns.loc[df_with_patterns.index[i], col_name]:
                             max_high = max(df.iloc[i-2:i+1]['High'])
                             series.iloc[i-2:i+1] = max_high * 1.01
-                            pattern_results[pattern_label] = pattern_results.get(pattern_label, 0) + 1
+                            pattern_results[pattern_label_with_initials] = pattern_results.get(pattern_label_with_initials, 0) + 1
                             total_patterns += 1
                     if not series.dropna().empty:
-                        apds.append(mpf.make_addplot(series, 
-                                    type='line', linestyle='solid', width=5, color='blue', label='흑삼병'))
+                        apds.append(mpf.make_addplot(series,
+                                                     type='line', linestyle='solid', width=5, color='blue', label=pattern_label_with_initials))
                 else:
-                    if 'is_three_white_soldiers' in pattern_info and pattern_info['is_three_white_soldiers'][0] == pattern_info[pattern_label][0]:
-                        continue
-                    if 'is_three_black_crows' in pattern_info and pattern_info['is_three_black_crows'][0] == pattern_info[pattern_label][0]:
-                        continue
-                    
-                    col_name, y_pos, marker, color = pattern_info[pattern_label]
+                    # 마커로 표시되는 패턴들
+                    y_pos, marker, color = chart_pattern_info[col_name]
                     candles = df_with_patterns[df_with_patterns[col_name]]
                     if not candles.empty:
                         pattern_data = pd.Series(index=df.index, dtype='float64')
                         for idx in candles.index:
                             pattern_data.loc[idx] = candles.loc[idx, y_pos]
                         
-                        apds.append(mpf.make_addplot(pattern_data, 
-                                                    type='scatter', 
-                                                    markersize=marker_size, 
-                                                    marker=marker, 
-                                                    color=color, 
-                                                    label=pattern_label))
+                        apds.append(mpf.make_addplot(pattern_data,
+                                                     type='scatter',
+                                                     markersize=marker_size,
+                                                     marker=marker,
+                                                     color=color,
+                                                     label=pattern_label_with_initials))
                         count = len(candles)
-                        pattern_results[pattern_label] = count
+                        pattern_results[pattern_label_with_initials] = count
                         total_patterns += count
 
             if total_patterns > 0:
@@ -382,6 +370,8 @@ if not df_listing.empty:
                 addplot=apds,
                 returnfig=True
             )
+            # 차트 범례의 글자 크기를 조절하여 더 잘 보이도록 함
+            fig.legend(prop={'size': 12})
             st.pyplot(fig)
         else:
             st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
