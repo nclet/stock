@@ -1,5 +1,7 @@
 # Streamlit을 사용한 웹 애플리케이션 제작에 필요한 라이브러리
 import streamlit as st
+import requests
+from json.decoder import JSONDecodeError
 
 # 주식 데이터와 그래프를 다루는 데 필요한 라이브러리들
 import FinanceDataReader as fdr
@@ -63,23 +65,31 @@ ticker_to_korean = {
 def get_coin_listing():
     """pyupbit에서 원화(KRW) 코인 목록을 가져오고 한글명을 매핑합니다."""
     try:
-        tickers = pyupbit.get_tickers(fiat="KRW")
-        df_coin = pd.DataFrame(tickers, columns=['Code'])
+        # pyupbit.get_market_all() 대신 Upbit API를 직접 호출합니다.
+        url = "https://api.upbit.com/v1/market/all"
+        response = requests.get(url, params={'isDetails': 'false'})
+        response.raise_for_status() # HTTP 오류가 발생하면 예외 발생
+        all_markets = response.json()
         
-        # 새로운 티커-한글명 매핑을 가져와서 기존 딕셔너리를 업데이트
-        all_market_info = pyupbit.get_market_all()
-        # pyupbit.get_market_all()이 반환하는 모든 코인 정보에서 한글명을 추출합니다.
-        market_to_korean_name = {market['market']: market['korean_name'] for market in all_market_info}
-        
-        # 티커에 맞는 한글명을 찾아 매핑하고, 없으면 KRW- 접두사를 제거한 티커를 사용합니다.
-        df_coin['korean_name'] = df_coin['Code'].map(market_to_korean_name).fillna(df_coin['Code'].str.replace('KRW-', ''))
+        # 원화(KRW) 마켓만 필터링하고 데이터프레임으로 변환합니다.
+        krw_markets = [market for market in all_markets if market['market'].startswith('KRW-')]
+        df_coin = pd.DataFrame(krw_markets)
+        df_coin.rename(columns={'market': 'Code', 'korean_name': 'korean_name', 'english_name': 'english_name'}, inplace=True)
         
         # 레이블을 '한글명 (영문티커)' 형식으로 생성
+        # 티커에서 'KRW-' 접두사를 제거합니다.
         df_coin['label'] = df_coin['korean_name'] + ' (' + df_coin['Code'].str.replace('KRW-', '') + ')'
         
         return df_coin
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Upbit API 연결 오류: {e}")
+        st.info("인터넷 연결 상태를 확인하거나 Upbit 서버에 문제가 있을 수 있습니다.")
+        return pd.DataFrame()
+    except JSONDecodeError as e:
+        st.error(f"❌ Upbit API 응답 파싱 오류: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"코인 리스트를 가져오는 중 오류가 발생했습니다: {e}")
+        st.error(f"코인 리스트를 가져오는 중 예상치 못한 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
 def get_stock_data(ticker, start_date, end_date, period='1D'):
@@ -384,6 +394,7 @@ if not df_listing.empty:
             st.pyplot(fig)
         else:
             st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
+
 
 
 
