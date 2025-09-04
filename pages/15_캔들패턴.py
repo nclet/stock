@@ -352,3 +352,4 @@ if not df_listing.empty:
             )
             st.pyplot(fig)
         else:
+            st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
