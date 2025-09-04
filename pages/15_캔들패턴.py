@@ -28,14 +28,32 @@ def get_stock_listing():
         st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
+# 코인 티커를 한글명으로 매핑하는 딕셔너리입니다.
+# 모든 코인을 포함하기는 어려우므로, 일반적으로 많이 거래되는 코인 위주로 추가했습니다.
+# 필요한 경우 여기에 더 많은 코인을 추가할 수 있습니다.
+ticker_to_korean = {
+    "KRW-BTC": "비트코인",
+    "KRW-ETH": "이더리움",
+    "KRW-XRP": "리플",
+    "KRW-DOGE": "도지코인",
+    "KRW-ADA": "에이다",
+    "KRW-SOL": "솔라나",
+    "KRW-AVAX": "아발란체",
+    "KRW-DOT": "폴카닷",
+    "KRW-MATIC": "폴리곤",
+    "KRW-LINK": "체인링크"
+}
+
 @st.cache_data
 def get_coin_listing():
-    """pyupbit에서 원화(KRW) 코인 목록을 가져옵니다."""
+    """pyupbit에서 원화(KRW) 코인 목록을 가져오고 한글명을 매핑합니다."""
     try:
         tickers = pyupbit.get_tickers(fiat="KRW")
         df_coin = pd.DataFrame(tickers, columns=['Code'])
-        # 코인명과 티커를 함께 표시하기 위해 'label' 열을 생성합니다.
-        df_coin['label'] = df_coin['Code'].str.replace('KRW-', '') + ' (' + df_coin['Code'] + ')'
+        
+        # 코인 티커를 한글명으로 변환합니다.
+        df_coin['korean_name'] = df_coin['Code'].map(ticker_to_korean).fillna(df_coin['Code'].str.replace('KRW-', ''))
+        df_coin['label'] = df_coin['korean_name'] + ' (' + df_coin['Code'].str.replace('KRW-', '') + ')'
         return df_coin
     except Exception as e:
         st.error(f"코인 리스트를 가져오는 중 오류가 발생했습니다: {e}")
@@ -334,4 +352,3 @@ if not df_listing.empty:
             )
             st.pyplot(fig)
         else:
-            st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
