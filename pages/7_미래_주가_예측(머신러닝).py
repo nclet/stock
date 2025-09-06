@@ -11,22 +11,25 @@ try:
     from sklearn.preprocessing import MinMaxScaler
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.metrics import mean_squared_error, r2_score
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, TimeSeriesSplit
     from tensorflow.keras.models import Sequential, load_model
     from tensorflow.keras.layers import LSTM, Dense, Bidirectional
     from tensorflow.keras.callbacks import EarlyStopping
+    import lightgbm as lgb
+    import optuna
+    import FinanceDataReader as fdr
 except ImportError:
     st.error("""
     **필요 라이브러리가 설치되지 않았습니다. 다음 명령어를 실행하여 설치해주세요:**
-    `pip install tensorflow scikit-learn matplotlib`
+    `pip install tensorflow scikit-learn matplotlib lightgbm optuna FinanceDataReader`
     """)
     st.stop()
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(layout="wide")
 
-st.title("🔮 통합 주가 예측 모델 (LSTM & RandomForest)")
-st.markdown("하나의 애플리케이션에서 **미래 주가 예측(LSTM)**과 **단기 수익률 예측(RandomForest)**을 모두 확인하세요.")
+st.title("🔮 통합 주가 예측 모델 (LSTM & LightGBM with Optuna)")
+st.markdown("하나의 애플리케이션에서 **미래 주가 예측(LSTM)**과 **단기 수익률 예측(LightGBM)**을 모두 확인하세요.")
 
 # --- 공통 기술적 지표 계산 함수 ---
 @st.cache_data
@@ -52,8 +55,8 @@ def calculate_rsi(series, period=14):
 
 # --- 데이터 로드 함수 (공통) ---
 @st.cache_data
-def load_merged_data():
-    """CSV 파일에서 주가 데이터를 로드합니다."""
+def load_and_process_data():
+    """CSV 파일과 fdr을 사용해 주가 및 추가 지표 데이터를 로드하고 병합합니다."""
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.join(current_dir, '..')
@@ -64,13 +67,49 @@ def load_merged_data():
             st.info("죄송합니다. 데이터 파일이 소실되어 있는 상태입니다.")
             return pd.DataFrame()
 
-        df = pd.read_csv(merged_data_file_path)
-        df.columns = df.columns.str.strip()
-        df['Date'] = pd.to_datetime(df['Date'])
-        df['Code'] = df['Code'].astype(str).str.zfill(6)
+        df_base = pd.read_csv(merged_data_file_path)
+        df_base.columns = df_base.columns.str.strip()
+        df_base['Date'] = pd.to_datetime(df_base['Date'])
+        df_base['Code'] = df_base['Code'].astype(str).str.zfill(6)
         
-        st.success("✅ 데이터를 성공적으로 로드했습니다.")
-        return df
+        st.success("✅ 기본 데이터를 성공적으로 로드했습니다.")
+
+        try:
+            # KRX 종목 목록을 가져와서 이름-코드 매핑을 만듭니다.
+            df_krx = fdr.StockListing('KRX')
+            df_krx['Code'] = df_krx['Code'].astype(str).str.zfill(6)
+            name_code_dict = df_krx.set_index('Code')['Name'].to_dict()
+            
+            # 모든 종목에 대해 데이터를 가져오는 것은 비효율적이므로, 
+            # 일단 '삼성전자' 데이터를 예시로 가져오고, 실제 앱에서는 개별 종목 선택 시 가져오도록 해야 합니다.
+            # 여기서는 편의상 통합 데이터셋에 포함된 종목만 처리합니다.
+            unique_codes = df_base['Code'].unique()
+            df_fdr_list = []
+            
+            for code in unique_codes:
+                try:
+                    df_fdr = fdr.DataReader(code, start=df_base['Date'].min(), end=df_base['Date'].max())
+                    if not df_fdr.empty:
+                        df_fdr.reset_index(inplace=True)
+                        df_fdr['Code'] = code
+                        df_fdr_list.append(df_fdr[['Date', 'Code', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']])
+                except Exception as e:
+                    # 일부 종목은 fdr에 데이터가 없을 수 있으므로 건너뜁니다.
+                    pass
+            
+            if df_fdr_list:
+                df_fdr_all = pd.concat(df_fdr_list, ignore_index=True)
+                df_merged = pd.merge(df_base, df_fdr_all, on=['Date', 'Code'], how='left')
+                st.success("✅ `finance-datareader` 데이터를 성공적으로 병합했습니다.")
+                return df_merged
+            else:
+                st.warning("⚠️ `finance-datareader`에서 추가 데이터를 가져오지 못했습니다.")
+                return df_base
+
+        except Exception as e:
+            st.warning(f"⚠️ `finance-datareader` 데이터 로딩 중 오류가 발생했습니다: {e}")
+            return df_base
+
     except Exception as e:
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
@@ -89,11 +128,11 @@ def build_lstm_model(input_shape):
 @st.cache_resource
 def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, _scaler, features):
     """LSTM 모델을 학습하고 미래 주가를 예측합니다."""
-    model_path = f"model_{selected_code}.h5"
+    model_path = f"model_lstm_{selected_code}.h5"
     model = None
 
     if os.path.exists(model_path):
-        st.info("✅ 기존 학습 모델을 로드합니다. (주가 예측 모형은 종가를 중심으로 RSI·볼린저밴드·PER·PBR,LSTM를 통해 분석하고 있습니다.)")
+        st.info("✅ 기존 학습 모델을 로드합니다.")
         model = load_model(model_path)
     else:
         st.info("🔄 새로운 LSTM 모델 학습이 필요합니다. 잠시만 기다려 주세요...")
@@ -126,43 +165,81 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
     future_preds = recursive_forecast(model, last_sequence, n_future_days, _scaler, n_features, features)
     return future_preds
 
-# --- 머신러닝 (RandomForest) 관련 함수 ---
+# --- 머신러닝 (LightGBM) 관련 함수 ---
 @st.cache_resource
-def train_and_predict_random_forest(selected_code, df_stock_data, ml_features):
-    """RandomForest 모델을 학습하고 다음 날 수익률을 예측합니다."""
+def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_features):
+    """LightGBM 모델을 Optuna로 하이퍼파라미터 최적화하여 학습하고 다음 날 수익률을 예측합니다."""
     df_stock_data['Next_Day_Return'] = df_stock_data['Close'].pct_change().shift(-1) * 100
     df_ml = df_stock_data[ml_features + ['Next_Day_Return']].dropna()
 
     if len(df_ml) < 20:
         st.warning(f"데이터가 부족하여 수익률 예측을 할 수 없습니다. 최소 20일 이상의 유효한 데이터가 필요합니다. (현재 {len(df_ml)}일)")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     X_ml = df_ml[ml_features].values
     y_ml = df_ml['Next_Day_Return'].values
     scaler_ml = MinMaxScaler()
     X_ml_scaled = scaler_ml.fit_transform(X_ml)
+    
+    def objective(trial):
+        params = {
+            'objective': 'regression',
+            'metric': 'rmse',
+            'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
+            'num_leaves': trial.suggest_int('num_leaves', 2, 64),
+            'max_depth': trial.suggest_int('max_depth', 3, 15),
+            'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 1.0),
+            'bagging_fraction': trial.suggest_float('bagging_fraction', 0.5, 1.0),
+            'bagging_freq': trial.suggest_int('bagging_freq', 1, 7),
+            'lambda_l1': trial.suggest_float('lambda_l1', 1e-8, 10.0, log=True),
+            'lambda_l2': trial.suggest_float('lambda_l2', 1e-8, 10.0, log=True),
+            'verbose': -1,
+            'n_jobs': -1,
+            'seed': 42
+        }
+
+        tscv = TimeSeriesSplit(n_splits=5)
+        scores = []
+        for train_index, test_index in tscv.split(X_ml_scaled):
+            X_train_cv, X_test_cv = X_ml_scaled[train_index], X_ml_scaled[test_index]
+            y_train_cv, y_test_cv = y_ml[train_index], y_ml[test_index]
+            
+            model_cv = lgb.LGBMRegressor(**params)
+            model_cv.fit(X_train_cv, y_train_cv,
+                         eval_set=[(X_test_cv, y_test_cv)],
+                         callbacks=[lgb.early_stopping(100, verbose=False)])
+            
+            y_pred_cv = model_cv.predict(X_test_cv)
+            scores.append(mean_squared_error(y_test_cv, y_pred_cv))
+        
+        return np.mean(scores)
+
+    with st.spinner(f"🔄 {selected_code} LightGBM 하이퍼파라미터 최적화 중 (Optuna)..."):
+        study = optuna.create_study(direction='minimize')
+        study.optimize(objective, n_trials=50, show_progress_bar=True)
+    
+    st.success(f"✅ Optuna 최적화 완료! 최적의 파라미터:")
+    st.json(study.best_params)
+
     test_size_ml = max(1, int(0.2 * len(X_ml_scaled)))
     X_train_ml, X_test_ml = X_ml_scaled[:-test_size_ml], X_ml_scaled[-test_size_ml:]
     y_train_ml, y_test_ml = y_ml[:-test_size_ml], y_ml[-test_size_ml:]
+    
+    lgbm_model = lgb.LGBMRegressor(**study.best_params)
+    with st.spinner(f"🔄 {selected_code} 최적화된 LightGBM 모델 학습 중..."):
+        lgbm_model.fit(X_train_ml, y_train_ml)
+    st.success("✅ LightGBM 모델 최종 학습 완료!")
 
-    if len(X_test_ml) == 0:
-        st.warning("테스트 데이터가 부족하여 모델 평가를 수행할 수 없습니다.")
-        return None, None, None, None, None
-
-    with st.spinner(f"🔄 {selected_code} RandomForest 모델 학습 중..."):
-        rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        rf_model.fit(X_train_ml, y_train_ml)
-    st.success("✅ RandomForest 모델 학습 완료!")
-
-    y_pred_ml = rf_model.predict(X_test_ml)
+    y_pred_ml = lgbm_model.predict(X_test_ml)
     last_data_ml_raw = df_ml[ml_features].iloc[-1].values.reshape(1, -1)
     last_data_ml_scaled = scaler_ml.transform(last_data_ml_raw)
-    next_day_return_pred_ml = rf_model.predict(last_data_ml_scaled)[0]
+    next_day_return_pred_ml = lgbm_model.predict(last_data_ml_scaled)[0]
 
-    return rf_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml
+    return lgbm_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml, study.best_params
 
 # --- Streamlit UI 시작 ---
-df_all_data = load_merged_data()
+df_all_data = load_and_process_data()
 
 if not df_all_data.empty:
     try:
@@ -192,8 +269,8 @@ if not df_all_data.empty:
         # --- LSTM 모델 예측 섹션 ---
         st.header("1️⃣ LSTM 모델: 미래 주가 예측")
         
-        # ⚠️ 수정: BB_Mid를 추가하여 features_lstm의 크기를 7로 맞춤
-        features_lstm = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR', 'BB_Mid']
+        # 새로운 지표 추가
+        features_lstm = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR', 'BB_Mid', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
         target_lstm = 'Close'
         
         df_processed_lstm = df_stock[features_lstm].dropna()
@@ -237,40 +314,40 @@ if not df_all_data.empty:
             st.metric(label=f"예측 기간 수익률 ({future_dates[0].strftime('%Y-%m-%d')} ~ {future_dates[-1].strftime('%Y-%m-%d')})",
                       value=f"{returns_lstm:.2f}%")
 
-        # --- RandomForest 모델 예측 섹션 ---
+        # --- LightGBM 모델 예측 섹션 ---
         st.markdown("---")
-        st.header("2️⃣ RandomForest 모델: 단기 수익률 예측")
+        st.header("2️⃣ LightGBM 모델: 단기 수익률 예측 (with Optuna)")
         
-        ml_features = ['Close', 'RSI', 'BB_Upper', 'BB_Lower']
-        rf_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml = train_and_predict_random_forest(selected_code, df_stock.copy(), ml_features)
+        # 새로운 지표 추가
+        ml_features = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'BB_Mid', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
+        lgbm_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml, best_params = train_and_predict_lightgbm_with_optuna(selected_code, df_stock.copy(), ml_features)
 
-        if rf_model is not None:
-            st.subheader("📊 RandomForest 모델 성능 평가")
+        if lgbm_model is not None:
+            st.subheader("📊 LightGBM 모델 성능 평가")
             st.write(f"**평균 제곱 오차 (MSE)**: {mean_squared_error(y_test_ml, y_pred_ml):.2f}")
             st.write(f"**결정 계수 (R² Score)**: {r2_score(y_test_ml, y_pred_ml):.2f}")
             st.write(f"테스트 데이터의 **평균 실제 수익률**: {np.mean(y_test_ml):.2f}%")
             st.write(f"테스트 데이터의 **평균 예측 수익률**: {np.mean(y_pred_ml):.2f}%")
 
-            st.subheader("📈 RandomForest 다음 날 수익률 예측")
+            st.subheader("📈 LightGBM 다음 날 수익률 예측")
             st.metric(label="예측된 수익률", value=f"{next_day_return_pred_ml:.2f}%")
             
             # 예측 시각화 (실제 수익률과 예측 수익률 비교)
             st.markdown("---")
-            st.subheader("📉 RandomForest 예측 vs. 실제 수익률")
-            fig_rf, ax_rf = plt.subplots(figsize=(12, 6))
-            ax_rf.plot(y_test_ml, label='실제 수익률', color='blue', marker='o', linestyle='None', alpha=0.6)
-            ax_rf.plot(y_pred_ml, label='예측 수익률', color='red', marker='x', linestyle='None', alpha=0.6)
-            ax_rf.set_title(f"{selected_name} ({selected_code}) RandomForest 예측 수익률")
-            ax_rf.set_xlabel("데이터 포인트 인덱스")
-            ax_rf.set_ylabel("수익률(%)")
-            ax_rf.legend()
-            ax_rf.grid(True)
+            st.subheader("📉 LightGBM 예측 vs. 실제 수익률")
+            fig_lgbm, ax_lgbm = plt.subplots(figsize=(12, 6))
+            ax_lgbm.plot(y_test_ml, label='실제 수익률', color='blue', marker='o', linestyle='None', alpha=0.6)
+            ax_lgbm.plot(y_pred_ml, label='예측 수익률', color='red', marker='x', linestyle='None', alpha=0.6)
+            ax_lgbm.set_title(f"{selected_name} ({selected_code}) LightGBM 예측 수익률")
+            ax_lgbm.set_xlabel("데이터 포인트 인덱스")
+            ax_lgbm.set_ylabel("수익률(%)")
+            ax_lgbm.legend()
+            ax_lgbm.grid(True)
             plt.tight_layout()
-            st.pyplot(fig_rf)
+            st.pyplot(fig_lgbm)
 
 else:
     st.info("데이터 로드 중 문제가 발생했습니다. 페이지 상단의 오류 메시지를 확인해주세요.")
-
 
 
 ########################################################################
