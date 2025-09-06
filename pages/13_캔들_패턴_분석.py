@@ -36,19 +36,17 @@ def get_stock_listing(market):
     try:
         df = fdr.StockListing(market)
         
-        # 'Code' 열이 없는 경우 'Symbol' 열을 대신 사용합니다.
-        code_col = None
-        if 'Code' in df.columns:
-            code_col = 'Code'
-        elif 'Symbol' in df.columns:
-            code_col = 'Symbol'
-        else:
+        # 'Code' 열이 없는 경우 'Symbol' 열을 찾아 이름을 'Code'로 변경합니다.
+        if 'Code' not in df.columns and 'Symbol' in df.columns:
+            df.rename(columns={'Symbol': 'Code'}, inplace=True)
+            
+        if 'Code' not in df.columns:
             st.error("데이터에 'Code' 또는 'Symbol' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
             return pd.DataFrame()
 
-        df[code_col] = df[code_col].astype(str)
+        df['Code'] = df['Code'].astype(str)
         # 종목명과 티커를 결합하여 레이블 생성
-        df['label'] = df['Name'] + ' (' + df[code_col] + ')'
+        df['label'] = df['Name'] + ' (' + df['Code'] + ')'
         return df
     except Exception as e:
         st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
@@ -261,26 +259,22 @@ selected_market = st.radio(
 
 df_listing = pd.DataFrame()
 default_start_date = datetime.date.today()
-period_map = {}
+period_options = ('일봉', '주봉', '월봉')
 
 if selected_market == '한국 주식 (KRX)':
     df_listing = get_stock_listing('KRX')
     default_start_date = datetime.date.today() - datetime.timedelta(days=365)
-    period_options = ('일봉', '주봉', '월봉')
-    period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
 elif selected_market == '미국 증시 (NYSE/NASDAQ)':
     df_listing = get_stock_listing('NASDAQ') 
     default_start_date = datetime.date.today() - datetime.timedelta(days=365)
-    period_options = ('일봉', '주봉', '월봉')
-    period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
 else: # 코인 (Upbit)
     df_listing = get_coin_listing()
     default_start_date = datetime.date.today() - datetime.timedelta(days=180) 
     period_options = ('일봉', '주봉', '월봉')
-    period_map = {'일봉': 'day', '주봉': 'week', '월봉': 'month'}
     
 if not df_listing.empty:
     selected_label = st.selectbox(f"📊 분석할 {selected_market.split()[0]} 종목", df_listing["label"].tolist())
+    # 'Code' 열이 항상 존재하도록 수정했기 때문에 아래 코드는 이제 안전합니다.
     selected_code = df_listing[df_listing["label"] == selected_label]["Code"].values[0]
 
     col1, col2 = st.columns(2)
