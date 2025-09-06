@@ -35,13 +35,20 @@ def get_stock_listing(market):
     """FinanceDataReader에서 주식 종목 전체 목록을 가져옵니다."""
     try:
         df = fdr.StockListing(market)
-        if 'Code' not in df.columns:
-            st.error("데이터에 'Code' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
-            return pd.DataFrame()
         
-        df['Code'] = df['Code'].astype(str)
+        # 'Code' 열이 없는 경우 'Symbol' 열을 대신 사용합니다.
+        code_col = None
+        if 'Code' in df.columns:
+            code_col = 'Code'
+        elif 'Symbol' in df.columns:
+            code_col = 'Symbol'
+        else:
+            st.error("데이터에 'Code' 또는 'Symbol' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
+            return pd.DataFrame()
+
+        df[code_col] = df[code_col].astype(str)
         # 종목명과 티커를 결합하여 레이블 생성
-        df['label'] = df['Name'] + ' (' + df['Code'] + ')'
+        df['label'] = df['Name'] + ' (' + df[code_col] + ')'
         return df
     except Exception as e:
         st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
@@ -81,10 +88,11 @@ def get_coin_listing():
 def get_data(ticker, start_date, end_date, market, period='1D'):
     """선택된 시장에 따라 주식 또는 코인 데이터를 가져옵니다."""
     try:
-        if market in ['KRX', 'NASDAQ', 'NYSE']:
+        if market in ['한국 주식 (KRX)', '미국 증시 (NYSE/NASDAQ)']:
             data = fdr.DataReader(ticker, start_date, end_date)
+            
             # 주봉 또는 월봉으로 데이터를 리샘플링합니다.
-            if period == '1W':
+            if period == '주봉':
                 resampled_data = data.resample('W').agg({
                     'Open': 'first',
                     'High': 'max',
@@ -92,7 +100,9 @@ def get_data(ticker, start_date, end_date, market, period='1D'):
                     'Close': 'last',
                     'Volume': 'sum'
                 }).dropna()
-            elif period == '1M':
+                resampled_data.index.name = 'Date'
+                return resampled_data
+            elif period == '월봉':
                 resampled_data = data.resample('M').agg({
                     'Open': 'first',
                     'High': 'max',
@@ -100,26 +110,23 @@ def get_data(ticker, start_date, end_date, market, period='1D'):
                     'Close': 'last',
                     'Volume': 'sum'
                 }).dropna()
-            else:
-                resampled_data = data
-        
-            if resampled_data.empty:
-                st.warning(f"오류: [{ticker}] 종목에 대한 데이터를 찾을 수 없습니다. 종목 코드나 날짜 범위를 확인해 주세요.")
-                return None
-            return resampled_data
-        
-        elif market == 'Upbit':
-            # pyupbit의 get_ohlcv 함수는 count 파라미터가 필수적입니다.
-            # 날짜 범위에 맞게 count를 계산합니다.
+                resampled_data.index.name = 'Date'
+                return resampled_data
+            else: # 일봉
+                data.index.name = 'Date'
+                return data
+
+        elif market == '코인 (Upbit)':
+            # pyupbit는 날짜 범위가 아닌 count를 사용합니다.
+            upbit_period_map = {'일봉': 'day', '주봉': 'week', '월봉': 'month'}
             days_diff = (end_date - start_date).days
-            count = days_diff + 1 if period == 'day' else int(days_diff / 7) + 1 if period == 'week' else int(days_diff / 30) + 1
+            count = days_diff + 1 if period == '일봉' else int(days_diff / 7) + 1 if period == '주봉' else int(days_diff / 30) + 1
             
-            df = pyupbit.get_ohlcv(ticker=ticker, interval=period, count=count)
+            df = pyupbit.get_ohlcv(ticker=ticker, interval=upbit_period_map[period], count=count)
             if df is None or df.empty:
                 st.warning(f"오류: [{ticker}] 코인에 대한 데이터를 찾을 수 없습니다. 티커나 날짜 범위를 확인해 주세요.")
                 return None
                 
-            # FinanceDataReader의 데이터프레임과 열 이름을 통일합니다.
             df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'value']
             df.index.name = 'Date'
             return df
@@ -262,8 +269,6 @@ if selected_market == '한국 주식 (KRX)':
     period_options = ('일봉', '주봉', '월봉')
     period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
 elif selected_market == '미국 증시 (NYSE/NASDAQ)':
-    # NYSE와 NASDAQ을 합쳐서 제공하거나, 따로 제공할 수 있습니다.
-    # 여기서는 편의상 NASDAQ 목록을 기본으로 사용합니다.
     df_listing = get_stock_listing('NASDAQ') 
     default_start_date = datetime.date.today() - datetime.timedelta(days=365)
     period_options = ('일봉', '주봉', '월봉')
@@ -326,7 +331,7 @@ if not df_listing.empty:
         st.subheader("분석 중...")
         st.info("데이터를 불러오고 캔들 패턴을 분석하는 중입니다. 잠시만 기다려 주세요.")
         
-        df = get_data(selected_code, start_date, end_date, selected_market.split()[0], period_map[selected_period])
+        df = get_data(selected_code, start_date, end_date, selected_market, selected_period)
         
         if df is not None and not df.empty:
             df_with_patterns = find_candle_patterns(df.copy())
@@ -461,7 +466,6 @@ with st.expander("캔들 패턴 참고자료 📖"):
     - **📉유성형 (Shooting Star)**: 긴 위 꼬리와 짧은 몸통을 가진 캔들입니다. 상승 추세에서 나타나면 고점에서 매수세가 약해졌다는 것을 보여주며, 하락 반전 가능성을 시사합니다.
     - **📉교수형 (Hanging Man)**: 망치형과 모양은 비슷하지만, 상승 추세에서 나타납니다. 주가가 고점에서 하락할 가능성이 있다는 경고 신호로 해석됩니다.
     """)
-
 
 
 # # Streamlit을 사용한 웹 애플리케이션 제작에 필요한 라이브러리
