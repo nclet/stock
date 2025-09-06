@@ -86,7 +86,6 @@ def build_lstm_model(input_shape):
     model.compile(optimizer='adam', loss='mse')
     return model
 
-# ⚠️ 오류 해결: scaler 매개변수를 캐싱에서 제외하기 위해 이름 앞에 `_`를 붙였습니다.
 @st.cache_resource
 def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, _scaler, features):
     """LSTM 모델을 학습하고 미래 주가를 예측합니다."""
@@ -105,19 +104,29 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
         model.save(model_path)
         st.success("✅ LSTM 모델 학습 완료 및 저장!")
 
+    # ⚠️ 오류 해결: recursive_forecast 함수를 수정했습니다.
     def recursive_forecast(model, last_sequence, n_days, scaler_inner, n_features, features_list):
         forecasts = []
         current_seq = last_sequence.copy()
+        close_idx = features_list.index('Close')
         
         for _ in range(n_days):
+            # 모델의 예측은 (1, seq_len, n_features) 형태의 입력이 필요합니다.
             pred = model.predict(current_seq.reshape(1, seq_len, n_features), verbose=0)[0][0]
             forecasts.append(pred)
-            new_feature_vector = np.full(n_features, pred)
+            
+            # 다음 예측을 위한 시퀀스를 준비합니다.
+            # 예측된 종가만 새로운 벡터에 추가하고, 다른 특징들은 0으로 둡니다.
+            new_feature_vector = np.zeros(n_features)
+            new_feature_vector[close_idx] = pred
+            
+            # 가장 오래된 데이터를 제거하고 새로운 벡터를 추가합니다.
             current_seq = np.vstack([current_seq[1:], new_feature_vector])
         
+        # 스케일링을 되돌리기 위한 더미 배열을 생성
         dummy_array_for_inverse = np.zeros((len(forecasts), n_features))
-        dummy_array_for_inverse[:, features_list.index('Close')] = forecasts
-        forecasts_scaled = scaler_inner.inverse_transform(dummy_array_for_inverse)[:, features_list.index('Close')]
+        dummy_array_for_inverse[:, close_idx] = forecasts
+        forecasts_scaled = scaler_inner.inverse_transform(dummy_array_for_inverse)[:, close_idx]
         return forecasts_scaled
 
     future_preds = recursive_forecast(model, last_sequence, n_future_days, _scaler, n_features, features)
@@ -209,7 +218,6 @@ if not df_all_data.empty:
             last_sequence_lstm = X_lstm[-1]
             n_features_lstm = X_lstm.shape[2]
             
-            # ⚠️ 수정된 함수 호출: scaler_lstm 객체를 전달
             future_preds_lstm = train_and_predict_lstm_model(X_train_lstm, y_train_lstm, X_test_lstm, y_test_lstm, seq_len_lstm, n_features_lstm, selected_code, n_days, last_sequence_lstm, scaler_lstm, features_lstm)
 
             last_date = df_processed_lstm.index[-1]
