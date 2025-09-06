@@ -22,4 +22,5 @@ pyupbit
 lightgbm
 pytrends
 mplfinance
-mplfinance
+optuna
+lightgbm
