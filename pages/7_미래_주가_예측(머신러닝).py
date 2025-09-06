@@ -9,7 +9,6 @@ import io
 # 딥러닝 및 머신러닝 관련 라이브러리 임포트
 try:
     from sklearn.preprocessing import MinMaxScaler
-    from sklearn.ensemble import RandomForestRegressor
     from sklearn.metrics import mean_squared_error, r2_score
     from sklearn.model_selection import train_test_split, TimeSeriesSplit
     from tensorflow.keras.models import Sequential, load_model
@@ -53,10 +52,10 @@ def calculate_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- 데이터 로드 함수 (공통) ---
+# --- 데이터 로드 함수 (기본) ---
 @st.cache_data
-def load_and_process_data():
-    """CSV 파일과 fdr을 사용해 주가 및 추가 지표 데이터를 로드하고 병합합니다."""
+def load_base_data():
+    """CSV 파일에서 기본 주가 데이터를 로드합니다."""
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.join(current_dir, '..')
@@ -67,49 +66,13 @@ def load_and_process_data():
             st.info("죄송합니다. 데이터 파일이 소실되어 있는 상태입니다.")
             return pd.DataFrame()
 
-        df_base = pd.read_csv(merged_data_file_path)
-        df_base.columns = df_base.columns.str.strip()
-        df_base['Date'] = pd.to_datetime(df_base['Date'])
-        df_base['Code'] = df_base['Code'].astype(str).str.zfill(6)
+        df = pd.read_csv(merged_data_file_path)
+        df.columns = df.columns.str.strip()
+        df['Date'] = pd.to_datetime(df['Date'])
+        df['Code'] = df['Code'].astype(str).str.zfill(6)
         
         st.success("✅ 기본 데이터를 성공적으로 로드했습니다.")
-
-        try:
-            # KRX 종목 목록을 가져와서 이름-코드 매핑을 만듭니다.
-            df_krx = fdr.StockListing('KRX')
-            df_krx['Code'] = df_krx['Code'].astype(str).str.zfill(6)
-            name_code_dict = df_krx.set_index('Code')['Name'].to_dict()
-            
-            # 모든 종목에 대해 데이터를 가져오는 것은 비효율적이므로, 
-            # 일단 '삼성전자' 데이터를 예시로 가져오고, 실제 앱에서는 개별 종목 선택 시 가져오도록 해야 합니다.
-            # 여기서는 편의상 통합 데이터셋에 포함된 종목만 처리합니다.
-            unique_codes = df_base['Code'].unique()
-            df_fdr_list = []
-            
-            for code in unique_codes:
-                try:
-                    df_fdr = fdr.DataReader(code, start=df_base['Date'].min(), end=df_base['Date'].max())
-                    if not df_fdr.empty:
-                        df_fdr.reset_index(inplace=True)
-                        df_fdr['Code'] = code
-                        df_fdr_list.append(df_fdr[['Date', 'Code', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']])
-                except Exception as e:
-                    # 일부 종목은 fdr에 데이터가 없을 수 있으므로 건너뜁니다.
-                    pass
-            
-            if df_fdr_list:
-                df_fdr_all = pd.concat(df_fdr_list, ignore_index=True)
-                df_merged = pd.merge(df_base, df_fdr_all, on=['Date', 'Code'], how='left')
-                st.success("✅ `finance-datareader` 데이터를 성공적으로 병합했습니다.")
-                return df_merged
-            else:
-                st.warning("⚠️ `finance-datareader`에서 추가 데이터를 가져오지 못했습니다.")
-                return df_base
-
-        except Exception as e:
-            st.warning(f"⚠️ `finance-datareader` 데이터 로딩 중 오류가 발생했습니다: {e}")
-            return df_base
-
+        return df
     except Exception as e:
         st.error(f"데이터 로딩 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
@@ -239,7 +202,8 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
     return lgbm_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml, study.best_params
 
 # --- Streamlit UI 시작 ---
-df_all_data = load_and_process_data()
+# 초기 기본 데이터만 로드합니다. (로딩 속도 개선)
+df_all_data = load_base_data()
 
 if not df_all_data.empty:
     try:
@@ -254,9 +218,32 @@ if not df_all_data.empty:
     n_days = st.slider("LSTM 예측 기간 (미래 일 수)", 5, 60, 30)
     
     if st.button("🚀 **통합 예측 시작**"):
-        df_stock = df_all_data[df_all_data['Code'] == selected_code].copy()
-        df_stock.sort_values('Date', inplace=True)
-        df_stock.set_index('Date', inplace=True)
+        # 버튼 클릭 시에만 해당 종목의 추가 데이터를 가져옵니다.
+        with st.spinner(f"🔄 {selected_name}의 추가 데이터 로딩 중..."):
+            try:
+                # 선택된 종목의 기본 데이터 필터링
+                df_stock = df_all_data[df_all_data['Code'] == selected_code].copy()
+                df_stock.sort_values('Date', inplace=True)
+                df_stock.set_index('Date', inplace=True)
+
+                # FinanceDataReader를 사용하여 추가 지표 데이터 로드
+                df_fdr = fdr.DataReader(selected_code, start=df_stock.index.min(), end=df_stock.index.max())
+                df_fdr.reset_index(inplace=True)
+                df_fdr.rename(columns={'Close': 'FDR_Close'}, inplace=True) # 기존 'Close'와 충돌 방지
+                
+                # 'Date' 컬럼을 기준으로 두 데이터프레임 병합
+                df_stock.reset_index(inplace=True)
+                df_merged = pd.merge(df_stock, df_fdr[['Date', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']], on='Date', how='left')
+                df_merged.set_index('Date', inplace=True)
+                df_merged.sort_index(inplace=True)
+
+                st.success("✅ 추가 지표 데이터 로딩 및 병합 완료!")
+                df_stock = df_merged # 병합된 데이터로 업데이트
+
+            except Exception as e:
+                st.warning(f"⚠️ `finance-datareader` 데이터 로딩 또는 병합 중 오류가 발생했습니다: {e}")
+                # 오류 발생 시 기존 데이터만 사용
+                st.info("기존 데이터만 사용하여 예측을 진행합니다.")
 
         if df_stock.empty:
             st.error(f"선택하신 종목 ({selected_name})에 대한 데이터가 없습니다. 다른 종목을 선택해주세요.")
@@ -348,6 +335,7 @@ if not df_all_data.empty:
 
 else:
     st.info("데이터 로드 중 문제가 발생했습니다. 페이지 상단의 오류 메시지를 확인해주세요.")
+
 
 
 ########################################################################
