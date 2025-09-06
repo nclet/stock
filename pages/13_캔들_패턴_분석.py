@@ -220,18 +220,15 @@ def find_candle_patterns(df):
     
     return df
 
-def calculate_and_add_indicators(df, show_ma_short, show_ma_long, show_bb, show_rsi):
+def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
     """선택된 기술적 지표들을 계산하고, mplfinance addplot 객체 리스트를 반환합니다."""
     apds = []
     
-    # 단기 이동평균선 (20일) 계산 및 추가
-    if show_ma_short:
+    # 이동평균선 (20일, 60일) 계산 및 추가
+    if show_ma:
         df['MA20'] = df['Close'].rolling(window=20).mean()
-        apds.append(mpf.make_addplot(df['MA20'], color='blue', panel=0, label='단기 MA (20일)'))
-        
-    # 장기 이동평균선 (60일) 계산 및 추가
-    if show_ma_long:
         df['MA60'] = df['Close'].rolling(window=60).mean()
+        apds.append(mpf.make_addplot(df['MA20'], color='blue', panel=0, label='단기 MA (20일)'))
         apds.append(mpf.make_addplot(df['MA60'], color='red', panel=0, label='장기 MA (60일)'))
         
     # 볼린저 밴드 계산 및 추가
@@ -323,13 +320,11 @@ if not df_listing.empty:
     st.subheader("2. 기술적 지표 선택")
     col3, col4, col5 = st.columns(3)
     with col3:
-        show_ma_short = st.checkbox('단기 이동평균선 (20일)')
+        show_ma = st.checkbox('이동평균선 (20일, 60일)')
     with col4:
-        show_ma_long = st.checkbox('장기 이동평균선 (60일)')
-    with col5:
         show_bb = st.checkbox('볼린저 밴드')
-    st.markdown("---")
-    show_rsi = st.checkbox('상대강도지수 (RSI)')
+    with col5:
+        show_rsi = st.checkbox('상대강도지수 (RSI)')
 
     st.subheader("3. 날짜 범위 선택")
     today = datetime.date.today()
@@ -428,7 +423,7 @@ if not df_listing.empty:
                 st.write("선택한 기간 동안 발견된 캔들 패턴이 없습니다.")
 
             # 선택된 지표들을 추가
-            indicator_apds = calculate_and_add_indicators(df_with_patterns, show_ma_short, show_ma_long, show_bb, show_rsi)
+            indicator_apds = calculate_and_add_indicators(df_with_patterns, show_ma, show_bb, show_rsi)
             apds.extend(indicator_apds)
             
             st.subheader("5. 캔들 차트")
