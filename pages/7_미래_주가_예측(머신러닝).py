@@ -104,26 +104,20 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
         model.save(model_path)
         st.success("✅ LSTM 모델 학습 완료 및 저장!")
 
-    # ⚠️ 오류 해결: recursive_forecast 함수를 수정했습니다.
     def recursive_forecast(model, last_sequence, n_days, scaler_inner, n_features, features_list):
         forecasts = []
         current_seq = last_sequence.copy()
         close_idx = features_list.index('Close')
         
         for _ in range(n_days):
-            # 모델의 예측은 (1, seq_len, n_features) 형태의 입력이 필요합니다.
             pred = model.predict(current_seq.reshape(1, seq_len, n_features), verbose=0)[0][0]
             forecasts.append(pred)
             
-            # 다음 예측을 위한 시퀀스를 준비합니다.
-            # 예측된 종가만 새로운 벡터에 추가하고, 다른 특징들은 0으로 둡니다.
             new_feature_vector = np.zeros(n_features)
             new_feature_vector[close_idx] = pred
             
-            # 가장 오래된 데이터를 제거하고 새로운 벡터를 추가합니다.
             current_seq = np.vstack([current_seq[1:], new_feature_vector])
         
-        # 스케일링을 되돌리기 위한 더미 배열을 생성
         dummy_array_for_inverse = np.zeros((len(forecasts), n_features))
         dummy_array_for_inverse[:, close_idx] = forecasts
         forecasts_scaled = scaler_inner.inverse_transform(dummy_array_for_inverse)[:, close_idx]
@@ -198,7 +192,8 @@ if not df_all_data.empty:
         # --- LSTM 모델 예측 섹션 ---
         st.header("1️⃣ LSTM 모델: 미래 주가 예측")
         
-        features_lstm = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR']
+        # ⚠️ 수정: BB_Mid를 추가하여 features_lstm의 크기를 7로 맞춤
+        features_lstm = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR', 'BB_Mid']
         target_lstm = 'Close'
         
         df_processed_lstm = df_stock[features_lstm].dropna()
