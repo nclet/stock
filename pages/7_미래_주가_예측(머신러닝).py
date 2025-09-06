@@ -55,7 +55,7 @@ def calculate_rsi(series, period=14):
 # --- 데이터 로드 함수 (기본) ---
 @st.cache_data
 def load_base_data():
-    """CSV 파일에서 기본 주가 데이터를 로드합니다."""
+    """CSV 파일에서 기본 주가 데이터를 로드하고 필터링합니다."""
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.join(current_dir, '..')
@@ -71,6 +71,9 @@ def load_base_data():
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6)
         
+        # --- 2015년 이후 데이터만 필터링하는 로직 추가 ---
+        df = df[df['Date'] >= '2015-01-01'].copy()
+
         st.success("✅ 기본 데이터를 성공적으로 로드했습니다.")
         return df
     except Exception as e:
@@ -170,7 +173,7 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
         scores = []
         for train_index, test_index in tscv.split(X_ml_scaled):
             X_train_cv, X_test_cv = X_ml_scaled[train_index], X_ml_scaled[test_index]
-            y_train_cv, y_test_cv = y_ml[train_index], y_ml[test_index]
+            y_train_cv, y_test_cv = y_ml[train_index], y_ml[test_cv]
             
             model_cv = lgb.LGBMRegressor(**params)
             model_cv.fit(X_train_cv, y_train_cv,
