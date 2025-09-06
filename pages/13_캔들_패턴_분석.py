@@ -31,36 +31,22 @@ pattern_mapping = {
 }
 
 @st.cache_data
-def get_stock_listing():
-    """FinanceDataReader에서 한국 주식 종목 전체 목록을 가져옵니다."""
+def get_stock_listing(market):
+    """FinanceDataReader에서 주식 종목 전체 목록을 가져옵니다."""
     try:
-        df_krx = fdr.StockListing('KRX')
-        if 'Code' not in df_krx.columns:
+        df = fdr.StockListing(market)
+        if 'Code' not in df.columns:
             st.error("데이터에 'Code' 열이 없습니다. 라이브러리 버전을 확인해주세요.")
             return pd.DataFrame()
         
-        df_krx['Code'] = df_krx['Code'].astype(str)
-        df_krx['label'] = df_krx['Name'] + ' (' + df_krx['Code'] + ')'
-        return df_krx
+        df['Code'] = df['Code'].astype(str)
+        # 종목명과 티커를 결합하여 레이블 생성
+        df['label'] = df['Name'] + ' (' + df['Code'] + ')'
+        return df
     except Exception as e:
         st.error(f"종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
-
-# 코인 티커를 한글명으로 매핑하는 딕셔너리입니다.
-# 이 딕셔너리는 이제 기본값으로만 사용됩니다.
-ticker_to_korean = {
-    "KRW-BTC": "비트코인",
-    "KRW-ETH": "이더리움",
-    "KRW-XRP": "리플",
-    "KRW-DOGE": "도지코인",
-    "KRW-ADA": "에이다",
-    "KRW-SOL": "솔라나",
-    "KRW-AVAX": "아발란체",
-    "KRW-DOT": "폴카닷",
-    "KRW-MATIC": "폴리곤",
-    "KRW-LINK": "체인링크"
-}
-
+        
 @st.cache_data
 def get_coin_listing():
     """pyupbit에서 원화(KRW) 코인 목록을 가져오고 한글명을 매핑합니다."""
@@ -92,60 +78,51 @@ def get_coin_listing():
         st.error(f"코인 리스트를 가져오는 중 예상치 못한 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
-def get_stock_data(ticker, start_date, end_date, period='1D'):
-    """주식 데이터를 가져오고, 원하는 기간으로 리샘플링합니다."""
+def get_data(ticker, start_date, end_date, market, period='1D'):
+    """선택된 시장에 따라 주식 또는 코인 데이터를 가져옵니다."""
     try:
-        data = fdr.DataReader(ticker, start_date, end_date)
-        if data.empty:
-            st.warning(f"오류: [{ticker}] 종목에 대한 데이터를 찾을 수 없습니다. 종목 코드나 날짜 범위를 확인해 주세요.")
-            return None
+        if market in ['KRX', 'NASDAQ', 'NYSE']:
+            data = fdr.DataReader(ticker, start_date, end_date)
+            # 주봉 또는 월봉으로 데이터를 리샘플링합니다.
+            if period == '1W':
+                resampled_data = data.resample('W').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum'
+                }).dropna()
+            elif period == '1M':
+                resampled_data = data.resample('M').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum'
+                }).dropna()
+            else:
+                resampled_data = data
         
-        # 주봉 또는 월봉으로 데이터를 리샘플링합니다.
-        if period == '1W':
-            resampled_data = data.resample('W').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-        elif period == '1M':
-            resampled_data = data.resample('M').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-        else:
-            resampled_data = data
+            if resampled_data.empty:
+                st.warning(f"오류: [{ticker}] 종목에 대한 데이터를 찾을 수 없습니다. 종목 코드나 날짜 범위를 확인해 주세요.")
+                return None
+            return resampled_data
+        
+        elif market == 'Upbit':
+            # pyupbit의 get_ohlcv 함수는 count 파라미터가 필수적입니다.
+            # 날짜 범위에 맞게 count를 계산합니다.
+            days_diff = (end_date - start_date).days
+            count = days_diff + 1 if period == 'day' else int(days_diff / 7) + 1 if period == 'week' else int(days_diff / 30) + 1
             
-        return resampled_data
-    except Exception as e:
-        st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
-        return None
-
-def get_coin_data(ticker, start_date, end_date, period='day'):
-    """코인 데이터를 가져오고, 원하는 기간으로 리샘플링합니다."""
-    try:
-        # pyupbit의 get_ohlcv 함수는 count 파라미터가 필수적입니다.
-        # 날짜 범위에 맞게 count를 계산합니다.
-        days_diff = (end_date - start_date).days
-        count = days_diff + 1 if period == 'day' else int(days_diff / 7) + 1 if period == 'week' else int(days_diff / 30) + 1
-        
-        # pyupbit는 count를 200개로 제한하기 때문에, 200개가 넘어가면 자동으로 200개까지만 가져옵니다.
-        # 이 한계를 해결하기 위해 반복문을 사용할 수 있지만, 간단한 예제이므로 `count`를 그대로 사용합니다.
-        df = pyupbit.get_ohlcv(ticker=ticker, interval=period, count=count)
-
-        if df is None or df.empty:
-            st.warning(f"오류: [{ticker}] 코인에 대한 데이터를 찾을 수 없습니다. 티커나 날짜 범위를 확인해 주세요.")
-            return None
-            
-        # FinanceDataReader의 데이터프레임과 열 이름을 통일합니다.
-        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'value']
-        df.index.name = 'Date'
-        
-        return df
+            df = pyupbit.get_ohlcv(ticker=ticker, interval=period, count=count)
+            if df is None or df.empty:
+                st.warning(f"오류: [{ticker}] 코인에 대한 데이터를 찾을 수 없습니다. 티커나 날짜 범위를 확인해 주세요.")
+                return None
+                
+            # FinanceDataReader의 데이터프레임과 열 이름을 통일합니다.
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'value']
+            df.index.name = 'Date'
+            return df
     except Exception as e:
         st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
         return None
@@ -271,18 +248,29 @@ st.markdown("<h3 style='text-align: center; color: #4CAF50;'>원하는 시장과
 st.subheader("1. 분석 옵션 선택")
 selected_market = st.radio(
     "💰 분석할 시장을 선택하세요",
-    ('주식 (KRX)', '코인 (Upbit)'),
+    ('한국 주식 (KRX)', '미국 증시 (NYSE/NASDAQ)', '코인 (Upbit)'),
     horizontal=True
 )
 
-if selected_market == '주식 (KRX)':
-    df_listing = get_stock_listing()
+df_listing = pd.DataFrame()
+default_start_date = datetime.date.today()
+period_map = {}
+
+if selected_market == '한국 주식 (KRX)':
+    df_listing = get_stock_listing('KRX')
+    default_start_date = datetime.date.today() - datetime.timedelta(days=365)
+    period_options = ('일봉', '주봉', '월봉')
+    period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
+elif selected_market == '미국 증시 (NYSE/NASDAQ)':
+    # NYSE와 NASDAQ을 합쳐서 제공하거나, 따로 제공할 수 있습니다.
+    # 여기서는 편의상 NASDAQ 목록을 기본으로 사용합니다.
+    df_listing = get_stock_listing('NASDAQ') 
     default_start_date = datetime.date.today() - datetime.timedelta(days=365)
     period_options = ('일봉', '주봉', '월봉')
     period_map = {'일봉': '1D', '주봉': '1W', '월봉': '1M'}
 else: # 코인 (Upbit)
     df_listing = get_coin_listing()
-    default_start_date = datetime.date.today() - datetime.timedelta(days=180) # 코인은 데이터가 많지 않으므로 기본 날짜를 줄였습니다.
+    default_start_date = datetime.date.today() - datetime.timedelta(days=180) 
     period_options = ('일봉', '주봉', '월봉')
     period_map = {'일봉': 'day', '주봉': 'week', '월봉': 'month'}
     
@@ -318,20 +306,19 @@ if not df_listing.empty:
         )
 
     st.subheader("2. 기술적 지표 선택")
-    col3, col4, col5 = st.columns(3)
+    col3, col4 = st.columns(2)
     with col3:
         show_ma = st.checkbox('이동평균선 (20일, 60일)')
-    with col4:
         show_bb = st.checkbox('볼린저 밴드')
-    with col5:
+    with col4:
         show_rsi = st.checkbox('상대강도지수 (RSI)')
 
     st.subheader("3. 날짜 범위 선택")
     today = datetime.date.today()
-    col6, col7 = st.columns(2)
-    with col6:
+    col5, col6 = st.columns(2)
+    with col5:
         start_date = st.date_input("시작 날짜", default_start_date)
-    with col7:
+    with col6:
         end_date = st.date_input("종료 날짜", today)
 
     st.markdown("---")
@@ -339,11 +326,8 @@ if not df_listing.empty:
         st.subheader("분석 중...")
         st.info("데이터를 불러오고 캔들 패턴을 분석하는 중입니다. 잠시만 기다려 주세요.")
         
-        if selected_market == '주식 (KRX)':
-            df = get_stock_data(selected_code, start_date, end_date, period_map[selected_period])
-        else:
-            df = get_coin_data(selected_code, start_date, end_date, period_map[selected_period])
-
+        df = get_data(selected_code, start_date, end_date, selected_market.split()[0], period_map[selected_period])
+        
         if df is not None and not df.empty:
             df_with_patterns = find_candle_patterns(df.copy())
             apds = []
@@ -702,6 +686,46 @@ with st.expander("캔들 패턴 참고자료 📖"):
     
 #     return df
 
+# def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
+#     """선택된 기술적 지표들을 계산하고, mplfinance addplot 객체 리스트를 반환합니다."""
+#     apds = []
+    
+#     # 이동평균선 (20일, 60일) 계산 및 추가
+#     if show_ma:
+#         df['MA20'] = df['Close'].rolling(window=20).mean()
+#         df['MA60'] = df['Close'].rolling(window=60).mean()
+#         apds.append(mpf.make_addplot(df['MA20'], color='blue', panel=0, label='단기 MA (20일)'))
+#         apds.append(mpf.make_addplot(df['MA60'], color='red', panel=0, label='장기 MA (60일)'))
+        
+#     # 볼린저 밴드 계산 및 추가
+#     if show_bb:
+#         df['MA20'] = df['Close'].rolling(window=20).mean()
+#         df['STD20'] = df['Close'].rolling(window=20).std()
+#         df['BB_Upper'] = df['MA20'] + (df['STD20'] * 2)
+#         df['BB_Lower'] = df['MA20'] - (df['STD20'] * 2)
+        
+#         apds.append(mpf.make_addplot(df['BB_Upper'], color='purple', linestyle=':', panel=0, label='볼린저밴드 상단'))
+#         apds.append(mpf.make_addplot(df['BB_Lower'], color='purple', linestyle=':', panel=0, label='볼린저밴드 하단'))
+
+#     # RSI (상대강도지수) 계산 및 추가 (14일 기준)
+#     if show_rsi:
+#         delta = df['Close'].diff()
+#         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+#         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        
+#         # 0으로 나누기 방지
+#         rs = gain / (loss.replace(0, 1e-10))
+#         df['RSI'] = 100 - (100 / (1 + rs))
+        
+#         # 새로운 패널에 RSI 그래프 추가
+#         apds.append(mpf.make_addplot(df['RSI'], panel=2, color='orange', ylabel='RSI', label='RSI'))
+        
+#         # RSI 30, 70 라인 추가
+#         apds.append(mpf.make_addplot([70] * len(df), panel=2, color='red', linestyle='--', width=1))
+#         apds.append(mpf.make_addplot([30] * len(df), panel=2, color='green', linestyle='--', width=1))
+        
+#     return apds
+
 # # ---------------------------------------------------------------------------------
 # # 2. Streamlit 웹 인터페이스 구성
 # # ---------------------------------------------------------------------------------
@@ -759,13 +783,21 @@ with st.expander("캔들 패턴 참고자료 📖"):
 #             list(all_pattern_options.keys())
 #         )
 
-
-#     st.subheader("2. 날짜 범위 선택")
-#     today = datetime.date.today()
-#     col3, col4 = st.columns(2)
+#     st.subheader("2. 기술적 지표 선택")
+#     col3, col4, col5 = st.columns(3)
 #     with col3:
-#         start_date = st.date_input("시작 날짜", default_start_date)
+#         show_ma = st.checkbox('이동평균선 (20일, 60일)')
 #     with col4:
+#         show_bb = st.checkbox('볼린저 밴드')
+#     with col5:
+#         show_rsi = st.checkbox('상대강도지수 (RSI)')
+
+#     st.subheader("3. 날짜 범위 선택")
+#     today = datetime.date.today()
+#     col6, col7 = st.columns(2)
+#     with col6:
+#         start_date = st.date_input("시작 날짜", default_start_date)
+#     with col7:
 #         end_date = st.date_input("종료 날짜", today)
 
 #     st.markdown("---")
@@ -800,7 +832,7 @@ with st.expander("캔들 패턴 참고자료 📖"):
 #             }
             
 #             total_patterns = 0
-#             st.subheader("3. 발견된 패턴 목록")
+#             st.subheader("4. 발견된 패턴 목록")
 #             pattern_results = {}
             
 #             for pattern_label_with_initials in selected_patterns:
@@ -855,26 +887,36 @@ with st.expander("캔들 패턴 참고자료 📖"):
 #                     st.write(f"- **{label}**: {count}개 발견")
 #             else:
 #                 st.write("선택한 기간 동안 발견된 캔들 패턴이 없습니다.")
-                
-#             st.subheader("4. 캔들 차트")
+
+#             # 선택된 지표들을 추가
+#             indicator_apds = calculate_and_add_indicators(df_with_patterns, show_ma, show_bb, show_rsi)
+#             apds.extend(indicator_apds)
+            
+#             st.subheader("5. 캔들 차트")
 #             mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
 #             s = mpf.make_mpf_style(marketcolors=mc, gridcolor='gray')
             
 #             title = f'{selected_label} {selected_period} 차트'
-#             fig, axlist = mpf.plot(
-#                 df_with_patterns,
-#                 type='candle',
-#                 style=s,
-#                 title=title,
-#                 ylabel='가격',
-#                 volume=True,
-#                 figratio=(15, 8),
-#                 addplot=apds,
-#                 returnfig=True
-#             )
-#             # 차트 범례의 글자 크기를 조절하여 더 잘 보이도록 함
-#             fig.legend(prop={'size': 12})
-#             st.pyplot(fig)
+            
+#             # RSI 지표가 선택되었을 경우에만 패널 비율 조정
+#             panel_ratios = (6, 1.5, 2) if show_rsi else (6, 1.5)
+            
+#             try:
+#                 fig, axlist = mpf.plot(
+#                     df_with_patterns,
+#                     type='candle',
+#                     style=s,
+#                     title=title,
+#                     ylabel='가격',
+#                     volume=True,
+#                     figratio=(15, 10),
+#                     addplot=apds,
+#                     returnfig=True,
+#                     panel_ratios=panel_ratios
+#                 )
+#                 st.pyplot(fig)
+#             except Exception as e:
+#                 st.error(f"차트 시각화 중 오류가 발생했습니다: {e}")
 #         else:
 #             st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
 
