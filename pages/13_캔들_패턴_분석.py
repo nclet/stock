@@ -220,6 +220,43 @@ def find_candle_patterns(df):
     
     return df
 
+def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
+    """선택된 기술적 지표들을 계산하고, mplfinance addplot 객체 리스트를 반환합니다."""
+    apds = []
+    
+    # 20일 이동평균선 계산 및 추가
+    if show_ma:
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        apds.append(mpf.make_addplot(df['MA20'], color='blue', panel=0, label='MA20'))
+        
+    # 볼린저 밴드 계산 및 추가
+    if show_bb:
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['STD20'] = df['Close'].rolling(window=20).std()
+        df['BB_Upper'] = df['MA20'] + (df['STD20'] * 2)
+        df['BB_Lower'] = df['MA20'] - (df['STD20'] * 2)
+        
+        apds.append(mpf.make_addplot(df['BB_Upper'], color='purple', linestyle=':', panel=0, label='BB Upper'))
+        apds.append(mpf.make_addplot(df['BB_Lower'], color='purple', linestyle=':', panel=0, label='BB Lower'))
+
+    # RSI (상대강도지수) 계산 및 추가 (14일 기준)
+    if show_rsi:
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        # 새로운 패널에 RSI 그래프 추가
+        apds.append(mpf.make_addplot(df['RSI'], panel=1, color='orange', ylabel='RSI', label='RSI'))
+        
+        # RSI 30, 70 라인 추가
+        apds.append(mpf.make_addplot([70] * len(df), panel=1, color='red', linestyle='--', width=1))
+        apds.append(mpf.make_addplot([30] * len(df), panel=1, color='green', linestyle='--', width=1))
+        
+    return apds
+
 # ---------------------------------------------------------------------------------
 # 2. Streamlit 웹 인터페이스 구성
 # ---------------------------------------------------------------------------------
@@ -277,13 +314,21 @@ if not df_listing.empty:
             list(all_pattern_options.keys())
         )
 
-
-    st.subheader("2. 날짜 범위 선택")
-    today = datetime.date.today()
-    col3, col4 = st.columns(2)
+    st.subheader("2. 기술적 지표 선택")
+    col3, col4, col5 = st.columns(3)
     with col3:
-        start_date = st.date_input("시작 날짜", default_start_date)
+        show_ma = st.checkbox('이동평균선 (20일)')
     with col4:
+        show_bb = st.checkbox('볼린저 밴드')
+    with col5:
+        show_rsi = st.checkbox('상대강도지수 (RSI)')
+
+    st.subheader("3. 날짜 범위 선택")
+    today = datetime.date.today()
+    col6, col7 = st.columns(2)
+    with col6:
+        start_date = st.date_input("시작 날짜", default_start_date)
+    with col7:
         end_date = st.date_input("종료 날짜", today)
 
     st.markdown("---")
@@ -318,7 +363,7 @@ if not df_listing.empty:
             }
             
             total_patterns = 0
-            st.subheader("3. 발견된 패턴 목록")
+            st.subheader("4. 발견된 패턴 목록")
             pattern_results = {}
             
             for pattern_label_with_initials in selected_patterns:
@@ -373,26 +418,36 @@ if not df_listing.empty:
                     st.write(f"- **{label}**: {count}개 발견")
             else:
                 st.write("선택한 기간 동안 발견된 캔들 패턴이 없습니다.")
+
+            # 선택된 지표들을 추가
+            indicator_apds = calculate_and_add_indicators(df_with_patterns, show_ma, show_bb, show_rsi)
+            apds.extend(indicator_apds)
+            
+            # RSI 지표가 선택되었을 경우 패널 비율 조정
+            panel_ratios = (4, 1) if show_rsi else (1,)
                 
-            st.subheader("4. 캔들 차트")
+            st.subheader("5. 캔들 차트")
             mc = mpf.make_marketcolors(up='green', down='red', inherit=True)
             s = mpf.make_mpf_style(marketcolors=mc, gridcolor='gray')
             
             title = f'{selected_label} {selected_period} 차트'
-            fig, axlist = mpf.plot(
-                df_with_patterns,
-                type='candle',
-                style=s,
-                title=title,
-                ylabel='가격',
-                volume=True,
-                figratio=(15, 8),
-                addplot=apds,
-                returnfig=True
-            )
-            # 중복 범례를 생성하는 아래 코드를 제거했습니다.
-            # fig.legend(prop={'size': 12})
-            st.pyplot(fig)
+            
+            try:
+                fig, axlist = mpf.plot(
+                    df_with_patterns,
+                    type='candle',
+                    style=s,
+                    title=title,
+                    ylabel='가격',
+                    volume=True,
+                    figratio=(15, 10) if show_rsi else (15, 8),
+                    addplot=apds,
+                    returnfig=True,
+                    panel_ratios=panel_ratios
+                )
+                st.pyplot(fig)
+            except Exception as e:
+                st.error(f"차트 시각화 중 오류가 발생했습니다: {e}")
         else:
             st.error("데이터를 가져오는 데 실패했습니다. 종목 코드나 날짜 범위를 다시 확인해 주세요.")
 
@@ -419,6 +474,7 @@ with st.expander("캔들 패턴 참고자료 📖"):
     - **📉유성형 (Shooting Star)**: 긴 위 꼬리와 짧은 몸통을 가진 캔들입니다. 상승 추세에서 나타나면 고점에서 매수세가 약해졌다는 것을 보여주며, 하락 반전 가능성을 시사합니다.
     - **📉교수형 (Hanging Man)**: 망치형과 모양은 비슷하지만, 상승 추세에서 나타납니다. 주가가 고점에서 하락할 가능성이 있다는 경고 신호로 해석됩니다.
     """)
+
 
 
 # # Streamlit을 사용한 웹 애플리케이션 제작에 필요한 라이브러리
