@@ -281,7 +281,12 @@ if not df_all_data.empty:
             
             future_preds_lstm = train_and_predict_lstm_model(X_train_lstm, y_train_lstm, X_test_lstm, y_test_lstm, seq_len_lstm, n_features_lstm, selected_code, n_days, last_sequence_lstm, scaler_lstm, features_lstm)
 
+            # --- 날짜 계산 로직 수정: 인덱스 타입을 확실하게 변환 ---
             last_date = df_processed_lstm.index[-1]
+            # 인덱스가 날짜 형식이 아닌 경우, 명시적으로 변환합니다.
+            if not isinstance(last_date, pd.Timestamp):
+                last_date = pd.to_datetime(last_date)
+
             future_dates = [last_date + timedelta(days=i+1) for i in range(n_days)]
 
             st.subheader("📊 LSTM 예측 주가 시각화")
