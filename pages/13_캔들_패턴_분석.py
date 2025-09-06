@@ -255,11 +255,11 @@ def calculate_and_add_indicators(df, show_ma_short, show_ma_long, show_bb, show_
         df['RSI'] = 100 - (100 / (1 + rs))
         
         # 새로운 패널에 RSI 그래프 추가
-        apds.append(mpf.make_addplot(df['RSI'], panel=1, color='orange', ylabel='RSI', label='RSI'))
+        apds.append(mpf.make_addplot(df['RSI'], panel=2, color='orange', ylabel='RSI', label='RSI'))
         
         # RSI 30, 70 라인 추가
-        apds.append(mpf.make_addplot([70] * len(df), panel=1, color='red', linestyle='--', width=1))
-        apds.append(mpf.make_addplot([30] * len(df), panel=1, color='green', linestyle='--', width=1))
+        apds.append(mpf.make_addplot([70] * len(df), panel=2, color='red', linestyle='--', width=1))
+        apds.append(mpf.make_addplot([30] * len(df), panel=2, color='green', linestyle='--', width=1))
         
     return apds
 
@@ -328,8 +328,8 @@ if not df_listing.empty:
         show_ma_long = st.checkbox('장기 이동평균선 (60일)')
     with col5:
         show_bb = st.checkbox('볼린저 밴드')
-    with st.columns(3)[0]:
-        show_rsi = st.checkbox('상대강도지수 (RSI)')
+    st.markdown("---")
+    show_rsi = st.checkbox('상대강도지수 (RSI)')
 
     st.subheader("3. 날짜 범위 선택")
     today = datetime.date.today()
@@ -438,7 +438,7 @@ if not df_listing.empty:
             title = f'{selected_label} {selected_period} 차트'
             
             # RSI 지표가 선택되었을 경우에만 패널 비율 조정
-            panel_ratios = (4, 1) if show_rsi else (1,)
+            panel_ratios = (6, 1.5, 2) if show_rsi else (6, 1.5)
             
             try:
                 fig, axlist = mpf.plot(
@@ -448,7 +448,7 @@ if not df_listing.empty:
                     title=title,
                     ylabel='가격',
                     volume=True,
-                    figratio=(15, 10) if show_rsi else (15, 8),
+                    figratio=(15, 10),
                     addplot=apds,
                     returnfig=True,
                     panel_ratios=panel_ratios
