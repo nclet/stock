@@ -109,8 +109,12 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
     def recursive_forecast(model, last_sequence, n_days, scaler_inner, n_features, features_list):
         forecasts = []
         current_seq = last_sequence.copy()
-        close_idx = features_list.index('Close')
-        
+        try:
+            close_idx = features_list.index('Close')
+        except ValueError:
+            st.error("오류: 예측에 필요한 'Close' 가격 데이터가 없습니다.")
+            return []
+            
         for _ in range(n_days):
             pred = model.predict(current_seq.reshape(1, seq_len, n_features), verbose=0)[0][0]
             forecasts.append(pred)
@@ -202,7 +206,6 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
     return lgbm_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml, study.best_params
 
 # --- Streamlit UI 시작 ---
-# 초기 기본 데이터만 로드합니다. (로딩 속도 개선)
 df_all_data = load_base_data()
 
 if not df_all_data.empty:
@@ -218,18 +221,25 @@ if not df_all_data.empty:
     n_days = st.slider("LSTM 예측 기간 (미래 일 수)", 5, 60, 30)
     
     if st.button("🚀 **통합 예측 시작**"):
-        # 버튼 클릭 시에만 해당 종목의 추가 데이터를 가져옵니다.
+        df_stock = df_all_data[df_all_data['Code'] == selected_code].copy()
+        df_stock.sort_values('Date', inplace=True)
+        df_stock.set_index('Date', inplace=True)
+        
+        if df_stock.empty:
+            st.error(f"선택하신 종목 ({selected_name})에 대한 데이터가 없습니다. 다른 종목을 선택해주세요.")
+            st.stop()
+        
+        # --- 기술적 지표 계산 ---
+        df_stock['RSI'] = calculate_rsi(df_stock['Close'])
+        df_stock['BB_Mid'], df_stock['BB_Upper'], df_stock['BB_Lower'] = calculate_bollinger_bands(df_stock['Close'])
+        
+        # --- 추가 지표 로딩 (FinanceDataReader) 및 병합
+        fdr_data_loaded = False
         with st.spinner(f"🔄 {selected_name}의 추가 데이터 로딩 중..."):
             try:
-                # 선택된 종목의 기본 데이터 필터링
-                df_stock = df_all_data[df_all_data['Code'] == selected_code].copy()
-                df_stock.sort_values('Date', inplace=True)
-                df_stock.set_index('Date', inplace=True)
-
                 # FinanceDataReader를 사용하여 추가 지표 데이터 로드
                 df_fdr = fdr.DataReader(selected_code, start=df_stock.index.min(), end=df_stock.index.max())
                 df_fdr.reset_index(inplace=True)
-                df_fdr.rename(columns={'Close': 'FDR_Close'}, inplace=True) # 기존 'Close'와 충돌 방지
                 
                 # 'Date' 컬럼을 기준으로 두 데이터프레임 병합
                 df_stock.reset_index(inplace=True)
@@ -239,25 +249,23 @@ if not df_all_data.empty:
 
                 st.success("✅ 추가 지표 데이터 로딩 및 병합 완료!")
                 df_stock = df_merged # 병합된 데이터로 업데이트
+                fdr_data_loaded = True
 
             except Exception as e:
                 st.warning(f"⚠️ `finance-datareader` 데이터 로딩 또는 병합 중 오류가 발생했습니다: {e}")
-                # 오류 발생 시 기존 데이터만 사용
                 st.info("기존 데이터만 사용하여 예측을 진행합니다.")
 
-        if df_stock.empty:
-            st.error(f"선택하신 종목 ({selected_name})에 대한 데이터가 없습니다. 다른 종목을 선택해주세요.")
-            st.stop()
-        
-        # --- 기술적 지표 계산 ---
-        df_stock['RSI'] = calculate_rsi(df_stock['Close'])
-        df_stock['BB_Mid'], df_stock['BB_Upper'], df_stock['BB_Lower'] = calculate_bollinger_bands(df_stock['Close'])
-        
         # --- LSTM 모델 예측 섹션 ---
         st.header("1️⃣ LSTM 모델: 미래 주가 예측")
         
-        # 새로운 지표 추가
-        features_lstm = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR', 'BB_Mid', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
+        # 지표 목록을 동적으로 구성
+        base_features = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'PER', 'PBR', 'BB_Mid']
+        fdr_features = ['Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
+        
+        features_lstm = base_features.copy()
+        if fdr_data_loaded:
+            features_lstm.extend(fdr_features)
+            
         target_lstm = 'Close'
         
         df_processed_lstm = df_stock[features_lstm].dropna()
@@ -305,8 +313,11 @@ if not df_all_data.empty:
         st.markdown("---")
         st.header("2️⃣ LightGBM 모델: 단기 수익률 예측 (with Optuna)")
         
-        # 새로운 지표 추가
-        ml_features = ['Close', 'RSI', 'BB_Upper', 'BB_Lower', 'BB_Mid', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
+        # 지표 목록을 동적으로 구성
+        ml_features = base_features.copy()
+        if fdr_data_loaded:
+            ml_features.extend(fdr_features)
+            
         lgbm_model, y_pred_ml, next_day_return_pred_ml, y_test_ml, X_test_ml, best_params = train_and_predict_lightgbm_with_optuna(selected_code, df_stock.copy(), ml_features)
 
         if lgbm_model is not None:
@@ -335,6 +346,7 @@ if not df_all_data.empty:
 
 else:
     st.info("데이터 로드 중 문제가 발생했습니다. 페이지 상단의 오류 메시지를 확인해주세요.")
+
 
 
 
