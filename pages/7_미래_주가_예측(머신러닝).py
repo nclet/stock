@@ -59,14 +59,12 @@ def load_merged_data():
         root_dir = os.path.join(current_dir, '..')
         merged_data_file_path = os.path.join(root_dir, 'merged_data_monthly_per_pbr.csv')
 
-        # 파일이 존재하는지 확인
         if not os.path.exists(merged_data_file_path):
             st.error(f"❌ 데이터 파일을 찾을 수 없습니다: '{merged_data_file_path}'")
             st.info("죄송합니다. 데이터 파일이 소실되어 있는 상태입니다.")
             return pd.DataFrame()
 
         df = pd.read_csv(merged_data_file_path)
-
         df.columns = df.columns.str.strip()
         df['Date'] = pd.to_datetime(df['Date'])
         df['Code'] = df['Code'].astype(str).str.zfill(6)
@@ -88,8 +86,9 @@ def build_lstm_model(input_shape):
     model.compile(optimizer='adam', loss='mse')
     return model
 
+# ⚠️ 오류 해결: scaler 매개변수를 캐싱에서 제외하기 위해 이름 앞에 `_`를 붙였습니다.
 @st.cache_resource
-def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, scaler, features):
+def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, _scaler, features):
     """LSTM 모델을 학습하고 미래 주가를 예측합니다."""
     model_path = f"model_{selected_code}.h5"
     model = None
@@ -106,7 +105,7 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
         model.save(model_path)
         st.success("✅ LSTM 모델 학습 완료 및 저장!")
 
-    def recursive_forecast(model, last_sequence, n_days, scaler, n_features, features_list):
+    def recursive_forecast(model, last_sequence, n_days, scaler_inner, n_features, features_list):
         forecasts = []
         current_seq = last_sequence.copy()
         
@@ -118,10 +117,10 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
         
         dummy_array_for_inverse = np.zeros((len(forecasts), n_features))
         dummy_array_for_inverse[:, features_list.index('Close')] = forecasts
-        forecasts_scaled = scaler.inverse_transform(dummy_array_for_inverse)[:, features_list.index('Close')]
+        forecasts_scaled = scaler_inner.inverse_transform(dummy_array_for_inverse)[:, features_list.index('Close')]
         return forecasts_scaled
 
-    future_preds = recursive_forecast(model, last_sequence, n_future_days, scaler, n_features, features)
+    future_preds = recursive_forecast(model, last_sequence, n_future_days, _scaler, n_features, features)
     return future_preds
 
 # --- 머신러닝 (RandomForest) 관련 함수 ---
@@ -210,6 +209,7 @@ if not df_all_data.empty:
             last_sequence_lstm = X_lstm[-1]
             n_features_lstm = X_lstm.shape[2]
             
+            # ⚠️ 수정된 함수 호출: scaler_lstm 객체를 전달
             future_preds_lstm = train_and_predict_lstm_model(X_train_lstm, y_train_lstm, X_test_lstm, y_test_lstm, seq_len_lstm, n_features_lstm, selected_code, n_days, last_sequence_lstm, scaler_lstm, features_lstm)
 
             last_date = df_processed_lstm.index[-1]
@@ -267,6 +267,7 @@ if not df_all_data.empty:
 
 else:
     st.info("데이터 로드 중 문제가 발생했습니다. 페이지 상단의 오류 메시지를 확인해주세요.")
+
 
 
 ########################################################################
