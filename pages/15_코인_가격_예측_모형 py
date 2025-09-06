@@ -546,11 +546,11 @@ warnings.filterwarnings('ignore')
 # Streamlit App Setup
 # ----------------------
 st.set_page_config(page_title="Crypto Sentiment & Trend Predictor", layout="wide")
-st.title("📊 하이브리드 암호화폐 가격 예측 모델 (고급)")
+st.title("📊 코인 가격 예측 모형")
 
 st.markdown("""
-이 모델은 **기술적 지표**, **뉴스 감성**, **시장 심리(Fear & Greed Index)**, 그리고
-**구글 트렌드**를 결합하여 주요 암호화폐의 가격을 예측합니다.
+이 모델은 **기술적 지표(RSI, 볼린저밴드, MACD**, **뉴스 감성 전략**, **시장 심리(Fear & Greed Index)**,
+**구글 트렌드** 등을 결합해 코인 가격을 예측합니다.
 """)
 
 # ----------------------
@@ -1036,7 +1036,7 @@ def main():
             }).sort_values(by='Importance', ascending=False)
             st.bar_chart(feature_importance.set_index('Feature'))
             
-            st.info("💡 **모델 해석:** `RSI`, `MACD`, `볼린저밴드`와 같은 기술적 지표가 가격 예측에 가장 큰 영향을 미칩니다. 뉴스 감성, Fear & Greed Index, 그리고 구글 트렌드 값도 중요한 영향을 미치는 것을 확인할 수 있습니다.")
+            st.info("💡 **모델 해석:** `RSI`, `MACD`, `볼린저밴드`와 같은 기술적 지표와 더불어 뉴스 감성, Fear & Greed Index, 그리고 구글 트렌드 값이 가격 결정에 지대한 영향을 미칩니다.")
             
 if __name__ == "__main__":
     main()
