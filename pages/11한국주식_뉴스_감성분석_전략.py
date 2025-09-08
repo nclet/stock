@@ -12,6 +12,7 @@ from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
 import lightgbm as lgb
 from sklearn.preprocessing import MinMaxScaler
+import time
 
 # ------------------------
 # ✨ 페이지 설정
@@ -30,13 +31,13 @@ st.markdown("""
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    # Hugging Face 토큰을 Streamlit secrets에서 불러옴
+    # Load Hugging Face token from Streamlit secrets
     hf_token = st.secrets.get("HF_TOKEN")
     model_name = "snunlp/KR-FinBert-SC"
     
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
-        # GPU 사용을 위해 device_map='cpu' 대신 'auto' 사용
+        # Use 'auto' for device mapping to utilize GPU if available
         model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='auto')
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,7 +56,7 @@ def load_sentiment_model():
 tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
-    """주어진 텍스트의 감성 점수를 계산합니다."""
+    """Calculates sentiment score for the given text."""
     if not text:
         return 0.0
     
@@ -85,9 +86,9 @@ def analyze_sentiment(text):
 # ------------------------
 # ✨ 종목 목록 로드 (FinanceDataReader)
 # ------------------------
-@st.cache_data
+@st.cache_data(show_spinner="⏳ 종목 리스트를 로드 중입니다...")
 def get_stock_list():
-    """FinanceDataReader를 사용하여 KRX 상장 종목 목록을 가져옵니다."""
+    """Loads KRX stock list using FinanceDataReader."""
     try:
         df_krx = fdr.StockListing('KRX')
         df_krx = df_krx[~df_krx['Name'].str.contains('리츠|스팩|ETN|ETF|인버스|곱버스|레버리지|선물|상장지수|지수', case=False, na=False)]
@@ -97,11 +98,18 @@ def get_stock_list():
             st.stop()
             
         return df_krx
-    except Exception as e:
-        st.error(f"❌ 종목 리스트 로드 중 오류 발생: {e}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ 종목 리스트 로드 중 네트워크 오류 발생: {e}")
         st.info("인터넷 연결 상태를 확인하거나 잠시 후 다시 시도해주세요.")
         st.stop()
-        return pd.DataFrame()
+    except JSONDecodeError as e:
+        st.error(f"❌ 종목 리스트 로드 중 데이터 파싱 오류 발생: {e}")
+        st.info("데이터 제공 서버가 일시적으로 불안정할 수 있습니다. 잠시 후 다시 시도하거나, `financedatareader` 라이브러리를 업데이트해 보세요.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ 종목 리스트 로드 중 예기치 않은 오류 발생: {e}")
+        st.stop()
+    return pd.DataFrame()
 
 df_krx = get_stock_list()
 company_names = df_krx['Name'].tolist()
@@ -122,7 +130,7 @@ company_name = st.selectbox(
 
 stock_code = df_krx[df_krx['Name'] == company_name]['Code'].iloc[0]
 
-# 날짜 선택 위젯
+# Date selection widgets
 start_date = st.date_input("뉴스 검색 시작일", datetime.now() - timedelta(days=90))
 end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 
@@ -130,7 +138,7 @@ end_date = st.date_input("뉴스 검색 종료일", datetime.now())
 # ✨ 네이버 뉴스 API 함수
 # ------------------------
 def get_naver_news_api(query, display=30, start=1, sort="date"):
-    """네이버 뉴스 검색 API를 호출하여 데이터를 가져옵니다."""
+    """Fetches data from Naver News Search API."""
     try:
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
@@ -147,8 +155,9 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         "X-Naver-Client-Secret": client_secret
     }
 
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status() # Raise an exception for bad status codes
         data = response.json()
         items = data.get('items', [])
         news_data = []
@@ -165,18 +174,19 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
             })
         df = pd.DataFrame(news_data)
         return df
-    else:
-        st.error(f"API 요청 실패: 상태 코드 {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        st.error(f"API 요청 실패: {e}")
+        return pd.DataFrame()
+    except JSONDecodeError as e:
+        st.error(f"API 응답 파싱 실패: {e}")
         return pd.DataFrame()
 
 # ------------------------
 # ✨ 주가 데이터 로드 (FinanceDataReader)
 # ------------------------
-@st.cache_data
+@st.cache_data(show_spinner="⏳ 주가 데이터를 로드 중입니다...")
 def get_stock_data(code, start_date, end_date):
-    """
-    FinanceDataReader를 통해 일별 주가 데이터를 가져와 DataFrame으로 반환합니다.
-    """
+    """Loads daily stock data using FinanceDataReader."""
     try:
         df = fdr.DataReader(code, start=start_date, end=end_date)
         df.reset_index(inplace=True)
@@ -201,7 +211,8 @@ if st.button("🚀 크롤링 및 분석 시작"):
             all_news = pd.concat([all_news, df_part], ignore_index=True)
             if len(df_part) < count:
                 break
-        
+            time.sleep(0.5) # Add a small delay to avoid overwhelming the API
+
         all_news = all_news.dropna(subset=['Date'])
         filtered_news = all_news[(all_news['Date'] >= start_date) & (all_news['Date'] <= end_date)]
 
@@ -221,42 +232,42 @@ if st.button("🚀 크롤링 및 분석 시작"):
         else:
             st.success("✅ 주가 데이터 로드 완료 (FinanceDataReader)!")
             
-            # 기술적 지표 추가
+            # Add technical indicators
             df_stock['SMA_20'] = df_stock['Close'].rolling(window=20).mean()
             df_stock['Volatility'] = df_stock['Close'].pct_change().rolling(window=20).std()
             
-            # 데이터 병합 및 결측치 처리
+            # Merge data and handle missing values
             df_stock['Date'] = pd.to_datetime(df_stock.index).date
             filtered_news['Date'] = pd.to_datetime(filtered_news['Date']).dt.date
             
             filtered_news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().reset_index()
             df_merge = pd.merge(df_stock.reset_index(drop=True), filtered_news_grouped, on='Date', how='left')
-            df_merge = df_merge.set_index('Date').fillna(method='ffill').fillna(0) # 결측치는 이전 값으로 채움
+            df_merge = df_merge.set_index('Date').fillna(method='ffill').fillna(0) # Fill missing values with the previous value
 
-            # 예측을 위한 특징 및 타겟 설정
+            # Set up features and target for prediction
             features = ['Close', 'Volume', 'Open', 'High', 'Low', 'Sentiment_Score', 'SMA_20', 'Volatility']
             features = [f for f in features if f in df_merge.columns]
             
-            # 다음 날 수익률을 예측 타겟으로 설정
+            # Set the next day's return as the prediction target
             df_merge['Next_Day_Return'] = df_merge['Close'].pct_change().shift(-1) * 100
             
-            # 모델 학습에 사용할 데이터 준비
+            # Prepare data for model training
             df_ml = df_merge[features + ['Next_Day_Return']].dropna()
 
             if len(df_ml) > 100:
                 X = df_ml[features].values
                 y = df_ml['Next_Day_Return'].values
                 
-                # 데이터 정규화
+                # Data normalization
                 scaler = MinMaxScaler()
                 X_scaled = scaler.fit_transform(X)
                 
-                # 학습/테스트 데이터 분리
+                # Split train/test data
                 test_size = max(1, int(0.2 * len(X_scaled)))
                 X_train, X_test = X_scaled[:-test_size], X_scaled[-test_size:]
                 y_train, y_test = y[:-test_size], y[-test_size:]
                 
-                # LightGBM 모델 학습
+                # Train LightGBM model
                 lgbm_model = lgb.LGBMRegressor(objective='regression', metric='rmse', n_estimators=500,
                                                learning_rate=0.05, num_leaves=31, max_depth=-1,
                                                random_state=42, n_jobs=-1, verbose=-1)
@@ -286,7 +297,7 @@ if st.button("🚀 크롤링 및 분석 시작"):
                 st.markdown("---")
                 st.subheader("💡 다음 날 주가 수익률 예측")
                 
-                # 마지막 데이터 포인트를 사용하여 다음 날 수익률 예측
+                # Use the last data point to predict the next day's return
                 last_data = df_ml[features].iloc[-1].values.reshape(1, -1)
                 last_data_scaled = scaler.transform(last_data)
                 next_day_return_pred = lgbm_model.predict(last_data_scaled)[0]
