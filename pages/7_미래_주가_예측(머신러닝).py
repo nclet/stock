@@ -214,8 +214,13 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
 # FinanceDataReader에서 상장 종목 리스트를 가져와 종목 코드를 매핑합니다.
 @st.cache_data
 def load_stock_codes():
-    df_krx = fdr.StockListing('KRX')
-    return df_krx.set_index('Code')['Name'].to_dict()
+    try:
+        df_krx = fdr.StockListing('KRX')
+        return df_krx.set_index('Code')['Name'].to_dict()
+    except Exception as e:
+        st.error(f"❌ 종목 리스트를 불러오는 중 오류가 발생했습니다: {e}")
+        st.warning("일시적인 오류일 수 있습니다. 삼성전자, SK하이닉스 등 대표 종목만으로 진행합니다.")
+        return {'005930': '삼성전자', '000660': 'SK하이닉스', '005380': '현대차', '035720': '카카오', '035420': '네이버'}
 
 try:
     name_code_dict = {v: k for k, v in load_stock_codes().items()}
