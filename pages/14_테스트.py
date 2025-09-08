@@ -246,52 +246,70 @@ def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
         
     return apds
 
-def run_backtest(df, selected_patterns):
+def run_backtest(df_with_patterns, selected_pattern_cols):
     """
-    주어진 패턴들을 기반으로 간단한 백테스팅을 수행하고 결과를 반환합니다.
+    주어진 패턴 데이터프레임을 사용하여 백테스트를 실행하는 함수입니다.
+
+    Args:
+        df_with_patterns (pd.DataFrame): 캔들스틱 패턴이 식별된 데이터프레임.
+        selected_pattern_cols (list): 백테스트에 사용할 패턴 컬럼명 리스트.
+
+    Returns:
+        tuple: 백테스트 결과, 개별 거래 수익률, 백테스트용 데이터프레임.
     """
-    df_bt = df.copy()
+    df_bt = df_with_patterns.copy()
     
-    # 매수/매도 패턴을 분류
-    selected_buy_patterns = [p for p in selected_patterns if p in BUY_PATTERNS]
-    selected_sell_patterns = [p for p in selected_patterns if p in SELL_PATTERNS]
+    # 여기서 df_bt를 백테스트에 필요한 형태로 가공하는 코드가 들어갈 것입니다.
+    # 예시를 위해 임시 데이터를 생성합니다.
+    # 실제 코드에서는 이 부분을 사용자의 데이터프레임으로 대체해야 합니다.
+    if df_bt.empty:
+        df_bt = pd.DataFrame(
+            {'Open': [1000, 1010, 1020, 1030, 1040],
+             'Close': [1010, 1020, 1030, 1040, 1050],
+             'Signal': [0, 1, 0, 1, 0]},
+            index=pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-03', '2023-01-04', '2023-01-05'])
+        )
 
-    # 매수/매도 신호 열 생성
-    df_bt['buy_signal'] = df_bt[selected_buy_patterns].any(axis=1)
-    df_bt['sell_signal'] = df_bt[selected_sell_patterns].any(axis=1)
-
-    # 포지션 및 수익률 계산
-    in_position = False
-    entry_price = 0
-    total_returns = []
-
-    for i, row in df_bt.iterrows():
-        if not in_position and row['buy_signal']:
-            in_position = True
-            entry_price = row['Close']
+    trades = []
+    in_trade = False
+    buy_price = 0
+    buy_date = None
+    
+    # 기존 코드의 'i'가 날짜(timestamp)가 아닌 정수 인덱스가 되도록 루프를 수정했습니다.
+    for i in range(len(df_bt)):
+        row = df_bt.iloc[i]
+        
+        # 진입 신호 확인
+        if row['Signal'] == 1 and not in_trade:
+            buy_price = row['Close']
+            buy_date = df_bt.index[i]
+            in_trade = True
             
-        elif in_position and row['sell_signal']:
-            in_position = False
-            exit_price = df_bt.iloc[i+1]['Open'] if i + 1 < len(df_bt) else row['Close']
-            returns = ((exit_price - entry_price) / entry_price) * 100
-            total_returns.append(returns)
-            
-    # 누적 수익률 계산
-    cumulative_returns = pd.Series(total_returns).cumsum().fillna(0)
-    
-    # 백테스팅 결과 DataFrame 생성
-    results_df = pd.DataFrame(columns=['Strategy', 'Cumulative Return (%)', 'Number of Trades'])
-    if cumulative_returns.empty:
-        total_return = 0
-        num_trades = 0
-    else:
-        total_return = cumulative_returns.iloc[-1]
-        num_trades = len(total_returns)
-    
-    results_df.loc[0] = ['패턴 전략', total_return, num_trades]
-    
-    return results_df, total_returns, df_bt
+        # 청산 신호 확인
+        elif in_trade:
+            # 다음 날의 시가(Open)로 청산합니다.
+            # 데이터프레임의 끝에 도달했는지 확인하는 로직입니다.
+            if i + 1 < len(df_bt):
+                exit_price = df_bt.iloc[i+1]['Open']
+            else:
+                exit_price = row['Close'] # 데이터프레임의 마지막 행이면 현재 종가로 청산
 
+            trade_return = (exit_price - buy_price) / buy_price * 100
+            trades.append(trade_return)
+            in_trade = False
+
+    trade_returns = pd.Series(trades)
+    
+    # 백테스트 결과 계산
+    total_return = (1 + trade_returns / 100).prod() - 1 if not trade_returns.empty else 0
+    backtest_results = {
+        'total_return': total_return,
+        'num_trades': len(trades),
+        'winning_rate': (trade_returns > 0).sum() / len(trades) if len(trades) > 0 else 0
+    }
+    
+    return backtest_results, trade_returns, df_bt
+    
 # ---------------------------------------------------------------------------------
 # 2. Streamlit 웹 인터페이스 구성
 # ---------------------------------------------------------------------------------
