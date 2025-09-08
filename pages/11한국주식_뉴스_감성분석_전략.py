@@ -190,7 +190,7 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
     with st.spinner(f"🔄 {selected_code} LightGBM 하이퍼파라미터 최적화 중 (Optuna)..."):
         # Optuna 시도 횟수를 줄여서 로딩 시간 단축
         study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=10, show_progress_bar=True)
+        study.optimize(objective, n_trials=5, show_progress_bar=True)
     
     st.success(f"✅ Optuna 최적화 완료! 최적의 파라미터:")
     st.json(study.best_params)
