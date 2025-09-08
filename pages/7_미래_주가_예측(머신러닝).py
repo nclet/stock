@@ -91,10 +91,10 @@ def build_lstm_model(input_shape):
     model.compile(optimizer='adam', loss='mse')
     return model
 
-@st.cache_resource
 def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_features, selected_code, n_future_days, last_sequence, _scaler, features):
     """LSTM 모델을 학습하고 미래 주가를 예측합니다."""
-    model_path = f"model_lstm_{selected_code}.h5"
+    # 모델 파일명을 동적으로 생성 (종목코드와 특징 수 포함)
+    model_path = f"model_lstm_{selected_code}_{n_features}.h5"
     model = None
 
     if os.path.exists(model_path):
