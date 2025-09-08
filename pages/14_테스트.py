@@ -249,6 +249,7 @@ def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
 def run_backtest(df_with_patterns, selected_pattern_cols):
     """
     주어진 패턴 데이터프레임을 사용하여 백테스트를 실행하는 함수입니다.
+    `_Timestamp.__add__` 오류를 해결하기 위해 루프를 정수 인덱스 기반으로 수정했습니다.
 
     Args:
         df_with_patterns (pd.DataFrame): 캔들스틱 패턴이 식별된 데이터프레임.
@@ -259,40 +260,29 @@ def run_backtest(df_with_patterns, selected_pattern_cols):
     """
     df_bt = df_with_patterns.copy()
     
-    # 여기서 df_bt를 백테스트에 필요한 형태로 가공하는 코드가 들어갈 것입니다.
-    # 예시를 위해 임시 데이터를 생성합니다.
-    # 실제 코드에서는 이 부분을 사용자의 데이터프레임으로 대체해야 합니다.
-    if df_bt.empty:
-        df_bt = pd.DataFrame(
-            {'Open': [1000, 1010, 1020, 1030, 1040],
-             'Close': [1010, 1020, 1030, 1040, 1050],
-             'Signal': [0, 1, 0, 1, 0]},
-            index=pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-03', '2023-01-04', '2023-01-05'])
-        )
-
+    # 신호 컬럼 생성 (선택된 패턴 중 하나라도 True이면 1, 아니면 0)
+    df_bt['Signal'] = df_bt[selected_pattern_cols].any(axis=1).astype(int)
+    
     trades = []
     in_trade = False
     buy_price = 0
-    buy_date = None
     
-    # 기존 코드의 'i'가 날짜(timestamp)가 아닌 정수 인덱스가 되도록 루프를 수정했습니다.
+    # 수정된 루프: 정수 인덱스 `i`를 사용합니다.
     for i in range(len(df_bt)):
         row = df_bt.iloc[i]
         
         # 진입 신호 확인
         if row['Signal'] == 1 and not in_trade:
             buy_price = row['Close']
-            buy_date = df_bt.index[i]
             in_trade = True
             
-        # 청산 신호 확인
+        # 청산 신호 확인 (다음 날의 시가로 청산)
+        # 데이터프레임의 끝에 도달했는지 확인합니다.
         elif in_trade:
-            # 다음 날의 시가(Open)로 청산합니다.
-            # 데이터프레임의 끝에 도달했는지 확인하는 로직입니다.
             if i + 1 < len(df_bt):
-                exit_price = df_bt.iloc[i+1]['Open']
+                exit_price = df_bt.iloc[i + 1]['Open']
             else:
-                exit_price = row['Close'] # 데이터프레임의 마지막 행이면 현재 종가로 청산
+                exit_price = row['Close'] # 마지막 행이면 현재 종가로 청산
 
             trade_return = (exit_price - buy_price) / buy_price * 100
             trades.append(trade_return)
@@ -302,13 +292,18 @@ def run_backtest(df_with_patterns, selected_pattern_cols):
     
     # 백테스트 결과 계산
     total_return = (1 + trade_returns / 100).prod() - 1 if not trade_returns.empty else 0
-    backtest_results = {
-        'total_return': total_return,
-        'num_trades': len(trades),
-        'winning_rate': (trade_returns > 0).sum() / len(trades) if len(trades) > 0 else 0
-    }
+    num_trades = len(trades)
+    winning_rate = (trade_returns > 0).sum() / num_trades if num_trades > 0 else 0
     
-    return backtest_results, trade_returns, df_bt
+    # 결과를 담을 DataFrame 생성
+    backtest_results_df = pd.DataFrame([{
+        'Total Return (%)': total_return * 100,
+        'Number of Trades': num_trades,
+        'Winning Rate (%)': winning_rate * 100,
+        'Average Return per Trade (%)': trade_returns.mean() if num_trades > 0 else 0
+    }])
+    
+    return backtest_results_df, trade_returns, df_bt
     
 # ---------------------------------------------------------------------------------
 # 2. Streamlit 웹 인터페이스 구성
@@ -515,16 +510,18 @@ if not df_listing.empty:
             backtest_results, trade_returns, df_bt = run_backtest(df_with_patterns, selected_pattern_cols)
 
             if not backtest_results.empty:
-                st.write(f"총 거래 횟수: **{backtest_results.loc[0, 'Number of Trades']}회**")
-                st.write(f"최종 누적 수익률: **{backtest_results.loc[0, 'Cumulative Return (%)']:.2f}%**")
+                st.write(f"총 거래 횟수: **{int(backtest_results.loc[0, 'Number of Trades'])}회**")
+                st.write(f"최종 누적 수익률: **{backtest_results.loc[0, 'Total Return (%)']:.2f}%**")
+                st.write(f"승률: **{backtest_results.loc[0, 'Winning Rate (%)']:.2f}%**")
                 
                 # 누적 수익률 시각화
                 if len(trade_returns) > 0:
-                    cumulative_returns = pd.Series(trade_returns).cumsum().fillna(0)
-                    cumulative_returns.index = range(1, len(trade_returns) + 1)
+                    # 누적 수익률 계산 (백분율)
+                    cumulative_returns = (1 + trade_returns / 100).cumprod() - 1
+                    cumulative_returns = cumulative_returns * 100
                     
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    ax.plot(cumulative_returns.index, cumulative_returns.values, marker='o', linestyle='-')
+                    ax.plot(cumulative_returns.index + 1, cumulative_returns.values, marker='o', linestyle='-')
                     ax.axhline(0, color='gray', linestyle='--')
                     ax.set_title('캔들 패턴 기반 전략 누적 수익률', fontsize=15)
                     ax.set_xlabel('거래 횟수', fontsize=12)
