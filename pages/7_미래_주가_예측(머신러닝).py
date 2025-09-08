@@ -173,7 +173,7 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
         scores = []
         for train_index, test_index in tscv.split(X_ml_scaled):
             X_train_cv, X_test_cv = X_ml_scaled[train_index], X_ml_scaled[test_index]
-            y_train_cv, y_test_cv = y_ml[train_index], y_ml[test_cv]
+            y_train_cv, y_test_cv = y_ml[train_index], y_ml[test_index]
             
             model_cv = lgb.LGBMRegressor(**params)
             model_cv.fit(X_train_cv, y_train_cv,
@@ -243,14 +243,20 @@ if not df_all_data.empty:
                 df_fdr = fdr.DataReader(selected_code, start=df_stock.index.min(), end=df_stock.index.max())
                 df_fdr.reset_index(inplace=True)
                 
-                # 'Date' 컬럼을 기준으로 두 데이터프레임 병합
-                df_stock.reset_index(inplace=True)
-                df_merged = pd.merge(df_stock, df_fdr[['Date', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']], on='Date', how='left')
-                df_merged.set_index('Date', inplace=True)
-                df_merged.sort_index(inplace=True)
+                # 병합할 컬럼 목록 동적 생성 (존재하는 컬럼만 선택)
+                fdr_cols = ['Date', 'Volume', 'Amount', 'Foreign_Net', 'Institution_Net']
+                available_fdr_cols = [col for col in fdr_cols if col in df_fdr.columns]
+                
+                if len(available_fdr_cols) > 1: # 'Date' 컬럼 제외
+                    df_stock.reset_index(inplace=True)
+                    df_merged = pd.merge(df_stock, df_fdr[available_fdr_cols], on='Date', how='left')
+                    df_merged.set_index('Date', inplace=True)
+                    df_merged.sort_index(inplace=True)
+                    st.success("✅ 추가 지표 데이터 로딩 및 병합 완료!")
+                    df_stock = df_merged # 병합된 데이터로 업데이트
+                else:
+                    st.warning("⚠️ `finance-datareader`에서 추가 지표를 찾을 수 없습니다. 기존 데이터만 사용합니다.")
 
-                st.success("✅ 추가 지표 데이터 로딩 및 병합 완료!")
-                df_stock = df_merged # 병합된 데이터로 업데이트
             except Exception as e:
                 st.warning(f"⚠️ `finance-datareader` 데이터 로딩 또는 병합 중 오류가 발생했습니다: {e}")
                 st.info("기존 데이터만 사용하여 예측을 진행합니다.")
@@ -294,7 +300,8 @@ if not df_all_data.empty:
 
             st.subheader("📊 LSTM 예측 주가 시각화")
             fig, ax = plt.subplots(figsize=(12, 6))
-            plot_df = df_processed_lstm.tail(365)
+            # 시각화 데이터 기간 수정 (최근 1년만 표시)
+            plot_df = df_processed_lstm.tail(252) # 영업일 기준 1년
             ax.plot(plot_df.index, plot_df['Close'], label='실제 주가', color='blue')
             ax.plot(future_dates, future_preds_lstm, label='미래 예측 주가', color='red', linestyle='--')
             ax.axvline(last_date, color='gray', linestyle=':', label='예측 기준일')
