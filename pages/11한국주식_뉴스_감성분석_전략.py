@@ -138,14 +138,14 @@ def train_and_predict_lstm_model(X_train, y_train, X_test, y_test, seq_len, n_fe
     return future_preds
 
 # --- 머신러닝 (LightGBM) 관련 함수 ---
-@st.cache_resource
+@st.cache_resource(show_spinner=False, ttl=3600)
 def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_features):
     """LightGBM 모델을 Optuna로 하이퍼파라미터 최적화하여 학습하고 다음 날 수익률을 예측합니다."""
     df_stock_data['Next_Day_Return'] = df_stock_data['Close'].pct_change().shift(-1) * 100
     df_ml = df_stock_data[ml_features + ['Next_Day_Return']].dropna()
 
     if len(df_ml) < 20:
-        st.warning(f"데이터가 부족하여 수익률 예측을 할 수 없습니다. 최소 20일 이상의 유효한 데이터가 필요합니다. (현재 {len(df_ml)}일)")
+        st.warning(f"⚠️ 데이터가 부족하여 수익률 예측을 할 수 없습니다. 최소 20일 이상의 유효한 데이터가 필요합니다. (현재 {len(df_ml)}일)")
         return None, None, None, None, None, None
 
     X_ml = df_ml[ml_features].values
@@ -188,9 +188,8 @@ def train_and_predict_lightgbm_with_optuna(selected_code, df_stock_data, ml_feat
         return np.mean(scores)
 
     with st.spinner(f"🔄 {selected_code} LightGBM 하이퍼파라미터 최적화 중 (Optuna)..."):
-        # Optuna 시도 횟수를 줄여서 로딩 시간 단축
         study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=5, show_progress_bar=True)
+        study.optimize(objective, n_trials=3, show_progress_bar=True)
     
     st.success(f"✅ Optuna 최적화 완료! 최적의 파라미터:")
     st.json(study.best_params)
