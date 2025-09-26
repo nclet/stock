@@ -301,3 +301,43 @@ if st.button("🚀 크롤링 및 분석 시작"):
 
         st.markdown("---")
         st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
+
+# ------------------------
+# ✨ 공포-탐욕 지수 추가
+# ------------------------
+st.subheader("🧠 공포-탐욕 지수 (Fear & Greed Index)")
+
+@st.cache_data
+def get_fear_greed_index(limit=30):
+    """Alternative.me API에서 공포-탐욕 지수를 가져옵니다."""
+    url = f"https://api.alternative.me/fng/?limit={limit}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        df = pd.DataFrame(data)
+        df["value"] = df["value"].astype(float)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+        df = df.rename(columns={"value": "Index", "timestamp": "Date"})
+        return df[["Date", "Index"]].sort_values("Date")
+    except Exception as e:
+        st.error(f"❌ Fear & Greed Index 데이터를 가져오지 못했습니다: {e}")
+        return pd.DataFrame()
+
+fg_df = get_fear_greed_index()
+
+if not fg_df.empty:
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.plot(fg_df["Date"], fg_df["Index"], marker="o", linestyle="-", color="purple")
+    ax.axhline(50, color="gray", linestyle="--", linewidth=1, alpha=0.7)
+    ax.set_title("공포-탐욕 지수 (0=극단적 공포, 100=극단적 탐욕)")
+    ax.set_ylabel("Index")
+    ax.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+    latest_value = fg_df.iloc[-1]["Index"]
+    st.metric("📊 최신 공포-탐욕 지수", f"{latest_value:.0f}")
+else:
+    st.warning("Fear & Greed Index 데이터를 불러올 수 없습니다.")
+
