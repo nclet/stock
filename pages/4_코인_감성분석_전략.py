@@ -247,25 +247,32 @@ if st.button("🚀 크롤링 및 분석 시작"):
         # ------------------------
         # 2단계: 감성 + 모멘텀 + Fear&Greed
         # ------------------------
-        if not fg_df.empty:
-            df_merge = pd.merge(df_merge, fg_df, on="Date", how="left")
-            df_merge["Index"] = df_merge["Index"].fillna(method="ffill").fillna(50)
+        if not df_merge.empty:
+        # 날짜 타입 통일 (둘 다 datetime.date로 변환)
+            df_merge["Date"] = pd.to_datetime(df_merge["Date"]).dt.date
+            fg_df["Date"] = pd.to_datetime(fg_df["Date"]).dt.date
+        
+            if not fg_df.empty:
+                df_merge = pd.merge(df_merge, fg_df, on="Date", how="left")
+                df_merge["Index"] = df_merge["Index"].fillna(method="ffill").fillna(50)
+            else:
+                df_merge["Index"] = 50
+        
+            X2 = df_merge[["Sentiment_Score", "Momentum", "Index"]].values
+            y2 = df_merge["Close"].values
+        
+            if len(X2) > 5:
+                model2 = LinearRegression().fit(X2, y2)
+                df_merge["Predicted_Close2"] = model2.predict(X2)
+        
+                st.subheader("📊 예측 결과 (감성 + 모멘텀 + 공포탐욕)")
+                fig, ax = plt.subplots(figsize=(12, 6))
+                ax.plot(df_merge["Date"], df_merge["Close"], label="실제", color="blue")
+                ax.plot(df_merge["Date"], df_merge["Predicted_Close2"], '--', color="red", label="예측")
+                ax.legend()
+                st.pyplot(fig)
         else:
-            df_merge["Index"] = 50
-
-        X2 = df_merge[["Sentiment_Score", "Momentum", "Index"]].values
-        y2 = df_merge["Close"].values
-
-        if len(X2) > 5:
-            model2 = LinearRegression().fit(X2, y2)
-            df_merge["Predicted_Close2"] = model2.predict(X2)
-
-            st.subheader("📊 예측 결과 (감성 + 모멘텀 + 공포탐욕)")
-            fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(df_merge["Date"], df_merge["Close"], label="실제", color="blue")
-            ax.plot(df_merge["Date"], df_merge["Predicted_Close2"], '--', color="red", label="예측")
-            ax.legend(); st.pyplot(fig)
-
+            st.warning("❗ df_merge가 비어있어 Fear&Greed 지수를 결합할 수 없습니다.")
 
 # import streamlit as st
 # import pandas as pd
