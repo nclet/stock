@@ -302,42 +302,41 @@ if st.button("🚀 크롤링 및 분석 시작"):
         st.markdown("---")
         st.write("👉 감성점수는 부정 뉴스에 -1, 긍정 뉴스에 1 점수를 대입합니다. 즉, -1(부정)~1(긍정)으로 점수가 계산됩니다.")
 
+
 # ------------------------
-# ✨ 공포-탐욕 지수 추가
+# ✨ 예측 모델 (감성 + 모멘텀 + 공포탐욕 지수)
 # ------------------------
-st.subheader("🧠 공포-탐욕 지수 (Fear & Greed Index)")
-
-@st.cache_data
-def get_fear_greed_index(limit=30):
-    """Alternative.me API에서 공포-탐욕 지수를 가져옵니다."""
-    url = f"https://api.alternative.me/fng/?limit={limit}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json().get("data", [])
-        df = pd.DataFrame(data)
-        df["value"] = df["value"].astype(float)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-        df = df.rename(columns={"value": "Index", "timestamp": "Date"})
-        return df[["Date", "Index"]].sort_values("Date")
-    except Exception as e:
-        st.error(f"❌ Fear & Greed Index 데이터를 가져오지 못했습니다: {e}")
-        return pd.DataFrame()
-
-fg_df = get_fear_greed_index()
-
 if not fg_df.empty:
-    fig, ax = plt.subplots(figsize=(12, 4))
-    ax.plot(fg_df["Date"], fg_df["Index"], marker="o", linestyle="-", color="purple")
-    ax.axhline(50, color="gray", linestyle="--", linewidth=1, alpha=0.7)
-    ax.set_title("공포-탐욕 지수 (0=극단적 공포, 100=극단적 탐욕)")
-    ax.set_ylabel("Index")
-    ax.grid(True, alpha=0.3)
+    # 날짜 기준으로 병합
+    df_merge = pd.merge(df_merge, fg_df, on="Date", how="left")
+    df_merge["Index"] = df_merge["Index"].fillna(method="ffill").fillna(method="bfill")
+else:
+    df_merge["Index"] = 50  # 데이터 없으면 중립값(50)으로 채움
+
+X = df_merge[["Sentiment_Score", "Momentum", "Index"]].fillna(0).values
+y = df_merge["Close"].values
+
+if len(X) > 5:
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
+    df_merge["Predicted_Close"] = y_pred
+
+    st.subheader("📊 예측 결과 (감성 + 모멘텀 + 공포탐욕)")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(df_merge["Date"], df_merge["Close"], label="실제 가격 (Actual)", color="blue")
+    ax.plot(df_merge["Date"], df_merge["Predicted_Close"], label="예측 가격 (Predicted)", linestyle="--", color="red")
+    ax.set_title(f"{company_name} 가격 예측 (뉴스 감성 + 모멘텀 + 공포탐욕 지수)")
+    ax.set_xlabel("날짜")
+    ax.set_ylabel("종가")
+    ax.legend()
+    ax.grid(True)
     plt.xticks(rotation=45)
     st.pyplot(fig)
 
-    latest_value = fg_df.iloc[-1]["Index"]
-    st.metric("📊 최신 공포-탐욕 지수", f"{latest_value:.0f}")
+    st.subheader("📈 회귀 모델 계수")
+    st.metric("감성 점수 회귀계수", f"{model.coef_[0]:.2f}")
+    st.metric("모멘텀 회귀계수", f"{model.coef_[1]:.2f}")
+    st.metric("공포탐욕 지수 회귀계수", f"{model.coef_[2]:.2f}")
 else:
-    st.warning("Fear & Greed Index 데이터를 불러올 수 없습니다.")
-
+    st.warning("데이터가 부족하여 예측을 수행할 수 없습니다. 뉴스 검색 기간을 늘리거나 다른 종목을 선택해보세요.")
