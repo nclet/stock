@@ -118,6 +118,30 @@ crypto_list = get_upbit_markets()
 company_names = list(crypto_list.keys())
 
 # ------------------------
+# ✨ 공포-탐욕 지수 데이터 로드
+# ------------------------
+@st.cache_data
+def get_fear_greed_index(limit=365):
+    """Alternative.me API에서 공포-탐욕 지수를 가져옵니다 (최대 365일)."""
+    url = f"https://api.alternative.me/fng/?limit={limit}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        df = pd.DataFrame(data)
+        df["value"] = df["value"].astype(float)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+        df = df.rename(columns={"value": "Index", "timestamp": "Date"})
+        return df[["Date", "Index"]].sort_values("Date")
+    except Exception as e:
+        st.error(f"❌ Fear & Greed Index 데이터를 가져오지 못했습니다: {e}")
+        return pd.DataFrame()
+
+# 실제 데이터 불러오기
+fg_df = get_fear_greed_index(limit=365)
+
+
+# ------------------------
 # ✨ 암호화폐 종목 선택 UI
 # ------------------------
 # 기본값 설정
