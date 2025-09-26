@@ -224,8 +224,8 @@ def calculate_and_add_indicators(df, show_ma, show_bb, show_rsi):
         df['BB_Upper'] = df['MA20'] + (df['STD20'] * 2)
         df['BB_Lower'] = df['MA20'] - (df['STD20'] * 2)
         
-        apds.append(mpf.make_addplot(df['BB_Upper'], color='purple', linestyle=':', panel=0, label='볼린저밴드 상단'))
-        apds.append(mpf.make_addplot(df['BB_Lower'], color='purple', linestyle=':', panel=0, label='볼린저밴드 하단'))
+        apds.append(mpf.make_addplot(df['BB_Upper'], color='purple', linestyle=':', panel=0, label='BB_Upper'))
+        apds.append(mpf.make_addplot(df['BB_Lower'], color='purple', linestyle=':', panel=0, label='BB_Lower'))
 
     # RSI (상대강도지수) 계산 및 추가 (14일 기준)
     if show_rsi:
