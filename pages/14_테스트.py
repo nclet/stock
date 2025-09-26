@@ -394,7 +394,7 @@ if not df_listing.empty:
             df_with_patterns = find_candle_patterns(df.copy())
             apds = []
             
-            marker_size = 100
+            marker_size = 50
             
             # 차트 시각화에 사용할 패턴 정보 (컬럼명, 위치, 마커, 색상)
             chart_pattern_info = {
