@@ -1,5 +1,6 @@
 import streamlit as st
-from pykrx.stock import get_market_investor_trade_trend_by_date # pykrx 데이터 로드 함수
+# 🚨 get_market_investor_trade_trend_by_date 대신 정확한 함수 사용
+from pykrx.stock import get_market_net_buying_trend 
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
@@ -40,21 +41,17 @@ def load_investor_data(market_pykrx_code, start_date_str, end_date_str):
     # 1. 데이터 로드 시도 (최대 MAX_RETRIES 회)
     for attempt in range(MAX_RETRIES):
         try:
-            # pykrx를 사용하여 데이터 로드 시도
-            # market_pykrx_code: 'KOSPI' 또는 'KOSDAQ'
-            # start_date_str, end_date_str: 'YYYYMMDD' 형식의 문자열
-            df_raw = get_market_investor_trade_trend_by_date(
+            # pykrx의 정확한 함수인 get_market_net_buying_trend 사용
+            df_raw = get_market_net_buying_trend(
                 fromdate=start_date_str, 
                 todate=end_date_str, 
                 market=market_pykrx_code
             )
             
-            # pykrx는 성공 시 DataFrame을 반환하나, 데이터가 없을 수 있음
             if not df_raw.empty:
                 data = df_raw
                 break
             
-            # 데이터는 비어 있지만 명시적인 오류가 없으면 잠시 기다렸다가 재시도
             st.warning(f"데이터가 비어 있습니다. 잠시 후 재시도합니다. (시도 {attempt + 1}/{MAX_RETRIES})")
             time.sleep(RETRY_DELAY * (2 ** attempt)) # 지수 백오프 대기
             
@@ -75,11 +72,12 @@ def load_investor_data(market_pykrx_code, start_date_str, end_date_str):
     
     try:
         # pykrx 컬럼 이름 표준화 (순매수 금액 관련 컬럼만 추출)
+        # get_market_net_buying_trend 함수 출력 컬럼은 '개인', '기관합계', '외국인합계'임
         data = data[['개인', '기관합계', '외국인합계']]
         data.columns = ['Individual', 'Institution', 'Foreigner']
         data = data.rename_axis('Date')
         
-        # 데이터 타입을 정수로 변환 (pykrx는 이미 금액 단위로 제공)
+        # 데이터 타입을 실수형으로 변환 (pykrx는 이미 금액 단위로 제공)
         for col in data.columns:
              data[col] = data[col].astype(float)
         
