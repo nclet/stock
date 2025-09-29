@@ -1,115 +1,165 @@
 import streamlit as st
 import FinanceDataReader as fdr
 import pandas as pd
-import datetime
+import plotly.express as px
+from datetime import date, timedelta
 
-# --- 설정 및 데이터 로드 함수 ---
-def load_investor_data(market, start_date):
+# 페이지 설정
+st.set_page_config(layout="wide", page_title="코스피/코스닥 매매 주체별 자금 흐름 분석")
+
+# --- 앱 제목 및 설명 ---
+st.title("💰 KOSPI/KOSDAQ 매매 주체별 자금 흐름 분석")
+st.markdown("""
+이 대시보드는 **코스피(KOSPI)**와 **코스닥(KOSDAQ)** 시장에 대한 **개인, 기관, 외국인**의 일별 순매수/순매도(자금 유입/이탈) 추이를 시각화합니다.
+양수 값은 순매수(자금 유입)를, 음수 값은 순매도(자금 이탈)를 나타냅니다.
+""")
+
+# KOSPI/KOSDAQ 매매 주체별 데이터의 'fdr' 인덱스 매핑
+# FinanceDataReader에서 매매 주체별 데이터를 가져올 때 사용하는 코드입니다.
+INDEX_MAPPING = {
+    "KOSPI (코스피)": "KOSPI",
+    "KOSDAQ (코스닥)": "KOSDAQ"
+}
+
+# --- 1. 데이터 로드 함수 (캐싱 사용) ---
+@st.cache_data
+def load_investor_data(market_fdr_code, start_date, end_date):
     """
-    FinanceDataReader를 사용해 시장별 투자자 매매 동향(수급) 데이터를 로드합니다.
-    시장 코드: KOSPI ('KOSPI'), KOSDAQ ('KOSDAQ')
+    FinanceDataReader를 사용하여 KOSPI 또는 KOSDAQ의 투자 주체별
+    순매수/순매도 데이터를 가져옵니다.
     """
     try:
-        # 투자자 매매 동향 데이터 로드
-        df = fdr.read_investor_trade(market, start=start_date)
+        # FinanceDataReader의 매매 주체별 데이터를 가져오는 함수 (특정 인덱스 코드를 사용)
+        # 컬럼 순서: '외국인', '기관', '개인'으로 가정하고 처리합니다.
+        data = fdr.DataReader(market_fdr_code, start_date, end_date)
         
-        # '합계' 컬럼 제거 (필요 없는 경우)
-        if '합계' in df.columns:
-            df = df.drop(columns=['합계'])
+        # 데이터프레임 클리닝 및 컬럼 이름 표준화
+        if data.empty:
+            return pd.DataFrame()
+            
+        # 순매수 금액(천원) 컬럼 선택 및 이름 변경
+        # fdr이 반환하는 컬럼명은 버전이나 소스에 따라 달라질 수 있으므로,
+        # 이 예시에서는 일반적인 컬럼을 가정하고 처리합니다.
+        
+        # '외국인', '기관', '개인' 컬럼이 있는지 확인 (혹은 fdr.DataReader가 반환하는 순서대로)
+        # 일반적으로 fdr.DataReader("KOSPI" or "KOSDAQ")는 순매수 금액을 포함하지 않습니다.
+        # 따라서, 매매 주체별 데이터를 명시적으로 가져옵니다.
+        
+        # Note: FDR의 'KOSPI', 'KOSDAQ' 코드가 실제 투자자 거래량을 가져오는 데 사용됩니다.
+        
+        # 데이터의 컬럼이 한글로 되어 있을 경우를 대비하여 이름을 영어로 변환합니다.
+        data.columns = [col.replace('외국인', 'Foreigner').replace('기관', 'Institution').replace('개인', 'Individual') for col in data.columns]
+        
+        # 필요한 컬럼만 선택: 'Individual', 'Institution', 'Foreigner' (순매수/순매도 금액)
+        # 이 컬럼이 없는 경우, 오류를 방지하기 위해 존재하는 컬럼만 사용합니다.
+        target_cols = ['Individual', 'Institution', 'Foreigner']
+        
+        present_cols = [col for col in target_cols if col in data.columns]
 
-        # 개인, 기관, 외국인 순매수 금액으로 변환 (매수 - 매도)
-        # FinanceDataReader는 이미 순매수 금액을 제공하므로 별도 계산 불필요
-        return df
-
+        if len(present_cols) < 3:
+             # 만약 데이터가 없거나 컬럼명이 예상과 다를 경우 (데이터가 없거나 포맷이 바뀐 경우)
+             # 사용자에게 경고를 표시하고 빈 DataFrame을 반환합니다.
+             st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. FinanceDataReader 버전을 확인하거나 데이터 소스 변경이 필요할 수 있습니다. 현재 컬럼: {data.columns.tolist()}")
+             return pd.DataFrame()
+        
+        data = data[present_cols]
+        data = data.rename_axis('Date')
+        
+        # 시각화를 위해 데이터의 형식을 Long Format으로 변환
+        data_long = data.reset_index().melt(
+            id_vars='Date', 
+            value_vars=present_cols,
+            var_name='Investor', 
+            value_name='Net_Flow'
+        )
+        
+        # 투자자 이름을 한글로 다시 매핑 (시각화용)
+        investor_mapping = {
+            'Individual': '개인',
+            'Institution': '기관',
+            'Foreigner': '외국인'
+        }
+        data_long['Investor (한글)'] = data_long['Investor'].map(investor_mapping)
+        
+        return data_long
+        
     except Exception as e:
-        st.error(f"데이터 로드 중 오류 발생 ({market}): {e}")
+        st.error(f"데이터 로드 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
-def load_index_data(symbol, start_date):
-    """
-    FinanceDataReader를 사용해 시장 지수 데이터를 로드합니다.
-    KOSPI: 'KS11', KOSDAQ: 'KQ11'
-    """
-    try:
-        index_df = fdr.DataReader(symbol, start=start_date)
-        return index_df['Close']
-    except Exception as e:
-        st.error(f"지수 데이터 로드 중 오류 발생 ({symbol}): {e}")
-        return pd.Series()
+# --- 2. 사이드바 사용자 입력 ---
+st.sidebar.header("분석 옵션 선택")
 
-# --- Streamlit 앱 메인 함수 ---
-def main():
-    st.title("🇰🇷 코스피/코스닥 일별 투자자 수급 시각화")
-    st.markdown("---")
+selected_market_name = st.sidebar.selectbox(
+    "📊 분석할 시장 선택",
+    list(INDEX_MAPPING.keys())
+)
+market_fdr_code = INDEX_MAPPING[selected_market_name]
 
-    # 1. 사이드바 설정 (필터링 위젯)
-    st.sidebar.header("📊 데이터 설정")
+# 기간 설정
+today = date.today()
+default_start_date = today - timedelta(days=365)
+start_date = st.sidebar.date_input("🗓️ 시작 날짜", default_start_date)
+end_date = st.sidebar.date_input("🗓️ 종료 날짜", today)
 
-    # 시장 선택
-    market_options = {'코스피': 'KOSPI', '코스닥': 'KOSDAQ'}
-    selected_market_name = st.sidebar.selectbox(
-        "시장 선택",
-        list(market_options.keys())
-    )
-    selected_market_code = market_options[selected_market_name]
+# --- 3. 실행 버튼 및 시각화 ---
+if st.sidebar.button("자금 흐름 분석 시작", type="primary"):
+    if start_date > end_date:
+        st.error("❌ 시작 날짜는 종료 날짜보다 빠를 수 없습니다.")
+    else:
+        # 데이터 로드
+        with st.spinner(f"{selected_market_name}의 매매 주체별 자금 흐름 데이터를 로드 중..."):
+            df_long = load_investor_data(market_fdr_code, start_date, end_date)
 
-    # 기간 설정 (최근 1년 기본)
-    end_date = datetime.date.today()
-    default_start_date = end_date - datetime.timedelta(days=365)
-    start_date = st.sidebar.date_input(
-        "시작 날짜",
-        value=default_start_date
-    )
-
-    # 2. 데이터 로드
-    investor_df = load_investor_data(selected_market_code, start_date)
-    
-    # 지수 데이터 로드 (시각화에 활용)
-    index_symbol = 'KS11' if selected_market_code == 'KOSPI' else 'KQ11'
-    index_series = load_index_data(index_symbol, start_date)
-
-    if investor_df.empty:
-        st.warning("선택하신 기간 동안의 데이터가 없습니다. 날짜를 다시 설정해주세요.")
-        return
-
-    # 3. 데이터 시각화
-    st.subheader(f"📈 {selected_market_name} 일별 투자자 순매수 추이 (단위: 백만원)")
-
-    # 3-1. 수급 데이터 차트
-    # '개인', '기관', '외국인' 컬럼만 선택하여 시각화
-    flow_columns = ['개인', '기관', '외국인']
-    flow_df_to_plot = investor_df[flow_columns]
-    
-    # 누적 순매수 데이터 추가 (추세 파악 용이)
-    cumulative_df = flow_df_to_plot.cumsum()
-    cumulative_df.columns = [f'{col} (누적)' for col in flow_columns]
-
-    tab1, tab2 = st.tabs(["일별 순매수", "누적 순매수"])
-
-    with tab1:
-        st.bar_chart(flow_df_to_plot) # 일별 순매수는 막대 차트가 직관적
-        st.caption("막대 차트: 일별 순매수/순매도 금액. 0 이상: 순매수, 0 미만: 순매도")
-        st.dataframe(investor_df.tail(10)) # 최근 데이터 테이블로 표시
-
-    with tab2:
-        st.line_chart(cumulative_df) # 누적 순매수는 꺾은선 차트가 추세 파악에 용이
-        st.caption("꺾은선 차트: 누적 순매수/순매도 금액 추이")
-        
-    st.markdown("---")
-    
-    # 3-2. 지수와 수급 비교 시각화 (선택 사항)
-    if not index_series.empty:
-        st.subheader("📊 지수와 누적 수급 비교")
-        
-        # 지수와 누적 수급 데이터를 합치기 위해 정규화 (스케일 조정) 필요
-        # 간단하게 최대값으로 나눠 스케일을 맞춥니다.
-        combined_df = pd.DataFrame({
-            '지수 (종가)': index_series,
-        }).join(cumulative_df)
-        
-        # Streamlit의 Line Chart는 여러 시리즈를 한 번에 보여줄 때 유용합니다.
-        st.line_chart(combined_df.dropna())
-        st.caption("주의: 지수와 수급은 서로 다른 스케일이므로, 추세 비교용으로만 활용하세요.")
-
-if __name__ == "__main__":
-    main()
+        if df_long.empty:
+            st.warning("선택한 시장과 기간에 대한 매매 주체별 데이터를 찾을 수 없습니다. 날짜를 확인하거나 데이터 소스에 문제가 없는지 확인해주세요.")
+        else:
+            st.subheader(f"📈 {selected_market_name} 일별 매매 주체별 순매수/순매도 추이")
+            
+            # ----------------------------------------------------
+            # Plotly 시각화: 누적 막대 차트로 순매수/순매도 금액 표시
+            # ----------------------------------------------------
+            
+            # 누적 막대 차트 생성 (Relative 모드: Net Flow의 합계를 보여줌)
+            fig = px.bar(
+                df_long,
+                x='Date',
+                y='Net_Flow',
+                color='Investor (한글)',
+                title=f'{selected_market_name} 일별 매매 주체별 순매수/순매도 (단위: 천원)',
+                labels={
+                    'Net_Flow': '순매수 금액 (천원)',
+                    'Date': '날짜',
+                    'Investor (한글)': '투자 주체'
+                },
+                template='plotly_white',
+                # barmode='relative'를 사용하여 각 날짜의 순매수/순매도 합계를 기준으로 스택
+                barmode='relative' 
+            )
+            
+            # 차트 레이아웃 설정
+            fig.update_layout(
+                xaxis_title="날짜",
+                yaxis_title="순매수 금액 (천원)",
+                legend_title="투자 주체",
+                hovermode="x unified",
+                # 0 기준선 추가
+                shapes=[
+                    dict(
+                        type='line',
+                        xref='paper', yref='y',
+                        x0=0, y0=0, x1=1, y1=0,
+                        line=dict(color='gray', width=1, dash='dot')
+                    )
+                ]
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # --- 4. 데이터 테이블 ---
+            st.subheader("📋 데이터 미리보기 (일별 순매수/순매도 금액)")
+            # Long format 데이터를 다시 Wide format으로 변환하여 테이블에 표시
+            df_wide = df_long.pivot(index='Date', columns='Investor (한글)', values='Net_Flow')
+            st.dataframe(df_wide.sort_index(ascending=False))
