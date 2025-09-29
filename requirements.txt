@@ -24,3 +24,5 @@ pytrends
 mplfinance
 optuna
 lightgbm
+plotly
+pykrx
