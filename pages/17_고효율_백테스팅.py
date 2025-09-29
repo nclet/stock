@@ -82,10 +82,8 @@ def load_data(ticker):
             return None
         
         # yfinance 멀티 인덱스 문제 방지 및 컬럼 이름 정리
-        # 컬럼 이름이 튜플일 경우 문자열로 변환한 후 정리합니다. (오류 해결 핵심)
         def sanitize_column_name(col):
             if isinstance(col, tuple):
-                # 튜플인 경우, 요소들을 합쳐서 문자열로 만듭니다. (예: ('Close', 'AAPL') -> 'Close_AAPL')
                 name = '_'.join(map(str, col))
             else:
                 name = str(col)
@@ -94,6 +92,30 @@ def load_data(ticker):
             return name.replace(' ', '_').replace('.', '').replace(',', '').replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_')
 
         data.columns = [sanitize_column_name(col) for col in data.columns.to_list()]
+        
+        # --- 핵심: 'Close'와 'Volume' 컬럼 이름을 표준화합니다. ---
+        new_columns = {}
+        for col in data.columns:
+            # 'Close'를 포함하고 'Adj'를 포함하지 않는 컬럼을 찾습니다. (일반 종가)
+            if 'Close' in col and 'Adj' not in col:
+                new_columns[col] = 'Close'
+            # 'Volume'을 포함하는 컬럼을 찾습니다.
+            elif 'Volume' in col:
+                new_columns[col] = 'Volume'
+
+        # 'Close'와 'Volume'이 모두 표준화 대상에 있는지 확인
+        if 'Close' not in new_columns.values() or 'Volume' not in new_columns.values():
+            # Adj Close가 Close 역할을 대신할 수 있는지 확인하는 폴백 로직
+            adj_close_col = [col for col in data.columns if 'Adj_Close' in col]
+            if 'Close' not in new_columns.values() and len(adj_close_col) == 1:
+                 new_columns[adj_close_col[0]] = 'Close'
+            else:
+                st.error(f"데이터에서 'Close' 또는 'Volume' 가격 컬럼을 찾을 수 없습니다. (현재 컬럼: {data.columns.tolist()})")
+                return None
+        
+        # 컬럼 이름 변경 적용
+        data = data.rename(columns=new_columns)
+        # ------------------------------------------------------------------
         
         return data.dropna()
     except Exception as e:
@@ -209,7 +231,7 @@ def predict_future(model, scaler, last_data, feature_columns):
         
         # 6. 다음 예측을 위해 'last_data' 업데이트 (재귀적 예측을 위해)
         # 새로운 행을 생성하고 last_data에 추가합니다.
-        last_data = pd.concat([last_data, pd.DataFrame({'Open': next_price, 'High': next_price, 'Low': next_price, 'Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date])])
+        last_data = pd.concat([last_data, pd.DataFrame({'Open': next_price, 'High': next_price, 'Low': next_price, 'Close': next_price, 'Adj Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date])])
         
         # last_data의 컬럼 이름이 원본 yfinance 데이터의 컬럼 이름 구조를 유지하도록 보정
         last_data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
