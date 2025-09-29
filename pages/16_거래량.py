@@ -31,7 +31,8 @@ def load_investor_data(market, start_date, end_date):
         # pykrx는 문자열 날짜 필요
         start_str, end_str = start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
         
-        df_raw = get_market_trading_value_by_date(start_str, end_str, market=market)
+        # market은 "KOSPI" 또는 "KOSDAQ"
+        df_raw = get_market_trading_value_by_date(start_str, end_str, market)
 
         if df_raw.empty:
             return pd.DataFrame()
@@ -40,7 +41,7 @@ def load_investor_data(market, start_date, end_date):
         df_market = df_raw[["개인", "외국인", "기관합계"]].copy()
         df_market.rename(columns={"기관합계": "기관"}, inplace=True)
 
-        # 일별 순매수 금액으로 변환 (매수 - 매도는 이미 pykrx 결과에서 반영)
+        # 일별 순매수 금액 (.diff() 처리)
         df_net_flow = df_market.diff().fillna(0)
 
         # Long Format 변환
@@ -51,7 +52,6 @@ def load_investor_data(market, start_date, end_date):
             value_name="Net_Flow"
         )
 
-        # pykrx 날짜 컬럼명 변경
         df_long.rename(columns={"날짜": "Date"}, inplace=True)
 
         return df_long
@@ -59,6 +59,7 @@ def load_investor_data(market, start_date, end_date):
     except Exception as e:
         st.error(f"데이터 로드 중 오류 발생: {e}")
         return pd.DataFrame()
+
 
 # --- 2. 사용자 입력 ---
 st.header("⚙️ 분석 옵션 선택")
