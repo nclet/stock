@@ -272,20 +272,33 @@ def app():
     st.markdown("---")
 
     # 1. 종목 선택 및 실행 버튼
-    # 드롭다운 형식으로 변경 (사용자가 원하는 티커 목록 제공)
-    TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'SPY', 'QQQ', 'DIA', 'S&P500']
+    # 나스닥 및 S&P 500을 포괄하는 주요 종목과 섹터별 대형주 목록으로 확장
+    TICKERS = [
+        '^GSPC', '^IXIC', 'SPY', 'QQQ', 'DIA', 'VIXY', # 주요 지수 및 ETF
+        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', # 기술 대형주
+        'BRK-B', 'JPM', 'BAC', 'WFC', 'C', 'GS', 'MS', # 금융주
+        'JNJ', 'PFE', 'MRK', 'UNH', 'ABBV', 'LLY', # 헬스케어/제약
+        'XOM', 'CVX', 'SHEL', 'DHR', # 에너지
+        'WMT', 'COST', 'HD', 'LOW', # 소매/소비재
+        'KO', 'PEP', 'MCD', 'NKE', 'DIS', 'NFLX', # 소비재/서비스
+        'T', 'VZ', 'CMCSA', # 통신
+        'ADBE', 'CRM', 'AMD', 'QCOM', 'INTC', 'CSCO', # 반도체/소프트웨어
+        'CAT', 'GE', 'DE', # 산업재
+        'RYAAY', 'BABA', 'TCEHY', 'TSM', # 글로벌/기타 대형주
+        'PLTR', 'SNOW', 'RBLX', 'DOCU' # 성장주/소프트웨어 예시
+    ]
     
     col1, col2, _ = st.columns([1, 1, 3])
     
     with col1:
-        # 텍스트 입력 대신 드롭다운 메뉴 사용
+        # 확장된 드롭다운 메뉴 사용
         selected_ticker = st.selectbox(
-            "예측할 미국 상장 종목 선택 (대표 종목 및 ETF)", 
+            "예측할 미국 상장 종목 선택 (S&P 500 및 나스닥 대표 종목 포함)", 
             TICKERS, 
             key='ticker_select'
         )
-        # 티커를 대문자로 변환하고 공백을 제거하여 사용
-        selected_ticker = selected_ticker.replace('S&P500', '^GSPC').upper().strip()
+        # S&P500의 경우 티커가 '^GSPC'로 치환되므로, 이제 리스트에 직접 포함되어 수정 불필요
+        selected_ticker = selected_ticker.upper().strip()
     
     with col2:
         st.markdown("<br>", unsafe_allow_html=True) 
@@ -370,6 +383,7 @@ def app():
 
 if __name__ == "__main__":
     app()
+
 
 
 
