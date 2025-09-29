@@ -102,11 +102,12 @@ def train_and_validate_model(data_features):
     
     # --- LightGBM 오류 방지를 위한 피처 이름 정리 (Sanitization) ---
     # LightGBM은 일부 특수 문자(예: [, ], :, <, > 등)를 피처 이름에서 허용하지 않습니다.
+    # X.columns가 Index 객체가 아닌 튜플 등으로 변환될 때 .replace()가 실패하는 것을 방지합니다.
     sanitized_columns = [
-        col.replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
+        str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
         for col in X.columns
     ]
-    X.columns = sanitized_columns
+    X.columns = sanitized_columns # 컬럼 이름 업데이트
     # ------------------------------------------------------------------
     
     # 스케일링 (선형 모델에는 필수, 부스팅 모델에도 성능 향상에 도움)
@@ -199,12 +200,22 @@ def app():
     st.markdown("이 시스템은 **LightGBM**과 **시계열 특화 피처 엔지니어링**을 사용하여 과적합을 방지하고 예측 성능을 극대화합니다.")
     st.markdown("---")
 
-    # 1. 사이드바 설정
+    # 1. 종목 선택 및 실행 버튼을 본문으로 이동
     TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'SPY']
-    st.sidebar.header("⚙️ 예측 설정")
-    selected_ticker = st.sidebar.selectbox("예측할 종목 선택", TICKERS)
     
-    run_button = st.sidebar.button("모델 훈련 및 예측 실행", type="primary")
+    col1, col2, _ = st.columns([1, 1, 3])
+    
+    with col1:
+        selected_ticker = st.selectbox("예측할 종목 선택", TICKERS, key='ticker_select')
+    
+    with col2:
+        # st.selectbox와 st.button이 같은 컬럼에 있으면 버튼이 아래로 밀리므로,
+        # 분리하거나, col2에 버튼을 배치하고 상단에 마진을 줍니다.
+        # 여기서는 간결하게 배치합니다.
+        st.markdown("<br>", unsafe_allow_html=True) # 버튼 위치 조정을 위한 공백
+        run_button = st.button("모델 훈련 및 예측 실행", type="primary")
+
+    st.markdown("---") # UI 구분선
 
     if run_button:
         with st.spinner(f"⏳ '{selected_ticker}' 데이터 로드 및 피처 생성 중..."):
