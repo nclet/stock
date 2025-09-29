@@ -9,7 +9,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
 # --- 상수 정의 ---
-TARGET_PERIOD = 10 # 예측할 미래 일수 (7일 -> 10일로 변경)
+TARGET_PERIOD = 10 # 예측할 미래 일수
 TRAIN_DAYS = 365 # 훈련에 사용할 기간 (1년으로 단축)
 
 # --- LightGBM 모델 하이퍼파라미터 (과적합 방지 최적화) ---
@@ -272,14 +272,20 @@ def app():
     st.markdown("---")
 
     # 1. 종목 선택 및 실행 버튼
-    # 사용자가 직접 원하는 종목의 티커를 입력하도록 변경
+    # 드롭다운 형식으로 변경 (사용자가 원하는 티커 목록 제공)
+    TICKERS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'SPY', 'QQQ', 'DIA', 'S&P500']
+    
     col1, col2, _ = st.columns([1, 1, 3])
     
     with col1:
-        # 텍스트 입력 필드를 사용하여 모든 미국 상장 종목에 대한 유연성을 제공
-        selected_ticker = st.text_input("예측할 미국 상장 종목 티커 입력 (예: AAPL, AMD, NVDA)", value='AAPL', key='ticker_input')
-        # 입력된 티커를 대문자로 변환하여 사용
-        selected_ticker = selected_ticker.upper().strip()
+        # 텍스트 입력 대신 드롭다운 메뉴 사용
+        selected_ticker = st.selectbox(
+            "예측할 미국 상장 종목 선택 (대표 종목 및 ETF)", 
+            TICKERS, 
+            key='ticker_select'
+        )
+        # 티커를 대문자로 변환하고 공백을 제거하여 사용
+        selected_ticker = selected_ticker.replace('S&P500', '^GSPC').upper().strip()
     
     with col2:
         st.markdown("<br>", unsafe_allow_html=True) 
@@ -289,7 +295,7 @@ def app():
     
     # 입력 검증
     if run_button and not selected_ticker:
-        st.warning("예측할 종목의 티커를 입력해주세요.")
+        st.warning("예측할 종목의 티커를 선택해주세요.")
         return
 
     if run_button:
@@ -298,6 +304,7 @@ def app():
             # 2. 데이터 로드 및 피처 생성
             raw_data = load_data(selected_ticker)
             if raw_data is None:
+                # load_data에서 이미 오류 메시지를 출력했습니다.
                 return
 
             # 훈련 데이터를 위한 피처 생성 (Target 포함)
@@ -363,6 +370,7 @@ def app():
 
 if __name__ == "__main__":
     app()
+
 
 
 
