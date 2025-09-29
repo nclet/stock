@@ -100,6 +100,15 @@ def train_and_validate_model(data_features):
     X = data_features.drop('Target', axis=1)
     y = data_features['Target']
     
+    # --- LightGBM 오류 방지를 위한 피처 이름 정리 (Sanitization) ---
+    # LightGBM은 일부 특수 문자(예: [, ], :, <, > 등)를 피처 이름에서 허용하지 않습니다.
+    sanitized_columns = [
+        col.replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
+        for col in X.columns
+    ]
+    X.columns = sanitized_columns
+    # ------------------------------------------------------------------
+    
     # 스케일링 (선형 모델에는 필수, 부스팅 모델에도 성능 향상에 도움)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
@@ -138,7 +147,7 @@ def train_and_validate_model(data_features):
     avg_rmse = np.mean(rmse_scores)
     st.success(f"✅ 모델 훈련 완료. 평균 검증 RMSE: {avg_rmse:.4f}")
     
-    # 마지막 폴드의 모델과 스케일러 반환 (가장 최근 데이터로 훈련된 모델)
+    # 마지막 폴드의 모델과 스케일러, 정리된 피처 이름을 반환
     return model, scaler, X.columns
 
 # --- 4. 미래 예측 함수 ---
