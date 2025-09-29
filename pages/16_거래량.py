@@ -24,13 +24,13 @@ markets = {
 }
 selected_market = st.sidebar.selectbox("시장 선택", list(markets.keys()))
 
-# 기간 선택
-end_date = date.today()
+
+# 기간 선택 (오늘은 장중 데이터 없으므로 어제까지)
+end_date = date.today() - timedelta(days=1)
 start_date = end_date - timedelta(days=90)
 
 start = st.sidebar.date_input("시작일", start_date)
 end = st.sidebar.date_input("종료일", end_date)
-
 if start > end:
     st.sidebar.error("❌ 시작일은 종료일보다 앞서야 합니다.")
 
