@@ -1,9 +1,9 @@
 import streamlit as st
-import FinanceDataReader as fdr
+from pykrx.stock import get_market_investor_trade_trend_by_date # pykrx 데이터 로드 함수
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
-import time # 재시도를 위한 time 모듈 추가
+import time 
 
 # 페이지 설정
 st.set_page_config(layout="wide", page_title="코스피/코스닥 매매 주체별 자금 흐름 분석")
@@ -15,35 +15,43 @@ st.markdown("""
 양수 값은 순매수(자금 유입)를, 음수 값은 순매도(자금 이탈)를 나타냅니다.
 """)
 
-# KOSPI/KOSDAQ 매매 주체별 데이터의 'fdr' 인덱스 매핑
+# KOSPI/KOSDAQ 매매 주체별 데이터의 'pykrx' 시장 코드 매핑
 INDEX_MAPPING = {
     "KOSPI (코스피)": "KOSPI",
     "KOSDAQ (코스닥)": "KOSDAQ"
 }
 
-# --- 1. 데이터 로드 함수 (캐싱 및 재시도 로직 사용) ---
+# --- 1. 데이터 로드 함수 (캐싱, 재시도 로직, pykrx 사용) ---
 
 # 재시도 설정
 MAX_RETRIES = 5
 RETRY_DELAY = 2 # 초
 
 @st.cache_data(ttl=3600) # 1시간마다 데이터 갱신
-def load_investor_data(market_fdr_code, start_date, end_date):
+def load_investor_data(market_pykrx_code, start_date_str, end_date_str):
     """
-    FinanceDataReader를 사용하여 KOSPI 또는 KOSDAQ의 투자 주체별 순매수/순매도 데이터를 가져옵니다.
+    pykrx를 사용하여 KOSPI 또는 KOSDAQ의 투자 주체별 순매수/순매도 데이터를 가져옵니다.
     (외부 서버 불안정에 대비하여 재시도 로직 포함)
     """
     
     data = pd.DataFrame()
     last_error = None
-
+    
+    # 1. 데이터 로드 시도 (최대 MAX_RETRIES 회)
     for attempt in range(MAX_RETRIES):
         try:
-            # 데이터 로드 시도
-            data = fdr.DataReader(market_fdr_code, start_date, end_date)
+            # pykrx를 사용하여 데이터 로드 시도
+            # market_pykrx_code: 'KOSPI' 또는 'KOSDAQ'
+            # start_date_str, end_date_str: 'YYYYMMDD' 형식의 문자열
+            df_raw = get_market_investor_trade_trend_by_date(
+                fromdate=start_date_str, 
+                todate=end_date_str, 
+                market=market_pykrx_code
+            )
             
-            # 성공적으로 데이터를 받아왔거나 (비어있더라도) 마지막 시도라면 반복 중단
-            if not data.empty or attempt == MAX_RETRIES - 1:
+            # pykrx는 성공 시 DataFrame을 반환하나, 데이터가 없을 수 있음
+            if not df_raw.empty:
+                data = df_raw
                 break
             
             # 데이터는 비어 있지만 명시적인 오류가 없으면 잠시 기다렸다가 재시도
@@ -56,35 +64,29 @@ def load_investor_data(market_fdr_code, start_date, end_date):
                 st.warning(f"데이터 로드 중 일시적 오류 발생. 잠시 후 재시도합니다. (시도 {attempt + 1}/{MAX_RETRIES})")
                 time.sleep(RETRY_DELAY * (2 ** attempt)) # 지수 백오프 대기
             else:
+                # 최종 실패 시, 오류 메시지 출력 후 종료
                 st.error(f"데이터 로드에 최종 실패했습니다. (총 {MAX_RETRIES}회 시도)")
                 st.error(f"마지막 오류 메시지: {last_error}")
-                return pd.DataFrame() # 실패 시 빈 DataFrame 반환
-
-    # 최종적으로 데이터가 비어있다면 오류 반환
+                return pd.DataFrame() # 빈 데이터프레임 반환
+    
+    # 2. 데이터 처리
     if data.empty:
-        if last_error:
-             st.error(f"데이터 로드 실패: {last_error}")
         return pd.DataFrame()
     
-    # --- 데이터 처리 (성공적으로 데이터를 받은 후) ---
-    
     try:
-        data.columns = [col.replace('외국인', 'Foreigner').replace('기관', 'Institution').replace('개인', 'Individual') for col in data.columns]
-        
-        target_cols = ['Individual', 'Institution', 'Foreigner']
-        present_cols = [col for col in target_cols if col in data.columns]
-
-        if len(present_cols) < 3:
-            st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. 현재 컬럼: {data.columns.tolist()}")
-            return pd.DataFrame()
-        
-        data = data[present_cols]
+        # pykrx 컬럼 이름 표준화 (순매수 금액 관련 컬럼만 추출)
+        data = data[['개인', '기관합계', '외국인합계']]
+        data.columns = ['Individual', 'Institution', 'Foreigner']
         data = data.rename_axis('Date')
+        
+        # 데이터 타입을 정수로 변환 (pykrx는 이미 금액 단위로 제공)
+        for col in data.columns:
+             data[col] = data[col].astype(float)
         
         # 시각화를 위해 데이터의 형식을 Long Format으로 변환
         data_long = data.reset_index().melt(
             id_vars='Date', 
-            value_vars=present_cols,
+            value_vars=['Individual', 'Institution', 'Foreigner'],
             var_name='Investor', 
             value_name='Net_Flow'
         )
@@ -119,7 +121,7 @@ with st.container(border=True):
             list(INDEX_MAPPING.keys()),
             key="market_select"
         )
-        market_fdr_code = INDEX_MAPPING[selected_market_name]
+        market_pykrx_code = INDEX_MAPPING[selected_market_name]
     
     # 기간 설정
     today = date.today()
@@ -144,9 +146,17 @@ if run_analysis:
     if start_date > end_date:
         st.error("❌ 시작 날짜는 종료 날짜보다 빠를 수 없습니다.")
     else:
+        # 데이터 로드를 위해 날짜 객체를 'YYYYMMDD' 형식의 문자열로 변환
+        start_date_str = start_date.strftime('%Y%m%d')
+        end_date_str = end_date.strftime('%Y%m%d')
+        
         # 데이터 로드
         with st.spinner(f"{selected_market_name}의 매매 주체별 자금 흐름 데이터를 로드 중..."):
-            df_long = load_investor_data(market_fdr_code, start_date, end_date)
+            df_long = load_investor_data(
+                market_pykrx_code, 
+                start_date_str, 
+                end_date_str
+            )
 
         if df_long.empty:
             st.warning("선택한 시장과 기간에 대한 매매 주체별 데이터를 찾을 수 없습니다. (위의 오류 메시지를 확인해 주세요.)")
@@ -162,9 +172,9 @@ if run_analysis:
                 x='Date',
                 y='Net_Flow',
                 color='Investor (한글)',
-                title=f'{selected_market_name} 일별 매매 주체별 순매수/순매도 (단위: 천원)',
+                title=f'{selected_market_name} 일별 매매 주체별 순매수/순매도 (단위: 원)',
                 labels={
-                    'Net_Flow': '순매수 금액 (천원)',
+                    'Net_Flow': '순매수 금액 (원)',
                     'Date': '날짜',
                     'Investor (한글)': '투자 주체'
                 },
@@ -175,7 +185,7 @@ if run_analysis:
             # 차트 레이아웃 설정
             fig.update_layout(
                 xaxis_title="날짜",
-                yaxis_title="순매수 금액 (천원)",
+                yaxis_title="순매수 금액 (원)",
                 legend_title="투자 주체",
                 hovermode="x unified",
                 # 0 기준선 추가
