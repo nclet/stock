@@ -3,6 +3,7 @@ import FinanceDataReader as fdr
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
+import time # 재시도를 위한 time 모듈 추가
 
 # 페이지 설정
 st.set_page_config(layout="wide", page_title="코스피/코스닥 매매 주체별 자금 흐름 분석")
@@ -20,29 +21,62 @@ INDEX_MAPPING = {
     "KOSDAQ (코스닥)": "KOSDAQ"
 }
 
-# --- 1. 데이터 로드 함수 (캐싱 사용) ---
-@st.cache_data
+# --- 1. 데이터 로드 함수 (캐싱 및 재시도 로직 사용) ---
+
+# 재시도 설정
+MAX_RETRIES = 5
+RETRY_DELAY = 2 # 초
+
+@st.cache_data(ttl=3600) # 1시간마다 데이터 갱신
 def load_investor_data(market_fdr_code, start_date, end_date):
     """
-    FinanceDataReader를 사용하여 KOSPI 또는 KOSDAQ의 투자 주체별
-    순매수/순매도 데이터를 가져옵니다.
+    FinanceDataReader를 사용하여 KOSPI 또는 KOSDAQ의 투자 주체별 순매수/순매도 데이터를 가져옵니다.
+    (외부 서버 불안정에 대비하여 재시도 로직 포함)
     """
-    try:
-        # FinanceDataReader의 매매 주체별 데이터를 가져오는 함수
-        data = fdr.DataReader(market_fdr_code, start_date, end_date)
-        
-        if data.empty:
-            return pd.DataFrame()
+    
+    data = pd.DataFrame()
+    last_error = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            # 데이터 로드 시도
+            data = fdr.DataReader(market_fdr_code, start_date, end_date)
             
-        # 데이터프레임 클리닝 및 컬럼 이름 표준화
+            # 성공적으로 데이터를 받아왔거나 (비어있더라도) 마지막 시도라면 반복 중단
+            if not data.empty or attempt == MAX_RETRIES - 1:
+                break
+            
+            # 데이터는 비어 있지만 명시적인 오류가 없으면 잠시 기다렸다가 재시도
+            st.warning(f"데이터가 비어 있습니다. 잠시 후 재시도합니다. (시도 {attempt + 1}/{MAX_RETRIES})")
+            time.sleep(RETRY_DELAY * (2 ** attempt)) # 지수 백오프 대기
+            
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES - 1:
+                st.warning(f"데이터 로드 중 일시적 오류 발생. 잠시 후 재시도합니다. (시도 {attempt + 1}/{MAX_RETRIES})")
+                time.sleep(RETRY_DELAY * (2 ** attempt)) # 지수 백오프 대기
+            else:
+                st.error(f"데이터 로드에 최종 실패했습니다. (총 {MAX_RETRIES}회 시도)")
+                st.error(f"마지막 오류 메시지: {last_error}")
+                return pd.DataFrame() # 실패 시 빈 DataFrame 반환
+
+    # 최종적으로 데이터가 비어있다면 오류 반환
+    if data.empty:
+        if last_error:
+             st.error(f"데이터 로드 실패: {last_error}")
+        return pd.DataFrame()
+    
+    # --- 데이터 처리 (성공적으로 데이터를 받은 후) ---
+    
+    try:
         data.columns = [col.replace('외국인', 'Foreigner').replace('기관', 'Institution').replace('개인', 'Individual') for col in data.columns]
         
         target_cols = ['Individual', 'Institution', 'Foreigner']
         present_cols = [col for col in target_cols if col in data.columns]
 
         if len(present_cols) < 3:
-             st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. 현재 컬럼: {data.columns.tolist()}")
-             return pd.DataFrame()
+            st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. 현재 컬럼: {data.columns.tolist()}")
+            return pd.DataFrame()
         
         data = data[present_cols]
         data = data.rename_axis('Date')
@@ -64,12 +98,13 @@ def load_investor_data(market_fdr_code, start_date, end_date):
         data_long['Investor (한글)'] = data_long['Investor'].map(investor_mapping)
         
         return data_long
-        
+    
     except Exception as e:
-        st.error(f"데이터 로드 중 오류가 발생했습니다: {e}")
+        st.error(f"로드된 데이터 처리 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
-# --- 2. 메인 본문 사용자 입력 (사이드바에서 이동) ---
+
+# --- 2. 메인 본문 사용자 입력 ---
 st.header("⚙️ 분석 옵션 선택")
 
 # 컨테이너를 사용하여 옵션 영역을 깔끔하게 구분
@@ -114,7 +149,7 @@ if run_analysis:
             df_long = load_investor_data(market_fdr_code, start_date, end_date)
 
         if df_long.empty:
-            st.warning("선택한 시장과 기간에 대한 매매 주체별 데이터를 찾을 수 없습니다. 날짜를 확인하거나 데이터 소스에 문제가 없는지 확인해주세요.")
+            st.warning("선택한 시장과 기간에 대한 매매 주체별 데이터를 찾을 수 없습니다. (위의 오류 메시지를 확인해 주세요.)")
         else:
             st.subheader(f"📈 {selected_market_name} 일별 매매 주체별 순매수/순매도 추이")
             
@@ -122,7 +157,6 @@ if run_analysis:
             # Plotly 시각화: 누적 막대 차트로 순매수/순매도 금액 표시
             # ----------------------------------------------------
             
-            # 누적 막대 차트 생성 
             fig = px.bar(
                 df_long,
                 x='Date',
@@ -161,6 +195,5 @@ if run_analysis:
             
             # --- 4. 데이터 테이블 ---
             st.subheader("📋 데이터 미리보기 (일별 순매수/순매도 금액)")
-            # Long format 데이터를 다시 Wide format으로 변환하여 테이블에 표시
             df_wide = df_long.pivot(index='Date', columns='Investor (한글)', values='Net_Flow')
             st.dataframe(df_wide.sort_index(ascending=False))
