@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
-from pykrx.stock import get_market_net_purchases_of_equities_by_investor
+from pykrx import stock
 
 # --------------------------
 # 페이지 설정
@@ -29,7 +29,7 @@ MARKET_MAPPING = {
 @st.cache_data(ttl=3600)
 def load_investor_data(market, start, end):
     try:
-        df = get_market_net_purchases_of_equities_by_investor(
+        df = stock.get_market_net_purchases_of_equities_by_investor(
             start.strftime("%Y%m%d"),
             end.strftime("%Y%m%d"),
             market
@@ -135,6 +135,7 @@ if run_analysis:
             st.subheader("📋 데이터 미리보기 (일별 순매수/순매도 금액)")
             df_wide = df_long.pivot(index='Date', columns='Investor', values='Net_Flow')
             st.dataframe(df_wide.sort_index(ascending=False), use_container_width=True)
+
 
 
 
