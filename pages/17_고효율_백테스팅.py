@@ -71,7 +71,7 @@ def create_features(df):
 @st.cache_data(ttl=60*60*4) # 캐시 유지 시간을 4시간으로 설정하여 로딩 속도 개선
 def load_data(ticker):
     """
-    YFinance를 사용하여 주가 데이터를 로드하고 컬럼 이름을 정리합니다.
+    YFinance를 사용하여 주가 데이터를 로드하고 6개 핵심 컬럼 이름으로 정리합니다.
     """
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=TRAIN_DAYS + 100)
@@ -81,7 +81,7 @@ def load_data(ticker):
         if data.empty:
             return None
         
-        # yfinance 멀티 인덱스 문제 방지 및 컬럼 이름 정리
+        # yfinance 멀티 인덱스 문제 방지 및 컬럼 이름 정리 함수
         def sanitize_column_name(col):
             if isinstance(col, tuple):
                 name = '_'.join(map(str, col))
@@ -93,29 +93,43 @@ def load_data(ticker):
 
         data.columns = [sanitize_column_name(col) for col in data.columns.to_list()]
         
-        # --- 핵심: 'Close'와 'Volume' 컬럼 이름을 표준화합니다. ---
+        # --- 핵심: 6개 코어 컬럼의 이름을 표준화합니다. ---
         new_columns = {}
+        CORE_COL_NAMES = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        
         for col in data.columns:
-            # 'Close'를 포함하고 'Adj'를 포함하지 않는 컬럼을 찾습니다. (일반 종가)
-            if 'Close' in col and 'Adj' not in col:
-                new_columns[col] = 'Close'
-            # 'Volume'을 포함하는 컬럼을 찾습니다.
-            elif 'Volume' in col:
+            sanitized_col = col.upper() # 대소문자 구분 없이 처리
+            
+            # 컬럼 이름에 'Open', 'High' 등을 포함하는지 확인하고 표준화합니다.
+            if 'OPEN' in sanitized_col:
+                new_columns[col] = 'Open'
+            elif 'HIGH' in sanitized_col:
+                new_columns[col] = 'High'
+            elif 'LOW' in sanitized_col:
+                new_columns[col] = 'Low'
+            elif 'VOLUME' in sanitized_col:
                 new_columns[col] = 'Volume'
-
-        # 'Close'와 'Volume'이 모두 표준화 대상에 있는지 확인
-        if 'Close' not in new_columns.values() or 'Volume' not in new_columns.values():
-            # Adj Close가 Close 역할을 대신할 수 있는지 확인하는 폴백 로직
-            adj_close_col = [col for col in data.columns if 'Adj_Close' in col]
-            if 'Close' not in new_columns.values() and len(adj_close_col) == 1:
-                 new_columns[adj_close_col[0]] = 'Close'
-            else:
-                st.error(f"데이터에서 'Close' 또는 'Volume' 가격 컬럼을 찾을 수 없습니다. (현재 컬럼: {data.columns.tolist()})")
-                return None
+            # 'Adj Close'를 먼저 처리하여 일반 'Close'와 분리합니다.
+            elif 'ADJ_CLOSE' in sanitized_col:
+                new_columns[col] = 'Adj Close'
+            elif 'CLOSE' in sanitized_col:
+                new_columns[col] = 'Close'
         
         # 컬럼 이름 변경 적용
         data = data.rename(columns=new_columns)
-        # ------------------------------------------------------------------
+        
+        # 필수 컬럼이 모두 포함되었는지 확인
+        if not all(col in data.columns for col in ['Close', 'Volume']):
+            st.error(f"데이터에 'Close' 또는 'Volume' 컬럼이 없어 처리를 계속할 수 없습니다. (처리 후 컬럼: {data.columns.tolist()})")
+            return None
+
+        # Adj Close가 없으면 Close로 채워주는 폴백 로직
+        if 'Adj Close' not in data.columns:
+            data['Adj Close'] = data['Close']
+        
+        # 최종적으로 필요한 6개 컬럼만 남깁니다. (순서도 고정)
+        final_cols = [col for col in CORE_COL_NAMES if col in data.columns]
+        data = data[final_cols].copy()
         
         return data.dropna()
     except Exception as e:
@@ -201,10 +215,6 @@ def predict_future(model, scaler, last_data, feature_columns):
     # Walk-Forward 방식으로 7일 예측
     for date in future_dates:
         # 예측 날짜에 맞는 시간 기반 피처 업데이트
-        # current_data는 이미 피처가 생성된 상태이므로, 'Close'와 'Volume'만 업데이트하고
-        # 시간 기반 피처와 Lag 피처는 예측 시점의 정보를 반영합니다.
-        
-        # 주의: 이 시점에서는 실제 Close/Volume 컬럼이 존재해야 합니다.
         
         # 1. 새로운 예측 시점 데이터 생성
         new_row = pd.DataFrame(index=[date])
@@ -212,15 +222,26 @@ def predict_future(model, scaler, last_data, feature_columns):
         # predictions 리스트가 비어있다면 (첫 번째 예측), 실제 마지막 종가를 사용합니다.
         new_row['Close'] = predictions[-1] if predictions else last_data['Close'].iloc[-1]
         new_row['Volume'] = last_data['Volume'].iloc[-1] # 거래량은 단순하게 마지막 실제값 유지 (개선 가능)
-
+        
+        # last_data의 컬럼 구조를 예측에 필요한 6개 CORE_COLS (Open, High, Low, Close, Adj Close, Volume)로 유지해야 합니다.
+        
         # 2. 피처를 다시 생성
         # 예측에 필요한 과거 데이터(last_data)의 최신 60일 데이터에 새로운 예측 날짜를 추가합니다.
         # last_data는 재귀적으로 예측값이 추가되어 성장하고 있으므로, 마지막 60일만 사용합니다.
         temp_df = last_data.iloc[-60:].copy()
+        
+        # 새로운 행을 추가할 때 나머지 컬럼(Open, High, Low, Adj Close)도 채워줍니다.
+        # 예측 시에는 Close 가격을 나머지 가격 컬럼에 대입하는 것이 일반적입니다.
+        price_cols = ['Open', 'High', 'Low', 'Adj Close']
+        for col in price_cols:
+             new_row[col] = new_row['Close'].iloc[0]
+             
         temp_df = pd.concat([temp_df, new_row])
+        
+        # 피처 생성
         temp_df = create_features(temp_df).iloc[-1].to_frame().T
         
-        # 3. 모델이 기대하는 피처만 추출 및 정리
+        # 3. 모델이 기대하는 피처만 추출 및 정리 (이 시점에서 feature_columns는 표준화된 이름만 포함)
         X_future = temp_df[feature_columns].fillna(0)
         X_future.columns = feature_columns # 컬럼 순서 및 이름 일치 강제
 
@@ -232,14 +253,9 @@ def predict_future(model, scaler, last_data, feature_columns):
         predictions.append(next_price)
         
         # 6. 다음 예측을 위해 'last_data' 업데이트 (재귀적 예측을 위해)
-        # 새로운 행을 생성하고 last_data에 추가합니다.
-        last_data = pd.concat([last_data, pd.DataFrame({'Open': next_price, 'High': next_price, 'Low': next_price, 'Close': next_price, 'Adj Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date])])
+        # new_row는 이미 Open, High, Low, Adj Close, Close, Volume을 모두 가지고 있습니다.
+        last_data = pd.concat([last_data, new_row])
         
-        # last_data의 컬럼 이름 재설정 로직은 제거 (app 함수에서 이미 6개 컬럼으로 고정됨)
-        # last_data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-        # if 'Adj Close' not in last_data.columns:
-        #     last_data['Adj Close'] = last_data['Close']
-
         # 마지막 예측값을 current_data에 반영하여 다음 루프에 사용
         current_data = temp_df 
         current_data['Target'] = next_price # 다음 루프를 위해 Target에 예측값 저장
@@ -297,19 +313,12 @@ def app():
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
                 
-                # 예측에 필요한 6개 핵심 컬럼을 정의합니다.
+                # 예측에 필요한 6개 핵심 컬럼을 정의합니다. (load_data에서 이미 이 구조로 반환됨)
                 CORE_COLS = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
                 
                 # 예측을 위해 충분한 과거 데이터 확보
-                temp_data = raw_data.iloc[-100:].copy()
-                
-                # Adj Close가 없는 경우를 대비해 'Close'로 채워줍니다. (predict_future의 pd.DataFrame 생성에 필요)
-                if 'Adj Close' not in temp_data.columns:
-                    temp_data['Adj Close'] = temp_data['Close']
-                
-                # 핵심 컬럼만 추출하여 last_data_for_prediction의 컬럼 수를 6개로 고정하여 ValueError 방지
-                # 컬럼 순서도 CORE_COLS에 맞게 정렬합니다.
-                last_data_for_prediction = temp_data[[col for col in CORE_COLS if col in temp_data.columns]].copy() 
+                # load_data에서 이미 6개 컬럼으로 정제되었으므로 그대로 사용합니다.
+                last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
                 # 예측 함수 호출 시 Target 컬럼 제거
                 # feature_columns는 이미 Target이 제거된 상태입니다.
