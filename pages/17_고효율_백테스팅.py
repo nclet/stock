@@ -82,7 +82,18 @@ def load_data(ticker):
             return None
         
         # yfinance 멀티 인덱스 문제 방지 및 컬럼 이름 정리
-        data.columns = [col.replace(' ', '_').replace('.', '') for col in data.columns.to_list()]
+        # 컬럼 이름이 튜플일 경우 문자열로 변환한 후 정리합니다. (오류 해결 핵심)
+        def sanitize_column_name(col):
+            if isinstance(col, tuple):
+                # 튜플인 경우, 요소들을 합쳐서 문자열로 만듭니다. (예: ('Close', 'AAPL') -> 'Close_AAPL')
+                name = '_'.join(map(str, col))
+            else:
+                name = str(col)
+            
+            # 특수 문자 정리
+            return name.replace(' ', '_').replace('.', '').replace(',', '').replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_')
+
+        data.columns = [sanitize_column_name(col) for col in data.columns.to_list()]
         
         return data.dropna()
     except Exception as e:
@@ -100,7 +111,7 @@ def train_and_validate_model(data_features):
     y = data_features['Target']
     
     # --- LightGBM 오류 방지를 위한 피처 이름 정리 (Sanitization) ---
-    # 문자열로 변환하여 특수 문자 문제 해결 (이전 수정 반영)
+    # 데이터 로드 단계에서 컬럼을 정리했으므로 이 단계는 LightGBM이 요구하는 문자열 규칙만 강제합니다.
     sanitized_columns = [
         str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
         for col in X.columns
@@ -174,11 +185,15 @@ def predict_future(model, scaler, last_data, feature_columns):
         # 1. 새로운 예측 시점 데이터 생성
         new_row = pd.DataFrame(index=[date])
         # 이전 예측값을 현재 종가로 설정
-        new_row['Close'] = current_data['Target'].iloc[0] if predictions else last_data['Close'].iloc[-1]
+        # predictions 리스트가 비어있다면 (첫 번째 예측), 실제 마지막 종가를 사용합니다.
+        new_row['Close'] = predictions[-1] if predictions else last_data['Close'].iloc[-1]
         new_row['Volume'] = last_data['Volume'].iloc[-1] # 거래량은 단순하게 마지막 실제값 유지 (개선 가능)
 
         # 2. 피처를 다시 생성
-        temp_df = last_data.iloc[-60:].append(new_row, ignore_index=False)
+        # 예측에 필요한 과거 데이터(last_data)의 최신 60일 데이터에 새로운 예측 날짜를 추가합니다.
+        # last_data는 재귀적으로 예측값이 추가되어 성장하고 있으므로, 마지막 60일만 사용합니다.
+        temp_df = last_data.iloc[-60:].copy()
+        temp_df = pd.concat([temp_df, new_row])
         temp_df = create_features(temp_df).iloc[-1].to_frame().T
         
         # 3. 모델이 기대하는 피처만 추출 및 정리
@@ -193,7 +208,13 @@ def predict_future(model, scaler, last_data, feature_columns):
         predictions.append(next_price)
         
         # 6. 다음 예측을 위해 'last_data' 업데이트 (재귀적 예측을 위해)
-        last_data = last_data.append(pd.DataFrame({'Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date]))
+        # 새로운 행을 생성하고 last_data에 추가합니다.
+        last_data = pd.concat([last_data, pd.DataFrame({'Open': next_price, 'High': next_price, 'Low': next_price, 'Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date])])
+        
+        # last_data의 컬럼 이름이 원본 yfinance 데이터의 컬럼 이름 구조를 유지하도록 보정
+        last_data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        if 'Adj Close' not in last_data.columns:
+            last_data['Adj Close'] = last_data['Close']
 
         # 마지막 예측값을 current_data에 반영하여 다음 루프에 사용
         current_data = temp_df 
@@ -253,6 +274,7 @@ def app():
                 last_actual_close = raw_data['Close'].iloc[-1]
                 
                 # 예측을 위해 충분한 과거 데이터 확보
+                # predict_future 내부에서 원본 데이터프레임의 구조를 유지하며 재귀적으로 확장
                 last_data_for_prediction = raw_data.iloc[-60:].copy() 
                 
                 # 예측 함수 호출 시 Target 컬럼 제거
