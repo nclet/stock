@@ -31,9 +31,10 @@ LGBM_PARAMS = {
 }
 
 # --- 1. 피처 엔지니어링 함수 ---
-def create_features(df):
+def create_features(df, is_for_training=True):
     """
     LightGBM 모델 훈련을 위한 시계열 피처를 생성합니다.
+    (is_for_training=False일 경우 Target 생성 및 Target 관련 dropna 방지)
     """
     df = df.copy()
 
@@ -59,10 +60,12 @@ def create_features(df):
     # 4. 상대적인 변화율 (차분 피처)
     df['Daily_Change'] = df['Close'].pct_change()
     
-    # 5. 타겟 변수 (미래 1일 후의 종가)
-    df['Target'] = df['Close'].shift(-1) 
+    if is_for_training:
+        # 5. 타겟 변수 (미래 1일 후의 종가) - 훈련 시에만 필요
+        df['Target'] = df['Close'].shift(-1) 
 
-    # 결측치 제거 (Lag Features 때문에 발생하는 초기 결측치)
+    # 결측치 제거 (Lag Features, MA 때문에 발생하는 초기 결측치)
+    # is_for_training=True일 경우 Target이 NaN인 마지막 행도 제거됩니다.
     df = df.dropna()
     
     return df
@@ -94,6 +97,7 @@ def load_data(ticker):
         data.columns = [sanitize_column_name(col) for col in data.columns.to_list()]
         
         # --- 핵심: 6개 코어 컬럼의 이름을 표준화합니다. ---
+        # NOTE: CORE_COL_NAMES는 공백을 포함합니다. (예: 'Adj Close')
         new_columns = {}
         CORE_COL_NAMES = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
         
@@ -147,7 +151,8 @@ def train_and_validate_model(data_features):
     y = data_features['Target']
     
     # --- LightGBM 오류 방지를 위한 피처 이름 정리 (Sanitization) ---
-    # 데이터 로드 단계에서 컬럼을 정리했으므로 이 단계는 LightGBM이 요구하는 문자열 규칙만 강제합니다.
+    # NOTE: 훈련 시 피처 이름을 표준화하여(공백 -> 언더바) 저장합니다. 
+    # 이 이름(feature_columns)이 예측 시 사용됩니다.
     sanitized_columns = [
         str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
         for col in X.columns
@@ -205,44 +210,44 @@ def predict_future(model, scaler, last_data, feature_columns):
     
     future_dates = [last_data.index[-1] + datetime.timedelta(days=i) for i in range(1, TARGET_PERIOD + 1)]
     
-    # 마지막 데이터를 기반으로 예측을 위한 초기 피처 생성
-    # last_data는 이미 훈련에 필요한 충분한 과거 데이터를 포함하고 있으므로, 
-    # create_features 호출 후 dropna()가 일어나도 최소한 한 행은 남아있어야 합니다.
-    current_data = create_features(last_data).iloc[-1].to_frame().T # 피처를 다시 생성하여 예측 시점의 데이터만 추출
-
     predictions = []
     
     # Walk-Forward 방식으로 7일 예측
     for date in future_dates:
-        # 예측 날짜에 맞는 시간 기반 피처 업데이트
         
         # 1. 새로운 예측 시점 데이터 생성
         new_row = pd.DataFrame(index=[date])
         # 이전 예측값을 현재 종가로 설정
-        # predictions 리스트가 비어있다면 (첫 번째 예측), 실제 마지막 종가를 사용합니다.
         new_row['Close'] = predictions[-1] if predictions else last_data['Close'].iloc[-1]
-        new_row['Volume'] = last_data['Volume'].iloc[-1] # 거래량은 단순하게 마지막 실제값 유지 (개선 가능)
+        new_row['Volume'] = last_data['Volume'].iloc[-1] 
         
-        # last_data의 컬럼 구조를 예측에 필요한 6개 CORE_COLS (Open, High, Low, Close, Adj Close, Volume)로 유지해야 합니다.
-        
-        # 2. 피처를 다시 생성
-        # 예측에 필요한 과거 데이터(last_data)의 최신 60일 데이터에 새로운 예측 날짜를 추가합니다.
-        # last_data는 재귀적으로 예측값이 추가되어 성장하고 있으므로, 마지막 60일만 사용합니다.
-        temp_df = last_data.iloc[-60:].copy()
-        
-        # 새로운 행을 추가할 때 나머지 컬럼(Open, High, Low, Adj Close)도 채워줍니다.
-        # 예측 시에는 Close 가격을 나머지 가격 컬럼에 대입하는 것이 일반적입니다.
+        # 나머지 가격 컬럼(Open, High, Low, Adj Close)도 채워줍니다.
         price_cols = ['Open', 'High', 'Low', 'Adj Close']
         for col in price_cols:
              new_row[col] = new_row['Close'].iloc[0]
              
+        # 2. 피처를 다시 생성하기 위해 과거 데이터에 새로운 행 추가
+        temp_df = last_data.iloc[-60:].copy()
         temp_df = pd.concat([temp_df, new_row])
         
-        # 피처 생성
-        temp_df = create_features(temp_df).iloc[-1].to_frame().T
+        # 피처 생성 (is_for_training=False: Target 생성 건너뛰기)
+        temp_df = create_features(temp_df, is_for_training=False)
         
-        # 3. 모델이 기대하는 피처만 추출 및 정리 (이 시점에서 feature_columns는 표준화된 이름만 포함)
-        X_future = temp_df[feature_columns].fillna(0)
+        # --- 핵심 수정: 예측에 사용되는 피처 데이터의 컬럼 이름 표준화 ---
+        # 훈련 시 feature_columns가 'Adj Close'를 'Adj_Close'로 표준화했으므로, 
+        # 예측 데이터의 컬럼 이름도 일치시켜야 KeyError가 발생하지 않습니다.
+        sanitized_temp_columns = [
+            str(col).replace(' ', '_') for col in temp_df.columns
+        ]
+        temp_df.columns = sanitized_temp_columns
+        # -----------------------------------------------------------
+        
+        # 마지막 행(예측 일자)의 피처만 추출
+        X_future_data = temp_df.iloc[-1].to_frame().T
+        
+        # 3. 모델이 기대하는 피처만 추출 및 정리 
+        # feature_columns는 이제 'Adj_Close'와 같은 표준화된 이름을 포함합니다.
+        X_future = X_future_data[feature_columns].fillna(0)
         X_future.columns = feature_columns # 컬럼 순서 및 이름 일치 강제
 
         # 4. 스케일링 적용
@@ -253,13 +258,7 @@ def predict_future(model, scaler, last_data, feature_columns):
         predictions.append(next_price)
         
         # 6. 다음 예측을 위해 'last_data' 업데이트 (재귀적 예측을 위해)
-        # new_row는 이미 Open, High, Low, Adj Close, Close, Volume을 모두 가지고 있습니다.
         last_data = pd.concat([last_data, new_row])
-        
-        # 마지막 예측값을 current_data에 반영하여 다음 루프에 사용
-        current_data = temp_df 
-        current_data['Target'] = next_price # 다음 루프를 위해 Target에 예측값 저장
-
         
     return pd.Series(predictions, index=future_dates)
 
@@ -294,14 +293,15 @@ def app():
             if raw_data is None:
                 return
 
-            data_features = create_features(raw_data)
+            # 훈련 데이터를 위한 피처 생성 (Target 포함)
+            data_features = create_features(raw_data, is_for_training=True)
             
             if data_features.empty:
                  st.error("피처 생성 후 데이터가 충분하지 않습니다. 훈련 기간을 늘리거나 다른 종목을 선택하세요.")
                  return
 
-            # 데이터 분할
-            train_data = data_features.iloc[:-1]
+            # 데이터 분할 (create_features의 dropna()로 인해 마지막 Target=NaN 행은 이미 제거됨)
+            train_data = data_features
             
             st.subheader(f"🔍 종목 분석: {selected_ticker} (총 {len(train_data)}일 데이터)")
             
@@ -313,14 +313,10 @@ def app():
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
                 
-                # 예측에 필요한 6개 핵심 컬럼을 정의합니다. (load_data에서 이미 이 구조로 반환됨)
-                CORE_COLS = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-                
                 # 예측을 위해 충분한 과거 데이터 확보
-                # load_data에서 이미 6개 컬럼으로 정제되었으므로 그대로 사용합니다.
+                # raw_data는 이미 6개 컬럼으로 정제되었으므로 그대로 사용합니다.
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
-                # 예측 함수 호출 시 Target 컬럼 제거
                 # feature_columns는 이미 Target이 제거된 상태입니다.
                 
                 future_predictions_series = predict_future(
