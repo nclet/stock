@@ -1,6 +1,6 @@
 import streamlit as st
-# 🚨 get_market_investor_trade_trend_by_date 대신 정확한 함수 사용
-from pykrx.stock import get_market_net_buying_trend 
+# 🚨 최종 확인된 정확한 함수명: get_market_investor_trade_trend 사용
+from pykrx.stock import get_market_investor_trade_trend 
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
@@ -41,8 +41,8 @@ def load_investor_data(market_pykrx_code, start_date_str, end_date_str):
     # 1. 데이터 로드 시도 (최대 MAX_RETRIES 회)
     for attempt in range(MAX_RETRIES):
         try:
-            # pykrx의 정확한 함수인 get_market_net_buying_trend 사용
-            df_raw = get_market_net_buying_trend(
+            # pykrx의 정확한 함수인 get_market_investor_trade_trend 사용
+            df_raw = get_market_investor_trade_trend(
                 fromdate=start_date_str, 
                 todate=end_date_str, 
                 market=market_pykrx_code
@@ -72,7 +72,7 @@ def load_investor_data(market_pykrx_code, start_date_str, end_date_str):
     
     try:
         # pykrx 컬럼 이름 표준화 (순매수 금액 관련 컬럼만 추출)
-        # get_market_net_buying_trend 함수 출력 컬럼은 '개인', '기관합계', '외국인합계'임
+        # get_market_investor_trade_trend 함수 출력 컬럼은 '개인', '기관합계', '외국인합계'임
         data = data[['개인', '기관합계', '외국인합계']]
         data.columns = ['Individual', 'Institution', 'Foreigner']
         data = data.rename_axis('Date')
