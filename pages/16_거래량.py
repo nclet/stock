@@ -15,7 +15,6 @@ st.markdown("""
 """)
 
 # KOSPI/KOSDAQ 매매 주체별 데이터의 'fdr' 인덱스 매핑
-# FinanceDataReader에서 매매 주체별 데이터를 가져올 때 사용하는 코드입니다.
 INDEX_MAPPING = {
     "KOSPI (코스피)": "KOSPI",
     "KOSDAQ (코스닥)": "KOSDAQ"
@@ -29,37 +28,20 @@ def load_investor_data(market_fdr_code, start_date, end_date):
     순매수/순매도 데이터를 가져옵니다.
     """
     try:
-        # FinanceDataReader의 매매 주체별 데이터를 가져오는 함수 (특정 인덱스 코드를 사용)
-        # 컬럼 순서: '외국인', '기관', '개인'으로 가정하고 처리합니다.
+        # FinanceDataReader의 매매 주체별 데이터를 가져오는 함수
         data = fdr.DataReader(market_fdr_code, start_date, end_date)
         
-        # 데이터프레임 클리닝 및 컬럼 이름 표준화
         if data.empty:
             return pd.DataFrame()
             
-        # 순매수 금액(천원) 컬럼 선택 및 이름 변경
-        # fdr이 반환하는 컬럼명은 버전이나 소스에 따라 달라질 수 있으므로,
-        # 이 예시에서는 일반적인 컬럼을 가정하고 처리합니다.
-        
-        # '외국인', '기관', '개인' 컬럼이 있는지 확인 (혹은 fdr.DataReader가 반환하는 순서대로)
-        # 일반적으로 fdr.DataReader("KOSPI" or "KOSDAQ")는 순매수 금액을 포함하지 않습니다.
-        # 따라서, 매매 주체별 데이터를 명시적으로 가져옵니다.
-        
-        # Note: FDR의 'KOSPI', 'KOSDAQ' 코드가 실제 투자자 거래량을 가져오는 데 사용됩니다.
-        
-        # 데이터의 컬럼이 한글로 되어 있을 경우를 대비하여 이름을 영어로 변환합니다.
+        # 데이터프레임 클리닝 및 컬럼 이름 표준화
         data.columns = [col.replace('외국인', 'Foreigner').replace('기관', 'Institution').replace('개인', 'Individual') for col in data.columns]
         
-        # 필요한 컬럼만 선택: 'Individual', 'Institution', 'Foreigner' (순매수/순매도 금액)
-        # 이 컬럼이 없는 경우, 오류를 방지하기 위해 존재하는 컬럼만 사용합니다.
         target_cols = ['Individual', 'Institution', 'Foreigner']
-        
         present_cols = [col for col in target_cols if col in data.columns]
 
         if len(present_cols) < 3:
-             # 만약 데이터가 없거나 컬럼명이 예상과 다를 경우 (데이터가 없거나 포맷이 바뀐 경우)
-             # 사용자에게 경고를 표시하고 빈 DataFrame을 반환합니다.
-             st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. FinanceDataReader 버전을 확인하거나 데이터 소스 변경이 필요할 수 있습니다. 현재 컬럼: {data.columns.tolist()}")
+             st.warning(f"경고: '개인', '기관', '외국인' 순매수 데이터가 DataFrame에 포함되어 있지 않습니다. 현재 컬럼: {data.columns.tolist()}")
              return pd.DataFrame()
         
         data = data[present_cols]
@@ -87,23 +69,43 @@ def load_investor_data(market_fdr_code, start_date, end_date):
         st.error(f"데이터 로드 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
-# --- 2. 사이드바 사용자 입력 ---
-st.sidebar.header("분석 옵션 선택")
+# --- 2. 메인 본문 사용자 입력 (사이드바에서 이동) ---
+st.header("⚙️ 분석 옵션 선택")
 
-selected_market_name = st.sidebar.selectbox(
-    "📊 분석할 시장 선택",
-    list(INDEX_MAPPING.keys())
-)
-market_fdr_code = INDEX_MAPPING[selected_market_name]
+# 컨테이너를 사용하여 옵션 영역을 깔끔하게 구분
+with st.container(border=True):
+    
+    # 3개의 컬럼을 생성하여 시장 선택과 날짜 입력을 나란히 배치
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        selected_market_name = st.selectbox(
+            "📊 분석할 시장 선택",
+            list(INDEX_MAPPING.keys()),
+            key="market_select"
+        )
+        market_fdr_code = INDEX_MAPPING[selected_market_name]
+    
+    # 기간 설정
+    today = date.today()
+    default_start_date = today - timedelta(days=365)
+    
+    with col2:
+        start_date = st.date_input("🗓️ 시작 날짜", default_start_date, key="start_date")
+    
+    with col3:
+        end_date = st.date_input("🗓️ 종료 날짜", today, key="end_date")
 
-# 기간 설정
-today = date.today()
-default_start_date = today - timedelta(days=365)
-start_date = st.sidebar.date_input("🗓️ 시작 날짜", default_start_date)
-end_date = st.sidebar.date_input("🗓️ 종료 날짜", today)
+    # 실행 버튼을 중앙에 배치
+    st.markdown("---")
+    col_btn_left, col_btn_center, col_btn_right = st.columns([1, 1, 1])
+    
+    with col_btn_center:
+        run_analysis = st.button("자금 흐름 분석 시작", type="primary", use_container_width=True)
 
-# --- 3. 실행 버튼 및 시각화 ---
-if st.sidebar.button("자금 흐름 분석 시작", type="primary"):
+
+# --- 3. 실행 로직 및 시각화 ---
+if run_analysis:
     if start_date > end_date:
         st.error("❌ 시작 날짜는 종료 날짜보다 빠를 수 없습니다.")
     else:
@@ -120,7 +122,7 @@ if st.sidebar.button("자금 흐름 분석 시작", type="primary"):
             # Plotly 시각화: 누적 막대 차트로 순매수/순매도 금액 표시
             # ----------------------------------------------------
             
-            # 누적 막대 차트 생성 (Relative 모드: Net Flow의 합계를 보여줌)
+            # 누적 막대 차트 생성 
             fig = px.bar(
                 df_long,
                 x='Date',
@@ -133,7 +135,6 @@ if st.sidebar.button("자금 흐름 분석 시작", type="primary"):
                     'Investor (한글)': '투자 주체'
                 },
                 template='plotly_white',
-                # barmode='relative'를 사용하여 각 날짜의 순매수/순매도 합계를 기준으로 스택
                 barmode='relative' 
             )
             
