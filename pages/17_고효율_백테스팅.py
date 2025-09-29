@@ -235,10 +235,10 @@ def predict_future(model, scaler, last_data, feature_columns):
         # 새로운 행을 생성하고 last_data에 추가합니다.
         last_data = pd.concat([last_data, pd.DataFrame({'Open': next_price, 'High': next_price, 'Low': next_price, 'Close': next_price, 'Adj Close': next_price, 'Volume': new_row['Volume'].iloc[0]}, index=[date])])
         
-        # last_data의 컬럼 이름이 원본 yfinance 데이터의 컬럼 이름 구조를 유지하도록 보정
-        last_data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-        if 'Adj Close' not in last_data.columns:
-            last_data['Adj Close'] = last_data['Close']
+        # last_data의 컬럼 이름 재설정 로직은 제거 (app 함수에서 이미 6개 컬럼으로 고정됨)
+        # last_data.columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        # if 'Adj Close' not in last_data.columns:
+        #     last_data['Adj Close'] = last_data['Close']
 
         # 마지막 예측값을 current_data에 반영하여 다음 루프에 사용
         current_data = temp_df 
@@ -297,9 +297,19 @@ def app():
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
                 
+                # 예측에 필요한 6개 핵심 컬럼을 정의합니다.
+                CORE_COLS = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+                
                 # 예측을 위해 충분한 과거 데이터 확보
-                # 가장 긴 윈도우 크기(60일) 때문에 dropna() 후에도 안전하도록 넉넉히 100일 확보
-                last_data_for_prediction = raw_data.iloc[-100:].copy() 
+                temp_data = raw_data.iloc[-100:].copy()
+                
+                # Adj Close가 없는 경우를 대비해 'Close'로 채워줍니다. (predict_future의 pd.DataFrame 생성에 필요)
+                if 'Adj Close' not in temp_data.columns:
+                    temp_data['Adj Close'] = temp_data['Close']
+                
+                # 핵심 컬럼만 추출하여 last_data_for_prediction의 컬럼 수를 6개로 고정하여 ValueError 방지
+                # 컬럼 순서도 CORE_COLS에 맞게 정렬합니다.
+                last_data_for_prediction = temp_data[[col for col in CORE_COLS if col in temp_data.columns]].copy() 
                 
                 # 예측 함수 호출 시 Target 컬럼 제거
                 # feature_columns는 이미 Target이 제거된 상태입니다.
