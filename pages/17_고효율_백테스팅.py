@@ -192,6 +192,8 @@ def predict_future(model, scaler, last_data, feature_columns):
     future_dates = [last_data.index[-1] + datetime.timedelta(days=i) for i in range(1, TARGET_PERIOD + 1)]
     
     # 마지막 데이터를 기반으로 예측을 위한 초기 피처 생성
+    # last_data는 이미 훈련에 필요한 충분한 과거 데이터를 포함하고 있으므로, 
+    # create_features 호출 후 dropna()가 일어나도 최소한 한 행은 남아있어야 합니다.
     current_data = create_features(last_data).iloc[-1].to_frame().T # 피처를 다시 생성하여 예측 시점의 데이터만 추출
 
     predictions = []
@@ -296,8 +298,8 @@ def app():
                 last_actual_close = raw_data['Close'].iloc[-1]
                 
                 # 예측을 위해 충분한 과거 데이터 확보
-                # predict_future 내부에서 원본 데이터프레임의 구조를 유지하며 재귀적으로 확장
-                last_data_for_prediction = raw_data.iloc[-60:].copy() 
+                # 가장 긴 윈도우 크기(60일) 때문에 dropna() 후에도 안전하도록 넉넉히 100일 확보
+                last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
                 # 예측 함수 호출 시 Target 컬럼 제거
                 # feature_columns는 이미 Target이 제거된 상태입니다.
