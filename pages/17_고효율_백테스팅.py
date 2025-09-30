@@ -5,10 +5,12 @@ import datetime
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
-# RobustScaler를 사용하도록 변경
-from sklearn.preprocessing import RobustScaler 
+# RobustScaler, StandardScaler 모두 사용
+from sklearn.preprocessing import RobustScaler, StandardScaler 
+import plotly.express as px
+import plotly.graph_objects as go
 
-# --- 데이터 로딩 라이브러리 및 API ---
+# --- 데이터 로딩 라이브러리 및 API (동일) ---
 import FinanceDataReader as fdr
 import pyupbit
 import requests
@@ -24,22 +26,20 @@ MARKET_MAPPING = {
     "COIN": "코인 (Upbit)"
 }
 
-# --- LightGBM 모델 하이퍼파라미터 (Optuna로 최적화된 파라미터 가정) ---
-# 실제 환경에서 Optuna를 실시간으로 실행하는 대신, 
-# 고성능을 내는 것으로 알려진 최적화된 파라미터를 사용합니다.
+# --- LightGBM 모델 하이퍼파라미터 (최적화 값 유지) ---
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'rmse',
-    'n_estimators': 1500, # 트리 개수 증가
-    'learning_rate': 0.015, # 학습률 미세 조정
-    'feature_fraction': 0.8, # Optuna로 탐색된 값
-    'bagging_fraction': 0.8, # Optuna로 탐색된 값
+    'n_estimators': 1500,
+    'learning_rate': 0.015,
+    'feature_fraction': 0.8, 
+    'bagging_fraction': 0.8, 
     'bagging_freq': 1,
-    'num_leaves': 40, # 노드 수 증가
-    'max_depth': 10, # 깊이 증가
-    'lambda_l1': 0.5, # L1 정규화 (스파스성 강화)
-    'lambda_l2': 0.5, # L2 정규화
-    'min_child_samples': 20, # 과적합 방지
+    'num_leaves': 40,
+    'max_depth': 10,
+    'lambda_l1': 0.5,
+    'lambda_l2': 0.5,
+    'min_child_samples': 20,
     'verbose': -1,
     'n_jobs': -1,
     'seed': 42
@@ -49,9 +49,8 @@ LGBM_PARAMS = {
 # 1. 멀티 마켓 종목 목록 로딩 함수 (동일)
 # --------------------------
 
-@st.cache_data(ttl=60*60*24) # 24시간 캐시
+@st.cache_data(ttl=60*60*24)
 def get_stock_listing(market_name):
-    """FinanceDataReader에서 주식 종목 전체 목록을 가져옵니다 (KRX 또는 NASDAQ)."""
     if market_name == 'KRX':
         market_code = 'KRX'
     elif market_name == 'NASDAQ':
@@ -75,9 +74,8 @@ def get_stock_listing(market_name):
         st.error(f"{market_name} 종목 리스트를 가져오는 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
         
-@st.cache_data(ttl=60*60*24) # 24시간 캐시
+@st.cache_data(ttl=60*60*24)
 def get_coin_listing():
-    """pyupbit에서 원화(KRW) 코인 목록을 가져오고 한글명을 매핑합니다."""
     try:
         url = "https://api.upbit.com/v1/market/all"
         response = requests.get(url, params={'isDetails': 'false'})
@@ -97,15 +95,15 @@ def get_coin_listing():
 
 
 # --------------------------
-# 2. 피처 엔지니어링 함수 (RSI, MACD 추가)
+# 2. 피처 엔지니어링 함수 (모멘텀, 변동성, 거래량 비율 기반으로 변경)
 # --------------------------
 def create_features(df, is_for_training=True):
     """
-    LightGBM 모델 훈련을 위한 시계열 피처를 생성합니다. (RSI, MACD 포함)
+    LightGBM 모델 훈련을 위한 시계열 피처를 생성합니다. (모멘텀, 변동성, 거래량 비율 포함)
     """
     df = df.copy()
 
-    # 1. 시간 기반 피처 (주기성 반영)
+    # 1. 시간 기반 피처
     df['Year'] = df.index.year
     df['Month'] = df.index.month
     df['Day'] = df.index.day
@@ -124,32 +122,30 @@ def create_features(df, is_for_training=True):
         df[f'MA_{window}'] = df['Close'].rolling(window=window).mean()
         df[f'Vol_{window}'] = df['Close'].rolling(window=window).std()
 
-    # 4. 상대적인 변화율 (차분 피처)
+    # 4. 상대적인 변화율 (차분 피처) - 변동성 계산에 사용됨
     df['Daily_Change'] = df['Close'].pct_change()
     
-    # 5. RSI (Relative Strength Index, N=14)
-    # 14일 동안의 평균 상승분과 평균 하락분을 이용해 계산
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).ewm(com=13, adjust=False).mean() # com=N-1 (14일 RSI)
-    loss = (-delta.where(delta < 0, 0)).ewm(com=13, adjust=False).mean()
-    RS = gain / loss
-    df['RSI'] = 100 - (100 / (1 + RS))
+    # --- 5. 모멘텀, 변동성, 거래량 기반 신규 지표 (핵심 지표) ---
     
-    # 6. MACD (Moving Average Convergence Divergence)
-    # 12일 EMA와 26일 EMA를 사용
-    ema_fast = df['Close'].ewm(span=12, adjust=False).mean()
-    ema_slow = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema_fast - ema_slow
-    # MACD Signal (9일 EMA)
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    # MACD Histogram
-    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    # 5. 20일 모멘텀 (가격 방향성)
+    # 현재 종가가 20일 전 종가 대비 얼마나 변화했는지 (%)
+    df['Momentum_20'] = df['Close'].pct_change(periods=20)
+    
+    # 6. 20일 변동성 (리스크)
+    # 일일 변화율(Daily_Change)의 20일 표준편차 (단위 기간의 가격 변화의 표준편차)
+    df['Volatility_20'] = df['Daily_Change'].rolling(window=20).std()
 
+    # 7. 거래량 비율 (시장 참여 강도)
+    # 현재 거래량을 20일 평균 거래량으로 나눈 비율
+    df['Volume_Ratio_20'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
+
+    # 기존 RSI, MACD 지표는 제거됨
+    
     if is_for_training:
-        # 7. 타겟 변수 (미래 1일 후의 종가) - 훈련 시에만 필요
+        # 8. 타겟 변수 (미래 1일 후의 종가) - 훈련 시에만 필요
         df['Target'] = df['Close'].shift(-1) 
 
-    # 피처가 새로 추가되었으므로, NaN 값은 더 많아질 수 있음. (약 34일치 NaN 발생)
+    # dropna()는 가장 긴 지연 피처(Lag 30)와 이동 평균(MA 60)을 기준으로 유효한 데이터만 남깁니다.
     df = df.dropna()
     
     return df
@@ -159,11 +155,7 @@ def create_features(df, is_for_training=True):
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
 def load_data(ticker, market, train_days):
-    """
-    선택된 시장에 따라 주식 또는 코인 데이터를 가져오고 표준화합니다.
-    """
     end_date = datetime.date.today()
-    # 기술적 지표 계산을 위해 훈련 기간보다 더 많은 데이터를 로드합니다 (여유분: 100일)
     start_date = end_date - datetime.timedelta(days=train_days + 100) 
     
     data = None
@@ -208,12 +200,11 @@ def load_data(ticker, market, train_days):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (RobustScaler 적용)
+# 4. 모델 훈련 및 예측 함수 (스케일러 선택 기능 및 Feature Importance 포함)
 # --------------------------
-def train_and_validate_model(data_features):
+def train_and_validate_model(data_features, scaler_type):
     """
     시계열 분할을 이용해 LightGBM 모델을 훈련 및 검증하고 결과를 반환합니다.
-    RobustScaler를 사용하여 스케일링을 개선했습니다.
     """
     
     X = data_features.drop('Target', axis=1)
@@ -226,8 +217,14 @@ def train_and_validate_model(data_features):
     ]
     X.columns = sanitized_columns
     
-    # RobustScaler 적용 (중앙값(median)과 사분위 범위(IQR)를 사용해 이상치에 강함)
-    scaler = RobustScaler() 
+    # 스케일러 선택
+    if scaler_type == "RobustScaler":
+        scaler = RobustScaler()
+    else: # StandardScaler
+        scaler = StandardScaler() 
+        
+    st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 특징 데이터를 전처리합니다.")
+    
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
@@ -249,7 +246,7 @@ def train_and_validate_model(data_features):
             X_train, y_train,
             eval_set=[(X_val, y_val)],
             eval_metric='rmse',
-            callbacks=[lgb.early_stopping(stopping_rounds=80, verbose=-1)] # Early stopping rounds 증가
+            callbacks=[lgb.early_stopping(stopping_rounds=80, verbose=-1)]
         )
         
         val_predictions = model.predict(X_val)
@@ -263,7 +260,7 @@ def train_and_validate_model(data_features):
     avg_rmse = np.mean(rmse_scores)
     st.success(f"✅ 모델 훈련 완료. 평균 검증 RMSE: {avg_rmse:.4f}")
     
-    return final_model, scaler, X.columns
+    return final_model, scaler, X.columns, avg_rmse
 
 def predict_future(model, scaler, last_data, feature_columns):
     """
@@ -286,10 +283,10 @@ def predict_future(model, scaler, last_data, feature_columns):
               new_row[col] = new_row['Close'].iloc[0]
               
         # 다음 날 피처 생성을 위해 기존 데이터에 가상 데이터 추가
-        temp_df = last_data.iloc[-60:].copy()
+        temp_df = last_data.iloc[-60:].copy() 
         temp_df = pd.concat([temp_df, new_row])
         
-        # 피처 생성 (RSI, MACD 포함)
+        # 피처 생성 (새로운 모멘텀, 변동성 지표 포함)
         temp_df = create_features(temp_df, is_for_training=False)
         
         # 컬럼 정리
@@ -303,7 +300,7 @@ def predict_future(model, scaler, last_data, feature_columns):
         X_future = X_future_data[feature_columns].fillna(0)
         X_future.columns = feature_columns
 
-        # RobustScaler로 변환
+        # 스케일러로 변환
         X_future_scaled = scaler.transform(X_future)
         
         next_price = model.predict(X_future_scaled)[0]
@@ -314,19 +311,39 @@ def predict_future(model, scaler, last_data, feature_columns):
         
     return pd.Series(predictions, index=future_dates)
 
+def display_feature_importance(model, feature_columns):
+    """
+    LightGBM 모델의 Feature Importance를 시각화합니다.
+    """
+    importances = model.feature_importances_
+    feature_importance_df = pd.DataFrame({
+        'Feature': feature_columns,
+        'Importance': importances
+    }).sort_values(by='Importance', ascending=False).head(20) # 상위 20개만 표시
+
+    fig = px.bar(
+        feature_importance_df, 
+        x='Importance', 
+        y='Feature', 
+        orientation='h',
+        title='모델 특징 중요도 (Feature Importance)',
+        labels={'Importance': '중요도', 'Feature': '특징 이름'}
+    )
+    fig.update_layout(yaxis={'categoryorder':'total ascending'})
+    st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------
 # 5. Streamlit 메인 앱
 # --------------------------
-st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (Enhanced)")
+st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (진단 강화)")
 
 def app():
-    st.title("🚀 LightGBM 멀티 자산 예측 시스템 (Enhanced)")
-    st.markdown("기술적 지표 (RSI, MACD) 추가 및 RobustScaler, 최적화된 하이퍼파라미터가 적용된 버전입니다.")
+    st.title("🔬 LightGBM 예측 시스템: 성능 진단 강화 (모멘텀/변동성 기반)")
+    st.markdown("특징을 **20일 모멘텀, 변동성, 거래량 비율**로 간결화하고, **특징 중요도**를 통해 기여도를 진단합니다.")
     st.markdown("---")
 
     # 1. 시장 및 종목 선택
-    col1, col2, col3 = st.columns([1, 2, 1]) 
+    col1, col2, col3, col4 = st.columns([1, 2, 1, 1]) 
     
     with col1:
         selected_market_name = st.selectbox(
@@ -338,15 +355,24 @@ def app():
     market_key = [k for k, v in MARKET_MAPPING.items() if v == selected_market_name][0]
 
     with col3:
-        # 훈련 기간 선택 UI 추가
+        # 훈련 기간 선택 UI
         selected_train_days = st.number_input(
             "📅 훈련 기간 (일 단위)",
-            min_value=120, # 최소값 설정 (MA, Lag Features를 위해)
-            max_value=3650, # 최대 10년
-            value=365, # 기본값 1년
+            min_value=120,
+            max_value=3650,
+            value=365,
             step=30,
             key='train_days_input',
-            help="모델을 훈련시킬 과거 데이터 기간을 일 단위로 설정합니다. 기간이 길수록 로딩 시간이 길어집니다."
+            help="모델 훈련에 사용할 과거 데이터 기간 설정."
+        )
+
+    with col4:
+        # 스케일러 선택 UI 추가
+        selected_scaler = st.selectbox(
+            "⚖️ 스케일러 선택",
+            ["RobustScaler", "StandardScaler"],
+            key='scaler_select',
+            help="RobustScaler는 이상치에 강하고, StandardScaler는 일반적인 정규 분포에 적합합니다. 성능 비교를 위해 변경해 보세요."
         )
         
     with col2:
@@ -393,44 +419,46 @@ def app():
         run_button = st.button("모델 훈련 및 예측 실행", type="primary", use_container_width=True)
 
     # 입력 검증
-    if run_button and not selected_ticker:
-        st.warning("예측할 종목의 티커를 선택해주세요.")
-        return
-    
-    if run_button and selected_train_days < 120:
-        st.warning("훈련 기간은 최소 120일 이상 설정해야 기술적 지표 및 이동 평균 생성이 가능합니다.")
+    if run_button and (not selected_ticker or selected_train_days < 120):
+        st.warning("예측할 종목을 선택하고, 훈련 기간은 최소 120일 이상 설정해주세요.")
         return
 
     if run_button:
         current_market = market_key 
         
-        with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 강화 피처 생성 중 (훈련 기간: {selected_train_days}일)..."):
+        with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 피처 생성 중..."):
             
-            # 2. 데이터 로드 및 피처 생성: 훈련 기간 전달
+            # 2. 데이터 로드 및 피처 생성
             raw_data = load_data(selected_ticker, current_market, selected_train_days) 
             if raw_data is None:
                 return
 
-            # 강화된 create_features 함수 사용
             data_features = create_features(raw_data, is_for_training=True)
             
-            # 피처 생성 후 데이터가 충분한지 확인 (새 피처 추가로 인해 NaN 행이 늘어남)
-            min_data_needed = 60 # MA, Lag, TA 지표 등을 고려한 최소 필요 일수
+            min_data_needed = 60
             if len(data_features) < min_data_needed:
-                st.error(f"피처 생성 후 데이터가 너무 적습니다 ({len(data_features)}일). 훈련 기간을 최소 {min_data_needed + 35}일 이상 늘리거나 다른 종목을 선택하세요.")
+                st.error(f"피처 생성 후 데이터가 너무 적습니다 ({len(data_features)}일). 훈련 기간을 최소 {selected_train_days + 50}일 이상 늘리거나 다른 종목을 선택하세요.")
                 return
 
             train_data = data_features
             
-            st.subheader(f"🔍 종목 분석: {selected_label} (총 {len(train_data)}일 데이터, 훈련 기간: {selected_train_days}일)")
+            st.subheader(f"📊 분석 결과: {selected_label}")
             
             # 3. 모델 훈련 및 검증
-            model, scaler, feature_columns = train_and_validate_model(train_data)
+            model, scaler, feature_columns, avg_rmse = train_and_validate_model(train_data, selected_scaler)
             
-            # 4. 미래 예측
+            # 4. 특징 중요도 시각화 (진단 기능)
+            st.markdown("---")
+            st.subheader("💡 훈련 모델 진단: 특징 중요도 분석")
+            st.markdown(f"모델의 평균 검증 오차(RMSE): **{avg_rmse:.4f}**")
+            st.markdown("새로 추가된 **Momentum_20, Volatility_20, Volume_Ratio_20** 특징들이 상위에 랭크되었는지 확인해 보세요!")
+            display_feature_importance(model, feature_columns)
+            
+            # 5. 미래 예측
             with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward)..."):
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
+                # 예측에 필요한 충분한 과거 데이터 (기술적 지표 계산을 위해)
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
                 future_predictions_series = predict_future(
@@ -440,9 +468,10 @@ def app():
                     feature_columns 
                 )
                 
-                st.subheader(f"📈 {selected_label} 가격 예측 결과")
+                st.markdown("---")
+                st.subheader(f"📈 {selected_label} 가격 예측 시각화")
                 
-                # 5. 결과 시각화
+                # 결과 시각화
                 past_prices = raw_data['Close'].iloc[-90:]
                 
                 predicted_df = pd.DataFrame({
