@@ -2,16 +2,15 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
-from pykrx import stock # FinanceDataReader 대신 pykrx 사용
+from pykrx import stock # pykrx 사용
 
 # --------------------------
 # 페이지 설정
-# --------------------------
+# -------------ㅁㅁ-------------
 st.set_page_config(layout="wide", page_title="pykrx 기반 KOSPI/KOSDAQ 매매 주체별 자금 흐름 분석")
 
 st.title("💰 KOSPI/KOSDAQ 매매 주체별 자금 흐름 분석 (pykrx)")
 st.markdown("""
-**FinanceDataReader**의 해당 데이터 소스(**KRX/INVESTOR**)가 현재 불안정하여 **pykrx**로 데이터 로드 방식을 변경했습니다.
 이 대시보드는 **pykrx** 라이브러리를 사용하여 **코스피(KOSPI)와 코스닥(KOSDAQ)** 시장의 
 **개인, 기관, 외국인**의 일별 순매수/순매도(자금 유입/이탈) 추이를 시각화합니다.
 """)
@@ -27,6 +26,7 @@ MARKET_MAPPING = {
 # --------------------------
 # 상수 정의
 # --------------------------
+# pykrx의 새 함수(get_market_investor_trading_sum)가 반환하는 컬럼명과 일치
 INVESTOR_COLUMNS = ['개인', '외국인', '기관합계']
 
 # --------------------------
@@ -36,10 +36,12 @@ INVESTOR_COLUMNS = ['개인', '외국인', '기관합계']
 def load_investor_data(market, start, end):
     """
     pykrx를 사용하여 KOSPI 또는 KOSDAQ 시장의 투자 주체별 순매수 금액을 로드합니다.
+    (최신 pykrx 함수명: get_market_investor_trading_sum 사용)
     """
     try:
-        # pykrx의 get_market_net_purchases_by_investor 함수를 사용하여 데이터 로드
-        df = stock.get_market_net_purchases_by_investor(
+        # NOTE: pykrx 라이브러리 업데이트로 함수명이 변경됨.
+        # stock.get_market_net_purchases_by_investor -> stock.get_market_investor_trading_sum
+        df = stock.get_market_investor_trading_sum( # 함수명 수정
             start.strftime("%Y%m%d"),
             end.strftime("%Y%m%d"),
             market
@@ -63,8 +65,8 @@ def load_investor_data(market, start, end):
         
         return df_long
     except Exception as e:
-        # 데이터 로드 실패 오류를 표시
-        st.error(f"데이터 로드 중 오류 발생: {e}. pykrx 라이브러리 문제일 수 있습니다.")
+        # 오류 발생 시 사용자에게 메시지 전달
+        st.error(f"데이터 로드 중 오류 발생: {e}")
         return pd.DataFrame()
 
 # --------------------------
