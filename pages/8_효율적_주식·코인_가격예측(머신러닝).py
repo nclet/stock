@@ -357,7 +357,7 @@ def app():
     with col3:
         # 훈련 기간 선택 UI
         selected_train_days = st.number_input(
-            "📅 훈련 기간 (일 단위)",
+            "📅 훈련기간(단위:일)",
             min_value=120,
             max_value=3650,
             value=365,
