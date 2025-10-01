@@ -347,7 +347,7 @@ def app():
     
     with col1:
         selected_market_name = st.selectbox(
-            "📊 예측할 자산 시장 선택",
+            "📊 예측할 자산 선택",
             list(MARKET_MAPPING.values()),
             key='market_select'
         )
@@ -400,7 +400,7 @@ def app():
                 default_index = 0
                 
             selected_label = st.selectbox(
-                f"🏷️ 예측할 {selected_market_name} 종목/코인 선택", 
+                f"🏷️ 예측할 {selected_market_name} 종목/코인", 
                 options, 
                 index=default_index, 
                 key='ticker_label_select'
