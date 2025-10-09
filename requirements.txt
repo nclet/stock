@@ -26,4 +26,5 @@ optuna
 lightgbm
 plotly
 pykrx
-ta
+ta==0.10.1 
+ta==0.10.1 
