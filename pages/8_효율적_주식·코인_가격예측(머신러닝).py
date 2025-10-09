@@ -5,19 +5,16 @@ import datetime
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
-# RobustScaler, StandardScaler 모두 사용
 from sklearn.preprocessing import RobustScaler, StandardScaler 
 import plotly.express as px
 import plotly.graph_objects as go
-
-# --- 데이터 로딩 라이브러리 및 API (동일) ---
 import FinanceDataReader as fdr
 import pyupbit
 import requests
 from json.decoder import JSONDecodeError
 
 # --- 상수 정의 ---
-TARGET_PERIOD = 10 # 예측할 미래 일수
+TARGET_PERIOD = 10 # 예측할 미래 영업일 수
 
 # 시장 매핑
 MARKET_MAPPING = {
@@ -26,29 +23,58 @@ MARKET_MAPPING = {
     "COIN": "코인 (Upbit)"
 }
 
-# --- LightGBM 모델 하이퍼파라미터 (최적화 값 유지) ---
+# --- LightGBM 모델 하이퍼파라미터 (안정화 설정 유지) ---
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'rmse',
-    'n_estimators': 1500,
-    'learning_rate': 0.015,
+    'n_estimators': 2000,
+    'learning_rate': 0.008,
     'feature_fraction': 0.8, 
     'bagging_fraction': 0.8, 
     'bagging_freq': 1,
-    'num_leaves': 40,
-    'max_depth': 10,
-    'lambda_l1': 0.5,
-    'lambda_l2': 0.5,
-    'min_child_samples': 20,
+    'num_leaves': 31,
+    'max_depth': 8,
+    'lambda_l1': 0.3,
+    'lambda_l2': 0.3,
+    'min_child_samples': 10,
     'verbose': -1,
     'n_jobs': -1,
     'seed': 42
 }
 
 # --------------------------
-# 1. 멀티 마켓 종목 목록 로딩 함수 (동일)
+# 0. 도우미 함수 (컬럼 일반화, MACD, RSI 수동 계산)
 # --------------------------
+def sanitize_columns(columns):
+    """LightGBM이 인식할 수 있도록 컬럼명을 정리하고 통일합니다."""
+    # LightGBM이 특수문자(':', ',', '[', ']', '<', '>')를 싫어하므로 제거/변환합니다.
+    return [
+        str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '').replace('-', '_')
+        for col in columns
+    ]
 
+def calculate_macd(series, fast_period=12, slow_period=26, signal_period=9):
+    """MACD와 MACD Signal을 수동으로 계산합니다."""
+    ema_fast = series.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = series.ewm(span=slow_period, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    macd_signal = macd_line.ewm(span=signal_period, adjust=False).mean()
+    return macd_line, macd_signal
+
+def calculate_rsi(series, window=14):
+    """RSI를 수동으로 계산합니다."""
+    diff = series.diff()
+    gain = diff.mask(diff < 0, 0)
+    loss = diff.mask(diff > 0, 0).abs()
+    avg_gain = gain.ewm(com=window - 1, adjust=False).mean()
+    avg_loss = loss.ewm(com=window - 1, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs.replace([np.inf, -np.inf], np.nan).fillna(1e-10))) 
+    return rsi
+
+# --------------------------
+# 1. 멀티 마켓 종목 목록 로딩 함수 (기존과 동일)
+# --------------------------
 @st.cache_data(ttl=60*60*24)
 def get_stock_listing(market_name):
     if market_name == 'KRX':
@@ -93,14 +119,10 @@ def get_coin_listing():
         st.error(f"코인 리스트를 가져오는 중 오류가 발생했습니다: {e}")
         return pd.DataFrame()
 
-
 # --------------------------
-# 2. 피처 엔지니어링 함수 (모멘텀, 변동성, 거래량 비율 기반으로 변경)
+# 2. 피처 엔지니어링 함수 (기존과 동일)
 # --------------------------
 def create_features(df, is_for_training=True):
-    """
-    LightGBM 모델 훈련을 위한 시계열 피처를 생성합니다. (모멘텀, 변동성, 거래량 비율 포함)
-    """
     df = df.copy()
 
     # 1. 시간 기반 피처
@@ -112,8 +134,10 @@ def create_features(df, is_for_training=True):
     
     # 2. 지연 피처 (Lag Features)
     lags = [1, 3, 7, 14, 30]
+    df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1)) 
+    
     for lag in lags:
-        df[f'Close_Lag_{lag}'] = df['Close'].shift(lag)
+        df[f'LogR_Lag_{lag}'] = df['Log_Return'].shift(lag) 
         df[f'Volume_Lag_{lag}'] = df['Volume'].shift(lag)
         
     # 3. 이동 평균 및 볼륨 지표
@@ -122,41 +146,34 @@ def create_features(df, is_for_training=True):
         df[f'MA_{window}'] = df['Close'].rolling(window=window).mean()
         df[f'Vol_{window}'] = df['Close'].rolling(window=window).std()
 
-    # 4. 상대적인 변화율 (차분 피처) - 변동성 계산에 사용됨
+    # 4. 상대적인 변화율 (차분 피처)
     df['Daily_Change'] = df['Close'].pct_change()
     
-    # --- 5. 모멘텀, 변동성, 거래량 기반 신규 지표 (핵심 지표) ---
-    
-    # 5. 20일 모멘텀 (가격 방향성)
-    # 현재 종가가 20일 전 종가 대비 얼마나 변화했는지 (%)
+    # 5. 모멘텀, 변동성, 거래량 기반 신규 지표
     df['Momentum_20'] = df['Close'].pct_change(periods=20)
-    
-    # 6. 20일 변동성 (리스크)
-    # 일일 변화율(Daily_Change)의 20일 표준편차 (단위 기간의 가격 변화의 표준편차)
     df['Volatility_20'] = df['Daily_Change'].rolling(window=20).std()
-
-    # 7. 거래량 비율 (시장 참여 강도)
-    # 현재 거래량을 20일 평균 거래량으로 나눈 비율
     df['Volume_Ratio_20'] = df['Volume'] / df['Volume'].rolling(window=20).mean()
 
-    # 기존 RSI, MACD 지표는 제거됨
-    
-    if is_for_training:
-        # 8. 타겟 변수 (미래 1일 후의 종가) - 훈련 시에만 필요
-        df['Target'] = df['Close'].shift(-1) 
+    # 6. MACD, RSI 수동 계산
+    df['MACD'], df['MACD_Signal'] = calculate_macd(df['Close'])
+    df['MACD_Diff'] = df['MACD'] - df['MACD_Signal']
+    df['RSI'] = calculate_rsi(df['Close'])
 
-    # dropna()는 가장 긴 지연 피처(Lag 30)와 이동 평균(MA 60)을 기준으로 유효한 데이터만 남깁니다.
+    if is_for_training:
+        # 7. 타겟 변수 (미래 1일 후의 로그 수익률)
+        df['Target'] = np.log(df['Close'].shift(-1) / df['Close'])
+
     df = df.dropna()
     
     return df
 
 # --------------------------
-# 3. 데이터 로드 함수 (동일)
+# 3. 데이터 로드 함수 (기존과 동일)
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
 def load_data(ticker, market, train_days):
     end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=train_days + 100) 
+    start_date = end_date - datetime.timedelta(days=train_days + 150) 
     
     data = None
     
@@ -193,6 +210,9 @@ def load_data(ticker, market, train_days):
         if data is None or data.empty:
             return None
 
+        if market in ['KRX', 'NASDAQ']:
+            data = data[data['Close'] > 0].copy() 
+            
         return data.dropna()
         
     except Exception as e:
@@ -200,41 +220,31 @@ def load_data(ticker, market, train_days):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (스케일러 선택 기능 및 Feature Importance 포함)
+# 4. 모델 훈련 및 예측 함수 (컬럼 일반화 로직 통일 및 Type 안정화)
 # --------------------------
 def train_and_validate_model(data_features, scaler_type):
-    """
-    시계열 분할을 이용해 LightGBM 모델을 훈련 및 검증하고 결과를 반환합니다.
-    """
     
     X = data_features.drop('Target', axis=1)
-    y = data_features['Target']
+    y = data_features['Target'] 
+
+    # [수정] LightGBM이 인식할 수 있도록 컬럼명 정리 및 통일
+    X.columns = sanitize_columns(X.columns) # **여기서 컬럼 이름이 일반화됩니다.**
     
-    # LightGBM이 인식할 수 있도록 컬럼명 정리
-    sanitized_columns = [
-        str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '')
-        for col in X.columns
-    ]
-    X.columns = sanitized_columns
-    
-    # 스케일러 선택
     if scaler_type == "RobustScaler":
         scaler = RobustScaler()
-    else: # StandardScaler
+    else: 
         scaler = StandardScaler() 
         
-    st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 특징 데이터를 전처리합니다.")
+    st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
     
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
     tscv = TimeSeriesSplit(n_splits=3)
-    
     rmse_scores = []
     
     st.markdown("##### 🚀 모델 훈련 및 시계열 검증 진행 중...")
     progress_bar = st.progress(0)
-    
     final_model = None
     
     for fold, (train_index, val_index) in enumerate(tscv.split(X_scaled_df)):
@@ -250,76 +260,91 @@ def train_and_validate_model(data_features, scaler_type):
         )
         
         val_predictions = model.predict(X_val)
-        rmse = np.sqrt(mean_squared_error(y_val, val_predictions))
+        rmse = np.sqrt(mean_squared_error(y_val, val_predictions)) 
         rmse_scores.append(rmse)
         
         progress_bar.progress((fold + 1) / 3)
-        st.caption(f"Fold {fold+1} 검증 완료. RMSE: {rmse:.4f}")
+        st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f}")
         final_model = model
 
     avg_rmse = np.mean(rmse_scores)
-    st.success(f"✅ 모델 훈련 완료. 평균 검증 RMSE: {avg_rmse:.4f}")
+    st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
     
-    return final_model, scaler, X.columns, avg_rmse
+    # X.columns는 이미 일반화된 컬럼 이름을 가집니다. (시각화에 사용)
+    return final_model, scaler, X.columns, avg_rmse 
 
-def predict_future(model, scaler, last_data, feature_columns):
-    """
-    훈련된 모델을 사용하여 향후 TARGET_PERIOD 일간의 주가를 Walk-Forward 방식으로 예측합니다.
-    """
+def predict_future(model, scaler, last_data, feature_columns, market_key):
     
-    future_dates = [last_data.index[-1] + datetime.timedelta(days=i) for i in range(1, TARGET_PERIOD + 1)]
+    # [수정] current_date는 Timestamp 타입으로 유지됩니다.
+    current_date = last_data.index[-1] 
+    last_actual_close = last_data['Close'].iloc[-1]
     
-    predictions = []
+    future_predictions_log_returns = []
+    future_prices = [last_actual_close] 
+    future_dates = []
+
+    day_counter = 1 
     
-    for date in future_dates:
+    while len(future_predictions_log_returns) < TARGET_PERIOD:
         
-        # 가상의 다음 날 데이터 생성 (Walk-Forward 방식)
-        new_row = pd.DataFrame(index=[date])
-        new_row['Close'] = predictions[-1] if predictions else last_data['Close'].iloc[-1]
-        new_row['Volume'] = last_data['Volume'].iloc[-1] 
+        # next_date는 Timestamp 타입으로 계산됩니다.
+        next_date = current_date + datetime.timedelta(days=day_counter) 
         
-        price_cols = ['Open', 'High', 'Low', 'Adj Close']
-        for col in price_cols:
+        if market_key in ['KRX', 'NASDAQ']:
+            if next_date.weekday() in [5, 6]:
+                day_counter += 1 
+                continue
+            
+        current_prediction_base_price = future_prices[-1] 
+        
+        # 가상의 다음 날 데이터 생성 (인덱스: Timestamp)
+        new_row = pd.DataFrame(index=[next_date])
+        new_row['Close'] = current_prediction_base_price
+        for col in ['Open', 'High', 'Low', 'Adj Close']:
               new_row[col] = new_row['Close'].iloc[0]
+        new_row['Volume'] = last_data['Volume'].iloc[-1] 
               
-        # 다음 날 피처 생성을 위해 기존 데이터에 가상 데이터 추가
         temp_df = last_data.iloc[-60:].copy() 
+        temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price 
         temp_df = pd.concat([temp_df, new_row])
         
-        # 피처 생성 (새로운 모멘텀, 변동성 지표 포함)
-        temp_df = create_features(temp_df, is_for_training=False)
+        # 피처 생성
+        temp_df_features = create_features(temp_df, is_for_training=False)
         
-        # 컬럼 정리
-        sanitized_temp_columns = [
-            str(col).replace(' ', '_') for col in temp_df.columns
-        ]
-        temp_df.columns = sanitized_temp_columns
-        
-        X_future_data = temp_df.iloc[-1].to_frame().T
-        
-        X_future = X_future_data[feature_columns].fillna(0)
-        X_future.columns = feature_columns
+        # [수정] 예측 데이터의 컬럼도 훈련 시와 동일하게 일반화합니다.
+        temp_df_features.columns = sanitize_columns(temp_df_features.columns)
 
-        # 스케일러로 변환
+        # 예측 입력 데이터 준비
+        X_future_data = temp_df_features.iloc[-1].to_frame().T
+        
+        # 훈련된 피처 컬럼(feature_columns)을 사용하여 데이터 추출 (이름과 순서 일치)
+        # feature_columns는 이미 일반화된 이름입니다.
+        X_future = X_future_data[feature_columns].fillna(0)
+        
         X_future_scaled = scaler.transform(X_future)
+        next_log_return = model.predict(X_future_scaled)[0] 
         
-        next_price = model.predict(X_future_scaled)[0]
-        predictions.append(next_price)
+        next_price = current_prediction_base_price * np.exp(next_log_return)
         
-        # 다음 예측을 위해 'last_data' 업데이트
+        future_predictions_log_returns.append(next_log_return)
+        future_prices.append(next_price) 
+        future_dates.append(next_date)
+        
+        # 다음 예측을 위해 'current_date' 업데이트 및 카운터 리셋
         last_data = pd.concat([last_data, new_row])
-        
-    return pd.Series(predictions, index=future_dates)
+        current_date = next_date
+        day_counter = 1 
+
+    return pd.Series(future_prices[1:], index=future_dates)
 
 def display_feature_importance(model, feature_columns):
-    """
-    LightGBM 모델의 Feature Importance를 시각화합니다.
-    """
+    
     importances = model.feature_importances_
+    # feature_columns는 train_and_validate_model에서 sanitize된 리스트이므로 바로 사용합니다.
     feature_importance_df = pd.DataFrame({
         'Feature': feature_columns,
         'Importance': importances
-    }).sort_values(by='Importance', ascending=False).head(20) # 상위 20개만 표시
+    }).sort_values(by='Importance', ascending=False).head(20)
 
     fig = px.bar(
         feature_importance_df, 
@@ -333,16 +358,15 @@ def display_feature_importance(model, feature_columns):
     st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------
-# 5. Streamlit 메인 앱
+# 5. Streamlit 메인 앱 (동일)
 # --------------------------
-st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (진단 강화)")
+st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (최종 안정화)")
 
 def app():
-    st.title("🔬 LightGBM 예측 시스템: 성능 진단 강화 (모멘텀/변동성 기반)")
-    st.markdown("특징을 **20일 모멘텀, 변동성, 거래량 비율**로 간결화하고, **특징 중요도**를 통해 기여도를 진단합니다.")
+    st.title("🏆 LightGBM 예측 시스템: 최종 안정화 버전")
+    st.markdown("**로그 수익률 타겟**, **수동 계산 MACD/RSI**, **휴장일 제외 Walk-Forward**로 안정성을 높였습니다.")
     st.markdown("---")
 
-    # 1. 시장 및 종목 선택
     col1, col2, col3, col4 = st.columns([1, 2, 1, 1]) 
     
     with col1:
@@ -355,28 +379,25 @@ def app():
     market_key = [k for k, v in MARKET_MAPPING.items() if v == selected_market_name][0]
 
     with col3:
-        # 훈련 기간 선택 UI
         selected_train_days = st.number_input(
             "📅 훈련기간(단위:일)",
             min_value=120,
             max_value=3650,
-            value=365,
+            value=730, 
             step=30,
             key='train_days_input',
             help="모델 훈련에 사용할 과거 데이터 기간 설정."
         )
 
     with col4:
-        # 스케일러 선택 UI 추가
         selected_scaler = st.selectbox(
             "⚖️ 스케일러 선택",
             ["RobustScaler", "StandardScaler"],
             key='scaler_select',
-            help="RobustScaler는 이상치에 강하고, StandardScaler는 일반적인 정규 분포에 적합합니다. 성능 비교를 위해 변경해 보세요."
+            help="특징(X)에만 적용됩니다."
         )
         
     with col2:
-        # 2. 종목 목록 동적 로딩
         stock_list_df = pd.DataFrame()
         default_ticker = ""
 
@@ -418,7 +439,6 @@ def app():
     with col_btn_center:
         run_button = st.button("모델 훈련 및 예측 실행", type="primary", use_container_width=True)
 
-    # 입력 검증
     if run_button and (not selected_ticker or selected_train_days < 120):
         st.warning("예측할 종목을 선택하고, 훈련 기간은 최소 120일 이상 설정해주세요.")
         return
@@ -428,50 +448,45 @@ def app():
         
         with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 피처 생성 중..."):
             
-            # 2. 데이터 로드 및 피처 생성
             raw_data = load_data(selected_ticker, current_market, selected_train_days) 
             if raw_data is None:
                 return
 
             data_features = create_features(raw_data, is_for_training=True)
             
-            min_data_needed = 60
+            min_data_needed = 60 
             if len(data_features) < min_data_needed:
-                st.error(f"피처 생성 후 데이터가 너무 적습니다 ({len(data_features)}일). 훈련 기간을 최소 {selected_train_days + 50}일 이상 늘리거나 다른 종목을 선택하세요.")
+                st.error(f"피처 생성 후 데이터가 너무 적습니다 ({len(data_features)}일). 훈련 기간을 늘리거나 다른 종목을 선택하세요.")
                 return
 
             train_data = data_features
             
             st.subheader(f"📊 분석 결과: {selected_label}")
             
-            # 3. 모델 훈련 및 검증
             model, scaler, feature_columns, avg_rmse = train_and_validate_model(train_data, selected_scaler)
             
-            # 4. 특징 중요도 시각화 (진단 기능)
             st.markdown("---")
             st.subheader("💡 훈련 모델 진단: 특징 중요도 분석")
-            st.markdown(f"모델의 평균 검증 오차(RMSE): **{avg_rmse:.4f}**")
-            st.markdown("새로 추가된 **Momentum_20, Volatility_20, Volume_Ratio_20** 특징들이 상위에 랭크되었는지 확인해 보세요!")
+            st.markdown(f"모델의 평균 검증 오차(로그 수익률 RMSE): **{avg_rmse:.6f}**")
+            st.markdown("수동으로 계산된 **MACD, RSI** 지표와 **로그 수익률 지연 피처**의 기여도를 확인해 보세요.")
             display_feature_importance(model, feature_columns)
             
-            # 5. 미래 예측
-            with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward)..."):
+            with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward, 영업일 기준)..."):
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
-                # 예측에 필요한 충분한 과거 데이터 (기술적 지표 계산을 위해)
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
                 future_predictions_series = predict_future(
                     model, 
                     scaler, 
                     last_data_for_prediction, 
-                    feature_columns 
+                    feature_columns,
+                    current_market
                 )
                 
                 st.markdown("---")
-                st.subheader(f"📈 {selected_label} 가격 예측 시각화")
+                st.subheader(f"📈 {selected_label} 가격 예측 시각화 (예측 영업일 기준)")
                 
-                # 결과 시각화
                 past_prices = raw_data['Close'].iloc[-90:]
                 
                 predicted_df = pd.DataFrame({
@@ -479,20 +494,27 @@ def app():
                     'Predicted': np.nan 
                 })
                 
-                future_df = pd.DataFrame({
-                    'Actual': np.nan,
-                    'Predicted': future_predictions_series
-                })
+                future_df = future_predictions_series.to_frame(name='Predicted')
+                future_df['Actual'] = np.nan
                 
-                final_df = pd.concat([predicted_df, future_df])
+                final_df = pd.concat([predicted_df, future_df]).sort_index()
                 
-                st.line_chart(final_df)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
+                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines+markers', name='예측 종가', line=dict(color='red', dash='dot'), marker=dict(size=4)))
+
+                fig.update_layout(
+                    title=f'{selected_label} 실제 가격 vs. 예측 가격',
+                    yaxis_title='가격',
+                    xaxis_title='날짜',
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
                 
                 currency = "원" if current_market in ['KRX', 'COIN'] else "$"
                 st.caption(f"마지막 실제 종가: {currency}{last_actual_close:,.2f}")
 
-                # 예측 수치 테이블
-                st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD}일 예측 종가")
+                st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 종가")
                 st.dataframe(future_predictions_series.to_frame(name='예측 종가').style.format(f'{currency}{{:.2f}}'))
 
 
