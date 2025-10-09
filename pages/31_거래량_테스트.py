@@ -295,29 +295,35 @@ def predict_future(model, scaler, last_data, feature_columns, market_key):
     (로그 수익률 타겟, 복리 적용 안정화, 휴장일 제외)
     """
     
-    current_date = last_data.index[-1].to_pydatetime().date() # datetime.date 객체로 변환
+    # 1. 인덱스 타입 통일: 마지막 인덱스를 pandas.Timestamp로 사용
+    current_date = last_data.index[-1] 
     last_actual_close = last_data['Close'].iloc[-1]
     
     future_predictions_log_returns = []
     future_prices = [last_actual_close] 
     future_dates = []
 
-    i = 1
+    # 날짜 증가 카운터
+    day_counter = 1 
+    
     while len(future_predictions_log_returns) < TARGET_PERIOD:
         
-        next_date = current_date + datetime.timedelta(days=i)
+        # 2. 다음 날짜를 pandas.Timestamp의 덧셈으로 계산 (타입 유지)
+        # current_date는 마지막 예측/실제 데이터의 Timestamp입니다.
+        next_date = current_date + datetime.timedelta(days=day_counter) 
         
         # 주식 시장만 주말 체크
         if market_key in ['KRX', 'NASDAQ']:
             # 주말 체크: 토요일(5), 일요일(6)
             if next_date.weekday() in [5, 6]:
-                i += 1
+                day_counter += 1 # 다음 날로 카운터만 증가
                 continue
             
         current_prediction_base_price = future_prices[-1] 
         
-        # 가상의 다음 날 데이터 생성
-        new_row = pd.DataFrame(index=[pd.to_datetime(next_date)]) # 인덱스를 datetime으로 설정
+        # 3. 가상의 다음 날 데이터 생성 (인덱스를 next_date (Timestamp)로 설정)
+        # next_date는 이미 Timestamp 타입이므로 변환이 필요 없습니다.
+        new_row = pd.DataFrame(index=[next_date])
         new_row['Close'] = current_prediction_base_price
         for col in ['Open', 'High', 'Low', 'Adj Close']:
               new_row[col] = new_row['Close'].iloc[0]
@@ -325,10 +331,11 @@ def predict_future(model, scaler, last_data, feature_columns, market_key):
               
         # 다음 날 피처 생성을 위해 기존 데이터에 가상 데이터 추가
         temp_df = last_data.iloc[-60:].copy() 
-        temp_df.loc[temp_df.index[-1], 'Close'] = current_prediction_base_price 
+        # loc 대신 at을 사용하여 설정 (더 명확하고 권장되는 방식)
+        temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price 
         temp_df = pd.concat([temp_df, new_row])
         
-        # 피처 생성
+        # ... (이하 피처 생성 및 예측 로직은 동일) ...
         temp_df_features = create_features(temp_df, is_for_training=False)
         
         sanitized_temp_columns = [
@@ -341,23 +348,22 @@ def predict_future(model, scaler, last_data, feature_columns, market_key):
         X_future = X_future_data[feature_columns].fillna(0)
         X_future.columns = feature_columns
 
-        # 스케일러 변환 및 로그 수익률 예측
         X_future_scaled = scaler.transform(X_future)
         next_log_return = model.predict(X_future_scaled)[0] 
         
-        # 가격으로 역변환 (복리 적용)
         next_price = current_prediction_base_price * np.exp(next_log_return)
         
         future_predictions_log_returns.append(next_log_return)
         future_prices.append(next_price) 
+        # 4. 미래 날짜 리스트에도 next_date (Timestamp) 추가
         future_dates.append(next_date)
         
-        # 다음 예측을 위해 'last_data' 업데이트 (다음 피처 계산을 위해)
+        # 다음 예측을 위해 'current_date' 업데이트 및 카운터 리셋
         last_data = pd.concat([last_data, new_row])
         current_date = next_date
-        i = 1 # 다음 영업일을 찾기 위해 1일씩 증가
+        day_counter = 1 # 다음 영업일을 찾기 위해 1일씩 증가
 
-    # 첫 번째 가격(last_actual_close) 제거 후 반환
+    # 5. 최종 반환 시 인덱스에 future_dates (Timestamp 리스트) 사용
     return pd.Series(future_prices[1:], index=future_dates)
 
 def display_feature_importance(model, feature_columns):
