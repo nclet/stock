@@ -25,16 +25,36 @@ MARKET_MAPPING = {
 }
 
 # --- LightGBM 모델 하이퍼파라미터 (안정화 설정 유지) ---
+# LGBM_PARAMS = {
+#     'objective': 'regression',
+#     'metric': 'rmse',
+#     'n_estimators': 2000,
+#     'learning_rate': 0.008,
+#     'feature_fraction': 0.8, 
+#     'bagging_fraction': 0.8, 
+#     'bagging_freq': 1,
+#     'num_leaves': 31,
+#     'max_depth': 8,
+#     'lambda_l1': 0.3,
+#     'lambda_l2': 0.3,
+#     'min_child_samples': 10,
+#     'verbose': -1,
+#     'n_jobs': -1,
+#     'seed': 42
+# }
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'rmse',
-    'n_estimators': 2000,
-    'learning_rate': 0.008,
+    # [수정] 반복 횟수 대폭 감소 (2000 -> 500)
+    'n_estimators': 500, 
+    # [수정] 학습률 증가 (0.008 -> 0.015)
+    'learning_rate': 0.015, 
     'feature_fraction': 0.8, 
     'bagging_fraction': 0.8, 
     'bagging_freq': 1,
-    'num_leaves': 31,
-    'max_depth': 8,
+    # [수정] 복잡도 감소 (31 -> 21)
+    'num_leaves': 21, 
+    'max_depth': 6, # max_depth도 8에서 6으로 줄여봅니다.
     'lambda_l1': 0.3,
     'lambda_l2': 0.3,
     'min_child_samples': 10,
@@ -42,7 +62,6 @@ LGBM_PARAMS = {
     'n_jobs': -1,
     'seed': 42
 }
-
 # --------------------------
 # 0. 도우미 함수 (컬럼 일반화, MACD, RSI 수동 계산)
 # --------------------------
