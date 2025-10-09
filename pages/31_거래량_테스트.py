@@ -236,10 +236,11 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         
     st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
     
+    # 스케일링은 여기서 fit_transform 하고 DataFrame을 유지합니다.
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
-    tscv = TimeSeriesSplit(n_splits=n_splits) # n_splits 유연하게 적용
+    tscv = TimeSeriesSplit(n_splits=n_splits)
     rmse_scores = []
     residual_data = pd.DataFrame()
     
@@ -252,19 +253,25 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         y_train, y_val = y.iloc[train_index], y.iloc[val_index]
 
         model = lgb.LGBMRegressor(**LGBM_PARAMS)
+        # 훈련 시 Numpy 배열로 명시적 변환
         model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
+            X_train.values, y_train.values,
+            eval_set=[(X_val.values, y_val.values)],
             eval_metric='rmse',
             callbacks=[lgb.early_stopping(stopping_rounds=80, verbose=-1)]
         )
         
-        val_predictions = model.predict(X_val)
+        # 예측 시에도 Numpy 배열로 명시적 변환
+        val_predictions = model.predict(X_val.values)
         rmse = np.sqrt(mean_squared_error(y_val, val_predictions)) 
         rmse_scores.append(rmse)
         
         # 잔차(Residual) 계산
         residuals = y_val - val_predictions
+        
+        # 실제 수익률 RMSE 계산 (지수 함수를 사용해 역변환)
+        actual_return_rmse = np.sqrt(np.mean((np.expm1(y_val) - np.expm1(val_predictions))**2)) * 100
+        
         fold_residual_df = pd.DataFrame({
             'Residual': residuals,
             'Fold': f'Fold {fold+1}',
@@ -273,22 +280,23 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         residual_data = pd.concat([residual_data, fold_residual_df])
         
         progress_bar.progress((fold + 1) / n_splits)
-        st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f} (**실제 수익률 RMSE**: {np.sqrt(np.mean((np.expm1(y_val) - np.expm1(val_predictions))**2)) * 100:.4f}%)")
+        st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f} (**실제 수익률 RMSE**: {actual_return_rmse:.4f}%)")
         final_model = model
 
     avg_rmse = np.mean(rmse_scores)
     st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
     
-    return final_model, scaler, X.columns, avg_rmse, residual_data
+    return final_model, scaler, X.columns, avg_rmse, residual_data, X, y 
+    # X, y를 함께 반환하여 퀀타일 모델 훈련에 사용합니다.
 
 def predict_future(models, scaler, last_data, feature_columns, market_key):
     
     current_date = last_data.index[-1] 
     last_actual_close = last_data['Close'].iloc[-1]
     
-    future_predictions = [] # 예측 가격 (중앙값)
-    future_low = [] # 예측 가격 (하단 퀀타일)
-    future_high = [] # 예측 가격 (상단 퀀타일)
+    future_predictions = [] 
+    future_low = [] 
+    future_high = [] 
     future_dates = []
 
     day_counter = 1 
@@ -322,6 +330,7 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         X_future_data = temp_df_features.iloc[-1].to_frame().T
         X_future = X_future_data[feature_columns].fillna(0)
         
+        # 예측 입력 데이터는 Numpy 배열로 변환
         X_future_scaled = scaler.transform(X_future)
         
         # 퀀타일 예측 (95% CI)
@@ -362,6 +371,7 @@ def display_feature_importance(model, feature_columns):
     if total_importance > 0:
         normalized_importances = (importances / total_importance) * 100
     else:
+        # 합이 0이면 모두 0으로 표시
         normalized_importances = importances 
 
     feature_importance_df = pd.DataFrame({
@@ -462,7 +472,6 @@ def app():
         )
         
     with col5:
-        # [보완] n_splits 유연성 추가
         default_n_splits = 5
         selected_n_splits = st.number_input(
             "✂️ TimeSeriesSplit 분할 수 (k)",
@@ -542,23 +551,27 @@ def app():
             
             # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
             st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
-            model_median, scaler, feature_columns, avg_rmse, residual_data = train_and_validate_model(
+            model_median, scaler, feature_columns, avg_rmse, residual_data, X_raw, y_raw = train_and_validate_model(
                 train_data, selected_scaler, selected_n_splits
             )
             
             # 2. 신뢰구간 (CI) 모델 훈련
             models = {'median': model_median}
             
+            # [수정] 퀀타일 모델 훈련을 위해 X와 y를 Numpy 배열로 명시적 변환
+            X_train_scaled = scaler.transform(X_raw).astype('float32')
+            y_train_values = y_raw.values
+            
             st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
             with st.spinner("⏳ 95% 신뢰구간 하한선(Low CI) 모델 훈련 중..."):
                 lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_PARAMS).fit(
-                    scaler.transform(train_data.drop('Target', axis=1)), train_data['Target']
+                    X_train_scaled, y_train_values
                 )
                 models['low'] = lgbm_low
             
             with st.spinner("⏳ 95% 신뢰구간 상한선(High CI) 모델 훈련 중..."):
                 lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_PARAMS).fit(
-                    scaler.transform(train_data.drop('Target', axis=1)), train_data['Target']
+                    X_train_scaled, y_train_values
                 )
                 models['high'] = lgbm_high
             st.success("✅ 퀀타일 회귀 모델 훈련 완료.")
@@ -579,7 +592,6 @@ def app():
                 last_actual_close = raw_data['Close'].iloc[-1]
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
-                # [보완] 퀀타일 모델을 함께 사용하여 예측
                 future_predictions_df = predict_future(
                     models, 
                     scaler, 
@@ -643,7 +655,7 @@ def app():
 
                 st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 결과")
                 
-                # [보완] 로그 수익률을 실제 수익률(%)로 변환하여 표시
+                # 로그 수익률을 실제 수익률(%)로 변환하여 표시
                 predictions_display = future_predictions_df.copy()
                 
                 # 수익률 계산: P_t+1 / P_t - 1
