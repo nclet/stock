@@ -236,7 +236,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         
     st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
     
-    # 스케일링은 여기서 fit_transform 하고 DataFrame을 유지합니다.
+    # 스케일링
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
@@ -558,19 +558,26 @@ def app():
             # 2. 신뢰구간 (CI) 모델 훈련
             models = {'median': model_median}
             
-            # [수정] 퀀타일 모델 훈련을 위해 X와 y를 Numpy 배열로 명시적 변환
+            # [수정] LGBM_PARAMS의 복사본을 만들고 'objective' 키를 제거합니다. (오류 해결 핵심)
+            LGBM_QUANTILE_PARAMS = LGBM_PARAMS.copy()
+            if 'objective' in LGBM_QUANTILE_PARAMS:
+                del LGBM_QUANTILE_PARAMS['objective']
+
+            # X와 y를 Numpy 배열로 명시적 변환
             X_train_scaled = scaler.transform(X_raw).astype('float32')
             y_train_values = y_raw.values
             
             st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
             with st.spinner("⏳ 95% 신뢰구간 하한선(Low CI) 모델 훈련 중..."):
-                lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_PARAMS).fit(
+                # 수정: **LGBM_QUANTILE_PARAMS 사용
+                lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_QUANTILE_PARAMS).fit(
                     X_train_scaled, y_train_values
                 )
                 models['low'] = lgbm_low
             
             with st.spinner("⏳ 95% 신뢰구간 상한선(High CI) 모델 훈련 중..."):
-                lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_PARAMS).fit(
+                # 수정: **LGBM_QUANTILE_PARAMS 사용
+                lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_QUANTILE_PARAMS).fit(
                     X_train_scaled, y_train_values
                 )
                 models['high'] = lgbm_high
