@@ -26,3 +26,4 @@ optuna
 lightgbm
 plotly
 pykrx
+ta
