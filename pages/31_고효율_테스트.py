@@ -48,7 +48,7 @@ LGBM_PARAMS = {
 }
 
 # --------------------------
-# 0. 도우미 함수 (컬럼 일반화, MACD, RSI 수동 계산) - 변경 없음
+# 0. 도우미 함수 
 # --------------------------
 def sanitize_columns(columns):
     """LightGBM이 인식할 수 있도록 컬럼명을 정리하고 통일합니다."""
@@ -77,7 +77,7 @@ def calculate_rsi(series, window=14):
     return rsi
 
 # --------------------------
-# 1. 멀티 마켓 종목 목록 로딩 함수 - clear_cache 인자 추가 (이전과 동일)
+# 1. 멀티 마켓 종목 목록 로딩 함수
 # --------------------------
 @st.cache_data(ttl=60*60*24)
 def get_stock_listing(market_name, clear_cache=False): 
@@ -124,11 +124,10 @@ def get_coin_listing(clear_cache=False):
         return pd.DataFrame()
 
 # --------------------------
-# 2. 피처 엔지니어링 함수 - 변경 없음
+# 2. 피처 엔지니어링 함수
 # --------------------------
 def create_features(df, is_for_training=True):
     df = df.copy()
-
     # 1. 시간 기반 피처
     df['Year'] = df.index.year
     df['Month'] = df.index.month
@@ -172,7 +171,7 @@ def create_features(df, is_for_training=True):
     return df
 
 # --------------------------
-# 3. 데이터 로드 함수 - clear_cache 인자 추가 (이전과 동일)
+# 3. 데이터 로드 함수
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
 def load_data(ticker, market, train_days, clear_cache=False): 
@@ -224,7 +223,7 @@ def load_data(ticker, market, train_days, clear_cache=False):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (주요 변경)
+# 4. 모델 훈련 및 예측 함수 (수정 적용)
 # --------------------------
 def train_and_validate_model(data_features, scaler_type, n_splits):
     
@@ -252,7 +251,6 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
     progress_bar = st.progress(0)
     final_model = None
     
-    # 모델 훈련 및 검증 루프 (특징 중요도 계산 포함)
     model_importances = pd.Series(0, index=X.columns)
     
     for fold, (train_index, val_index) in enumerate(tscv.split(X_scaled_df)):
@@ -296,14 +294,27 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
 
     # 상위 N개 특징 선택
     model_importances /= n_splits # 평균 중요도 계산
-    top_features = model_importances.nlargest(TOP_N_FEATURES).index.tolist()
-    st.info(f"선택된 상위 특징 ({TOP_N_FEATURES}개): {', '.join(top_features)}")
+    
+    # 상위 N개 특징의 이름과 중요도를 튜플 리스트로 저장
+    top_features_series = model_importances.nlargest(TOP_N_FEATURES)
+    top_feature_names = top_features_series.index.tolist()
+    
+    # [수정] final_model의 feature_importances를 top_features_series의 순서에 맞게 재정렬
+    # 주의: LightGBM의 최종 모델은 모든 특징을 가지고 있지만, 실제로 사용된 것은 Top 12개입니다.
+    # 따라서, 반환되는 feature_columns와 feature_importances는 Top 12개에 맞춰야 합니다.
+    
+    # 상위 N개 특징의 중요도 배열 (이미 정렬되어 있음)
+    top_feature_importances = top_features_series.values
+    
+    st.info(f"선택된 상위 특징 ({TOP_N_FEATURES}개): {', '.join(top_feature_names)}")
     
     # 선택된 특징으로 X_raw 재구성
-    X_raw_top_features = X[top_features]
+    X_raw_top_features = X[top_feature_names]
     
-    return final_model, scaler, top_features, avg_rmse, residual_data, X_raw_top_features, y, residual_std
-    # 반환 값에 residual_std 추가
+    # [반환값 수정] 특징 이름 리스트와 중요도 배열을 함께 반환
+    return final_model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std
+    # 반환 값: model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std
+
 
 def predict_future(model, scaler, last_data, feature_columns, residual_std, market_key):
     
@@ -326,7 +337,6 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
                 day_counter += 1 
                 continue
             
-        # 다음 날의 예측 시작 가격 설정
         current_prediction_base_price = future_predictions[-1] if future_predictions else last_actual_close
         
         # 가상의 다음 날 데이터 생성 (Walk-Forward 방식)
@@ -346,7 +356,7 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
 
         # 상위 특징 12개만 사용
         X_future_data = temp_df_features.iloc[-1].to_frame().T
-        X_future = X_future_data[feature_columns].fillna(0)
+        X_future = X_future_data[feature_columns].fillna(0) # feature_columns는 이미 상위 특징 이름 리스트
         
         # 예측 입력 데이터는 Numpy 배열로 변환
         X_future_scaled = scaler.transform(X_future)
@@ -354,7 +364,7 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
         # 중앙값 예측 (로그 수익률)
         log_return_median = model.predict(X_future_scaled)[0] 
         
-        # [신뢰구간 계산 방식 변경] 잔차 표준편차 기반으로 CI 계산
+        # 신뢰구간 계산
         ci_margin = CI_Z_SCORE * residual_std
         log_return_low = log_return_median - ci_margin 
         log_return_high = log_return_median + ci_margin 
@@ -381,11 +391,12 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
     }, index=future_dates)
 
 # --------------------------
-# 5. 시각화 및 분석 함수 (기존과 동일)
+# 5. 시각화 및 분석 함수 (수정 적용)
 # --------------------------
-def display_feature_importance(model, feature_columns):
-    
-    importances = model.feature_importances_
+def display_feature_importance(feature_columns, importances):
+    """
+    [수정] model 객체 대신 feature_columns(이름)과 importances(값)를 직접 받습니다.
+    """
     
     # 중요도 정규화 (0~100 스케일)
     total_importance = importances.sum()
@@ -394,6 +405,7 @@ def display_feature_importance(model, feature_columns):
     else:
         normalized_importances = importances 
 
+    # [수정] DataFrame 생성 시 feature_columns과 normalized_importances의 길이는 이미 동일해야 합니다.
     feature_importance_df = pd.DataFrame({
         'Feature': feature_columns,
         'Importance': normalized_importances
@@ -586,13 +598,13 @@ def app():
             
             st.subheader(f"📊 분석 결과: {selected_label}")
             
-            # 1. 중앙값 (Median) 예측 모델 훈련 및 검증 (속도 향상을 위해 이 모델만 훈련)
+            # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
             st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
-            model_median, scaler, feature_columns, avg_rmse, residual_data, X_raw_top_features, y, residual_std = train_and_validate_model(
+            # [수정] 반환 값에 top_feature_importances 추가
+            model_median, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std = train_and_validate_model(
                 train_data, selected_scaler, selected_n_splits
             )
             
-            # **퀀타일 모델 훈련 단계 제거** (속도 극대화)
             st.success(f"✅ 모델 훈련 완료. (잔차 기반 신뢰구간 사용)")
 
             st.markdown("---")
@@ -603,7 +615,8 @@ def app():
             
             # 특징 중요도 시각화
             st.markdown("---")
-            display_feature_importance(model_median, feature_columns) 
+            # [수정] feature_columns 대신 top_feature_names와 top_feature_importances 전달
+            display_feature_importance(top_feature_names, top_feature_importances) 
 
             # 예측 실행
             with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward, 잔차 기반 95% CI)..."):
@@ -616,7 +629,7 @@ def app():
                     model_median, 
                     scaler, 
                     last_data_for_prediction, 
-                    feature_columns,
+                    top_feature_names, # 상위 특징 이름 리스트 전달
                     residual_std,
                     current_market
                 )
@@ -698,7 +711,6 @@ def app():
 
 if __name__ == "__main__":
     app()
-
 
 # import streamlit as st
 # import pandas as pd
