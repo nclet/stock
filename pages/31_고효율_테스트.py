@@ -48,7 +48,7 @@ LGBM_PARAMS = {
 }
 
 # --------------------------
-# 0. 도우미 함수 
+# 0. 도우미 함수 (생략)
 # --------------------------
 def sanitize_columns(columns):
     """LightGBM이 인식할 수 있도록 컬럼명을 정리하고 통일합니다."""
@@ -77,7 +77,7 @@ def calculate_rsi(series, window=14):
     return rsi
 
 # --------------------------
-# 1. 멀티 마켓 종목 목록 로딩 함수
+# 1. 멀티 마켓 종목 목록 로딩 함수 (생략)
 # --------------------------
 @st.cache_data(ttl=60*60*24)
 def get_stock_listing(market_name, clear_cache=False): 
@@ -124,10 +124,11 @@ def get_coin_listing(clear_cache=False):
         return pd.DataFrame()
 
 # --------------------------
-# 2. 피처 엔지니어링 함수
+# 2. 피처 엔지니어링 함수 (생략)
 # --------------------------
 def create_features(df, is_for_training=True):
     df = df.copy()
+
     # 1. 시간 기반 피처
     df['Year'] = df.index.year
     df['Month'] = df.index.month
@@ -171,7 +172,7 @@ def create_features(df, is_for_training=True):
     return df
 
 # --------------------------
-# 3. 데이터 로드 함수
+# 3. 데이터 로드 함수 (생략)
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
 def load_data(ticker, market, train_days, clear_cache=False): 
@@ -223,36 +224,64 @@ def load_data(ticker, market, train_days, clear_cache=False):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (수정 적용)
+# 4. 모델 훈련 및 예측 함수 (주요 수정)
 # --------------------------
 def train_and_validate_model(data_features, scaler_type, n_splits):
     
-    X = data_features.drop('Target', axis=1)
+    X_all = data_features.drop('Target', axis=1)
     y = data_features['Target'] 
 
-    X.columns = sanitize_columns(X.columns)
+    X_all.columns = sanitize_columns(X_all.columns)
+    
+    # 1. 임시 모델 훈련을 위한 TimeSeriesSplit
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    model_importances = pd.Series(0, index=X_all.columns)
+    
+    st.markdown("##### 🔍 특징 중요도 계산 및 상위 특징 선정 중...")
+
+    # [수정] 특징 중요도 계산을 위해 전체 특징을 사용하여 모델 훈련 (모델의 특성 중요도를 얻기 위함)
+    for fold, (train_index, val_index) in enumerate(tscv.split(X_all)):
+        X_train, X_val = X_all.iloc[train_index], X_all.iloc[val_index]
+        y_train = y.iloc[train_index]
+        
+        # 임시 모델은 스케일링 없이 훈련하여 특징 중요도를 얻습니다.
+        temp_model = lgb.LGBMRegressor(**LGBM_PARAMS)
+        temp_model.fit(X_train.values, y_train.values, verbose=-1) 
+        
+        model_importances += pd.Series(temp_model.feature_importances_, index=X_all.columns)
+    
+    model_importances /= n_splits
+    
+    # 상위 N개 특징 선정
+    top_features_series = model_importances.nlargest(TOP_N_FEATURES)
+    top_feature_names = top_features_series.index.tolist()
+    top_feature_importances = top_features_series.values
+    st.info(f"선택된 상위 특징 ({TOP_N_FEATURES}개): {', '.join(top_feature_names)}")
+
+    # 2. 상위 특징만으로 데이터셋 재구성 및 스케일러/모델 훈련
+    
+    # **[핵심 수정]** 상위 특징만으로 X 데이터셋 재구성
+    X_top = X_all[top_feature_names]
     
     if scaler_type == "RobustScaler":
         scaler = RobustScaler()
     else: 
         scaler = StandardScaler() 
         
-    st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
+    st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **상위 {TOP_N_FEATURES}개 특징(X_top)** 데이터에 `fit`하고 전처리합니다.")
     
-    # 스케일링
-    X_scaled = scaler.fit_transform(X)
-    X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
+    # **[핵심 수정]** 상위 특징만으로 스케일러 훈련 및 변환 (Scaler가 Top Feature만 기억하게 함)
+    X_scaled = scaler.fit_transform(X_top)
+    X_scaled_df = pd.DataFrame(X_scaled, index=X_top.index, columns=X_top.columns)
     
-    tscv = TimeSeriesSplit(n_splits=n_splits)
     rmse_scores = []
     residual_data = pd.DataFrame()
-    
-    st.markdown("##### 🚀 중앙값 모델 훈련 및 시계열 검증 진행 중...")
-    progress_bar = st.progress(0)
     final_model = None
+
+    st.markdown("##### 🚀 중앙값 모델 훈련 및 시계열 검증 진행 중 (Top Feature 사용)...")
+    progress_bar = st.progress(0)
     
-    model_importances = pd.Series(0, index=X.columns)
-    
+    # 최종 모델 훈련 및 검증 루프 (X_scaled_df는 이미 Top Feature만 포함)
     for fold, (train_index, val_index) in enumerate(tscv.split(X_scaled_df)):
         X_train, X_val = X_scaled_df.iloc[train_index], X_scaled_df.iloc[val_index]
         y_train, y_val = y.iloc[train_index], y.iloc[val_index]
@@ -279,9 +308,6 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         }, index=y_val.index)
         residual_data = pd.concat([residual_data, fold_residual_df])
         
-        # 특징 중요도 누적 (Top Feature 선정에 사용)
-        model_importances += pd.Series(model.feature_importances_, index=X_train.columns)
-        
         progress_bar.progress((fold + 1) / n_splits)
         st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f}")
         final_model = model
@@ -289,31 +315,10 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
     avg_rmse = np.mean(rmse_scores)
     st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
     
-    # 잔차의 표준편차 계산 (신뢰구간 계산에 사용)
     residual_std = residual_data['Residual'].std()
 
-    # 상위 N개 특징 선택
-    model_importances /= n_splits # 평균 중요도 계산
-    
-    # 상위 N개 특징의 이름과 중요도를 튜플 리스트로 저장
-    top_features_series = model_importances.nlargest(TOP_N_FEATURES)
-    top_feature_names = top_features_series.index.tolist()
-    
-    # [수정] final_model의 feature_importances를 top_features_series의 순서에 맞게 재정렬
-    # 주의: LightGBM의 최종 모델은 모든 특징을 가지고 있지만, 실제로 사용된 것은 Top 12개입니다.
-    # 따라서, 반환되는 feature_columns와 feature_importances는 Top 12개에 맞춰야 합니다.
-    
-    # 상위 N개 특징의 중요도 배열 (이미 정렬되어 있음)
-    top_feature_importances = top_features_series.values
-    
-    st.info(f"선택된 상위 특징 ({TOP_N_FEATURES}개): {', '.join(top_feature_names)}")
-    
-    # 선택된 특징으로 X_raw 재구성
-    X_raw_top_features = X[top_feature_names]
-    
-    # [반환값 수정] 특징 이름 리스트와 중요도 배열을 함께 반환
-    return final_model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std
-    # 반환 값: model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std
+    # X_top을 X_raw_top_features로 사용 (특징 이름과 데이터가 일치)
+    return final_model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_top, y, residual_std
 
 
 def predict_future(model, scaler, last_data, feature_columns, residual_std, market_key):
@@ -356,9 +361,11 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
 
         # 상위 특징 12개만 사용
         X_future_data = temp_df_features.iloc[-1].to_frame().T
-        X_future = X_future_data[feature_columns].fillna(0) # feature_columns는 이미 상위 특징 이름 리스트
+        # [수정 필요 없음] feature_columns는 상위 특징 12개의 이름 리스트이며, X_future_data의 컬럼 이름은 모두 존재합니다.
+        X_future = X_future_data[feature_columns].fillna(0) 
         
         # 예측 입력 데이터는 Numpy 배열로 변환
+        # **[핵심 수정]** 스케일러가 Top Feature만 기억하도록 훈련되었으므로, transform 단계는 이제 통과됩니다.
         X_future_scaled = scaler.transform(X_future)
         
         # 중앙값 예측 (로그 수익률)
@@ -391,11 +398,11 @@ def predict_future(model, scaler, last_data, feature_columns, residual_std, mark
     }, index=future_dates)
 
 # --------------------------
-# 5. 시각화 및 분석 함수 (수정 적용)
+# 5. 시각화 및 분석 함수 (생략)
 # --------------------------
 def display_feature_importance(feature_columns, importances):
     """
-    [수정] model 객체 대신 feature_columns(이름)과 importances(값)를 직접 받습니다.
+    model 객체 대신 feature_columns(이름)과 importances(값)를 직접 받습니다.
     """
     
     # 중요도 정규화 (0~100 스케일)
@@ -405,7 +412,6 @@ def display_feature_importance(feature_columns, importances):
     else:
         normalized_importances = importances 
 
-    # [수정] DataFrame 생성 시 feature_columns과 normalized_importances의 길이는 이미 동일해야 합니다.
     feature_importance_df = pd.DataFrame({
         'Feature': feature_columns,
         'Importance': normalized_importances
@@ -464,7 +470,7 @@ def display_residual_analysis(residual_data, residual_std):
 
 
 # --------------------------
-# 6. Streamlit 메인 앱
+# 6. Streamlit 메인 앱 (생략)
 # --------------------------
 st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (최고 속도 최적화)")
 
@@ -481,7 +487,6 @@ def app():
             st.rerun()
         st.caption("캐시를 지우면 모든 데이터를 새로 불러옵니다.")
         st.markdown("---")
-    # ------------------------------------
 
     col1, col2, col3, col4, col5 = st.columns([1, 2, 1, 1, 1]) 
     
@@ -497,7 +502,6 @@ def app():
     market_key = [k for k, v in MARKET_MAPPING.items() if v == selected_market_name][0]
 
     with col3:
-        # 훈련 기간을 2~3년 기준으로 설정
         selected_train_days = st.number_input(
             "📅 훈련기간(단위:일)",
             min_value=120,
@@ -517,7 +521,6 @@ def app():
         )
         
     with col5:
-        # TimeSeriesSplit 분할 수를 3 이하로 설정
         default_n_splits = 3 
         selected_n_splits = st.number_input(
             "✂️ TimeSeriesSplit 분할 수 (k)",
@@ -600,8 +603,7 @@ def app():
             
             # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
             st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
-            # [수정] 반환 값에 top_feature_importances 추가
-            model_median, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_raw_top_features, y, residual_std = train_and_validate_model(
+            model_median, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_top, y, residual_std = train_and_validate_model(
                 train_data, selected_scaler, selected_n_splits
             )
             
@@ -615,7 +617,6 @@ def app():
             
             # 특징 중요도 시각화
             st.markdown("---")
-            # [수정] feature_columns 대신 top_feature_names와 top_feature_importances 전달
             display_feature_importance(top_feature_names, top_feature_importances) 
 
             # 예측 실행
@@ -624,7 +625,6 @@ def app():
                 last_actual_close = raw_data['Close'].iloc[-1]
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
-                # 잔차 표준편차를 전달하여 예측 단계에서 CI 계산
                 future_predictions_df = predict_future(
                     model_median, 
                     scaler, 
