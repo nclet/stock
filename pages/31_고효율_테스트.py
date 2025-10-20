@@ -246,7 +246,8 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         
         # 임시 모델은 스케일링 없이 훈련하여 특징 중요도를 얻습니다.
         temp_model = lgb.LGBMRegressor(**LGBM_PARAMS)
-        temp_model.fit(X_train.values, y_train.values, verbose=-1) 
+        # 📌 핵심 수정: fit() 호출에서 'verbose' 인자 제거
+        temp_model.fit(X_train.values, y_train.values) 
         
         model_importances += pd.Series(temp_model.feature_importances_, index=X_all.columns)
     
@@ -317,10 +318,8 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
     
     residual_std = residual_data['Residual'].std()
 
-    # X_top을 X_raw_top_features로 사용 (특징 이름과 데이터가 일치)
     return final_model, scaler, top_feature_names, top_feature_importances, avg_rmse, residual_data, X_top, y, residual_std
-
-
+    
 def predict_future(model, scaler, last_data, feature_columns, residual_std, market_key):
     
     current_date = last_data.index[-1] 
