@@ -28,14 +28,14 @@ MARKET_MAPPING = {
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'rmse',
-    # [수정] 반복 횟수 대폭 감소 (시간 단축 핵심)
+    # [최적화 설정] 반복 횟수 대폭 감소
     'n_estimators': 500, 
-    # [수정] 학습률 증가 (수렴 속도 향상)
+    # [최적화 설정] 학습률 증가
     'learning_rate': 0.015, 
     'feature_fraction': 0.8, 
     'bagging_fraction': 0.8, 
     'bagging_freq': 1,
-    # [수정] 복잡도 감소
+    # [최적화 설정] 복잡도 감소
     'num_leaves': 21, 
     'max_depth': 6,
     'lambda_l1': 0.3,
@@ -76,10 +76,10 @@ def calculate_rsi(series, window=14):
     return rsi
 
 # --------------------------
-# 1. 멀티 마켓 종목 목록 로딩 함수 (기존과 동일)
+# 1. 멀티 마켓 종목 목록 로딩 함수
 # --------------------------
 @st.cache_data(ttl=60*60*24)
-def get_stock_listing(market_name):
+def get_stock_listing(market_name, clear_cache=False): # clear_cache 인자 추가
     if market_name == 'KRX':
         market_code = 'KRX'
     elif market_name == 'NASDAQ':
@@ -87,6 +87,7 @@ def get_stock_listing(market_name):
     else:
         return pd.DataFrame()
         
+    # clear_cache가 True이면 Streamlit이 캐시를 무시하고 새로 가져옵니다.
     try:
         df = fdr.StockListing(market_code)
         if 'Code' not in df.columns and 'Symbol' in df.columns:
@@ -104,7 +105,8 @@ def get_stock_listing(market_name):
         return pd.DataFrame()
         
 @st.cache_data(ttl=60*60*24)
-def get_coin_listing():
+def get_coin_listing(clear_cache=False): # clear_cache 인자 추가
+    # clear_cache가 True이면 Streamlit이 캐시를 무시하고 새로 가져옵니다.
     try:
         url = "https://api.upbit.com/v1/market/all"
         response = requests.get(url, params={'isDetails': 'false'})
@@ -171,15 +173,16 @@ def create_features(df, is_for_training=True):
     return df
 
 # --------------------------
-# 3. 데이터 로드 함수 (기존과 동일)
+# 3. 데이터 로드 함수
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
-def load_data(ticker, market, train_days):
+def load_data(ticker, market, train_days, clear_cache=False): # clear_cache 인자 추가
     end_date = datetime.date.today()
     start_date = end_date - datetime.timedelta(days=train_days + 150) 
     
     data = None
     
+    # clear_cache가 True이면 Streamlit이 캐시를 무시하고 새로 가져옵니다.
     try:
         if market in ['KRX', 'NASDAQ']:
             data = fdr.DataReader(ticker, start_date, end_date)
@@ -223,7 +226,7 @@ def load_data(ticker, market, train_days):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수
+# 4. 모델 훈련 및 예측 함수 (기존과 동일)
 # --------------------------
 def train_and_validate_model(data_features, scaler_type, n_splits):
     
@@ -363,7 +366,7 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
     }, index=future_dates)
 
 # --------------------------
-# 5. 시각화 및 분석 함수
+# 5. 시각화 및 분석 함수 (기존과 동일)
 # --------------------------
 def display_feature_importance(model, feature_columns):
     
@@ -443,7 +446,20 @@ def app():
     st.markdown("**훈련 시간 단축**을 위해 반복 횟수와 복잡도를 낮추었습니다. 정확도와 훈련 시간 사이의 균형을 유지합니다.")
     st.markdown("---")
 
+    # --- 사이드바: 캐시 관리 기능 추가 ---
+    with st.sidebar:
+        st.markdown("## ⚙️ 설정 및 유지보수")
+        if st.button("🔴 Streamlit 캐시 지우고 새로고침", help="데이터 로딩 오류 발생 시 클릭하세요.", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+        st.caption("캐시를 지우면 모든 데이터를 새로 불러옵니다.")
+        st.markdown("---")
+    # ------------------------------------
+
     col1, col2, col3, col4, col5 = st.columns([1, 2, 1, 1, 1]) 
+    
+    # clear_cache 변수를 False로 초기화 (기본적으로 캐시 사용)
+    clear_cache = False 
     
     with col1:
         selected_market_name = st.selectbox(
@@ -490,20 +506,24 @@ def app():
         default_ticker = ""
 
         if market_key == 'KRX':
-            stock_list_df = get_stock_listing('KRX')
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_stock_listing('KRX', clear_cache=clear_cache) 
             default_ticker = '005930'
             
         elif market_key == 'NASDAQ':
-            stock_list_df = get_stock_listing('NASDAQ')
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_stock_listing('NASDAQ', clear_cache=clear_cache) 
             default_ticker = 'AAPL'
             
         elif market_key == 'COIN':
-            stock_list_df = get_coin_listing()
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_coin_listing(clear_cache=clear_cache)
             default_ticker = 'KRW-BTC'
         
         if not stock_list_df.empty:
             options = stock_list_df['label'].tolist()
             try:
+                # 사용자가 선택한 종목이 목록에 없다면 디폴트 인덱스 사용
                 default_index = options.index(stock_list_df[stock_list_df['Code'] == default_ticker]['label'].iloc[0])
             except:
                 default_index = 0
@@ -518,7 +538,7 @@ def app():
             selected_ticker = stock_list_df[stock_list_df['label'] == selected_label]['Code'].iloc[0].upper().strip()
             
         else:
-            st.warning("선택한 시장의 종목 목록을 불러올 수 없습니다.")
+            st.warning("선택한 시장의 종목 목록을 불러올 수 없습니다. 캐시를 지우거나 나중에 다시 시도하세요.")
             selected_ticker = ""
     
     st.markdown("---")
@@ -536,7 +556,8 @@ def app():
         
         with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 피처 생성 중..."):
             
-            raw_data = load_data(selected_ticker, current_market, selected_train_days) 
+            # clear_cache 인자를 load_data 함수에 전달
+            raw_data = load_data(selected_ticker, current_market, selected_train_days, clear_cache=clear_cache) 
             if raw_data is None:
                 return
 
@@ -684,6 +705,7 @@ def app():
 
 if __name__ == "__main__":
     app()
+
 
 # import streamlit as st
 # import pandas as pd
