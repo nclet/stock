@@ -85,23 +85,36 @@ def get_stock_listing(market_name, clear_cache=False):
     
     # 📌 KRX: pykrx 사용
     if market_name == 'KRX':
+        st.info("pykrx를 사용하여 KRX 종목 리스트를 가져오는 중입니다. 시간이 걸릴 수 있습니다.")
         try:
             ticker_list = stock.get_market_ticker_list()
             
-            # 종목 코드를 이용해 종목명 딕셔너리 생성 (느릴 수 있으나 정확)
-            name_dict = {ticker: stock.get_market_ticker_name(ticker) for ticker in ticker_list}
+            valid_tickers = []
             
-            df = pd.DataFrame({
-                'Code': list(name_dict.keys()),
-                'Name': list(name_dict.values())
-            })
+            # [핵심 수정]: 종목명 조회 시 오류 처리 추가
+            for ticker in ticker_list:
+                try:
+                    name = stock.get_market_ticker_name(ticker)
+                    # 유효한 종목명만 추가 (종목명이 None이나 빈 문자열이 아닌 경우)
+                    if name and name.strip():
+                        valid_tickers.append({'Code': ticker, 'Name': name})
+                except Exception as name_error:
+                    # 종목명 조회 중 오류가 발생하면 해당 종목은 건너뜀
+                    # st.warning(f"종목 코드 {ticker}의 종목명 조회 중 오류 발생: {name_error}")
+                    continue
+            
+            df = pd.DataFrame(valid_tickers)
+            
+            if df.empty:
+                st.error("pykrx에서 유효한 KRX 종목 리스트를 가져오지 못했습니다.")
+                return pd.DataFrame()
 
             df['label'] = df['Name'].astype(str) + ' (' + df['Code'] + ')'
             return df
+            
         except Exception as e:
             st.error(f"KRX 종목 리스트를 가져오는 중 오류가 발생했습니다 (pykrx): {e}")
-            return pd.DataFrame()
-        
+            return pd.DataFrame()        
     # 📌 NASDAQ: fdr 유지
     elif market_name == 'NASDAQ':
         try:
