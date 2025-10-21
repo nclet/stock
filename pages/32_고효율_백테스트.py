@@ -9,7 +9,10 @@ from sklearn.preprocessing import RobustScaler, StandardScaler
 import plotly.express as px
 import plotly.graph_objects as go
 # pykrx 추가
-from pykrx import stock 
+from pykrx import stock
+from pykrx import stock
+from datetime import datetime
+import pandas as pd
 # FinanceDataReader는 NASDAQ용으로 남겨둠
 import FinanceDataReader as fdr 
 import pyupbit
@@ -83,40 +86,41 @@ def calculate_rsi(series, window=14):
 @st.cache_data(ttl=60*60*24)
 def get_stock_listing(market_name, clear_cache=False): 
     
-    # 📌 KRX: pykrx 사용
+    # 📌 KRX: pykrx 안정적인 조회 방식으로 대체
     if market_name == 'KRX':
         st.info("pykrx를 사용하여 KRX 종목 리스트를 가져오는 중입니다. 시간이 걸릴 수 있습니다.")
         try:
-            ticker_list = stock.get_market_ticker_list()
+            today = datetime.now().strftime("%Y%m%d")
             
-            valid_tickers = []
+            # 코스피 (KOSPI) 시가총액 데이터 조회 -> 종목 코드와 종목명 포함
+            df_kospi = stock.get_market_cap_by_date(today, market="KOSPI")
+            # 코스닥 (KOSDAQ) 시가총액 데이터 조회
+            df_kosdaq = stock.get_market_cap_by_date(today, market="KOSDAQ")
             
-            # [핵심 수정]: 종목명 조회 시 오류 처리 추가
-            for ticker in ticker_list:
-                try:
-                    name = stock.get_market_ticker_name(ticker)
-                    # 유효한 종목명만 추가 (종목명이 None이나 빈 문자열이 아닌 경우)
-                    if name and name.strip():
-                        valid_tickers.append({'Code': ticker, 'Name': name})
-                except Exception as name_error:
-                    # 종목명 조회 중 오류가 발생하면 해당 종목은 건너뜀
-                    # st.warning(f"종목 코드 {ticker}의 종목명 조회 중 오류 발생: {name_error}")
-                    continue
+            # 두 DataFrame을 합칩니다. (인덱스가 종목 코드로 되어 있습니다.)
+            df_combined = pd.concat([df_kospi, df_kosdaq])
             
-            df = pd.DataFrame(valid_tickers)
+            # DataFrame을 정리하여 'Code'와 'Name' 컬럼을 만듭니다.
+            df = df_combined.reset_index()
+            df.rename(columns={'티커': 'Code', '종목명': 'Name'}, inplace=True)
             
+            # 최종적으로 'Code'와 'Name'만 추출합니다.
+            df = df[['Code', 'Name']]
+
             if df.empty:
-                st.error("pykrx에서 유효한 KRX 종목 리스트를 가져오지 못했습니다.")
+                st.error("pykrx에서 유효한 KRX 종목 리스트를 가져오지 못했습니다. KRX 데이터 서버에 문제가 있을 수 있습니다.")
                 return pd.DataFrame()
 
             df['label'] = df['Name'].astype(str) + ' (' + df['Code'] + ')'
             return df
             
         except Exception as e:
+            # KRX 서버에서 데이터를 가져오는 과정 자체에서 오류가 발생했을 경우
             st.error(f"KRX 종목 리스트를 가져오는 중 오류가 발생했습니다 (pykrx): {e}")
-            return pd.DataFrame()        
+            return pd.DataFrame()
+        
     # 📌 NASDAQ: fdr 유지
-    elif market_name == 'NASDAQ':
+    elif market_name == 'NASDAQ':        
         try:
             df = fdr.StockListing('NASDAQ')
             df.rename(columns={'Symbol': 'Code'}, inplace=True)
