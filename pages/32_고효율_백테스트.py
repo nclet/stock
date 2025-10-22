@@ -226,7 +226,7 @@ def load_data(ticker, market, train_days, clear_cache=False): # clear_cache 인�
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (기존과 동일)
+# 4. 모델 훈련 및 예측 함수 (프로그래스바 추가)
 # --------------------------
 def train_and_validate_model(data_features, scaler_type, n_splits):
     
@@ -250,8 +250,12 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
     rmse_scores = []
     residual_data = pd.DataFrame()
     
-    st.markdown("##### 🚀 모델 훈련 및 시계열 검증 진행 중...")
+    st.markdown("##### 🚀 중앙값 모델 훈련 및 시계열 검증 진행 중...")
+    
+    # 훈련 프로그래스 바 (시계열 교차 검증)
+    train_progress_text = st.empty()
     progress_bar = st.progress(0)
+    
     final_model = None
     
     for fold, (train_index, val_index) in enumerate(tscv.split(X_scaled_df)):
@@ -285,12 +289,13 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         })
         residual_data = pd.concat([residual_data, fold_residual_df])
         
-        progress_bar.progress((fold + 1) / n_splits)
-        st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f} (**실제 수익률 RMSE**: {actual_return_rmse:.4f}%)")
+        progress = (fold + 1) / n_splits
+        progress_bar.progress(progress)
+        train_progress_text.text(f"Fold {fold+1}/{n_splits} 검증 완료. 로그 수익률 RMSE: {rmse:.6f} (실제 수익률 RMSE: {actual_return_rmse:.4f}%)")
         final_model = model
 
     avg_rmse = np.mean(rmse_scores)
-    st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
+    st.success(f"✅ 중앙값 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
     
     return final_model, scaler, X.columns, avg_rmse, residual_data, X, y 
     # X, y를 함께 반환하여 퀀타일 모델 훈련에 사용합니다.
@@ -307,6 +312,11 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
 
     day_counter = 1 
     
+    # 예측 프로그래스 바 (Walk-Forward)
+    st.markdown("##### 🔮 미래 예측 진행 중...")
+    predict_progress_text = st.empty()
+    predict_progress_bar = st.progress(0)
+
     while len(future_predictions) < TARGET_PERIOD:
         
         next_date = current_date + datetime.timedelta(days=day_counter) 
@@ -324,7 +334,7 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         for col in ['Open', 'High', 'Low', 'Adj Close']:
               new_row[col] = new_row['Close'].iloc[0]
         new_row['Volume'] = last_data['Volume'].iloc[-1] 
-              
+                
         temp_df = last_data.iloc[-60:].copy() 
         temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price 
         temp_df = pd.concat([temp_df, new_row])
@@ -358,6 +368,11 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         last_data = pd.concat([last_data, new_row])
         current_date = next_date
         day_counter = 1 
+        
+        # 프로그래스 바 업데이트
+        predict_progress_bar.progress(len(future_predictions) / TARGET_PERIOD)
+        predict_progress_text.text(f"{len(future_predictions)}/{TARGET_PERIOD}일 예측 완료.")
+
 
     return pd.DataFrame({
         'Predicted': future_predictions,
@@ -490,7 +505,8 @@ def app():
         )
         
     with col5:
-        default_n_splits = 5
+        # TimeSeriesSplit 분할 수 기본값을 3으로 변경
+        default_n_splits = 3
         selected_n_splits = st.number_input(
             "✂️ TimeSeriesSplit 분할 수 (k)",
             min_value=3,
@@ -591,17 +607,27 @@ def app():
             y_train_values = y_raw.values
             
             st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
-            with st.spinner("⏳ 95% 신뢰구간 하한선(Low CI) 모델 훈련 중..."):
-                lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_QUANTILE_PARAMS).fit(
-                    X_train_scaled, y_train_values
-                )
-                models['low'] = lgbm_low
             
-            with st.spinner("⏳ 95% 신뢰구간 상한선(High CI) 모델 훈련 중..."):
-                lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_QUANTILE_PARAMS).fit(
-                    X_train_scaled, y_train_values
-                )
-                models['high'] = lgbm_high
+            # 퀀타일 모델 훈련 프로그래스 바 (총 2단계)
+            quantile_progress_text = st.empty()
+            quantile_progress_bar = st.progress(0.0)
+            
+            # 95% 신뢰구간 하한선(Low CI) 훈련
+            quantile_progress_text.text("⏳ 1/2단계: 95% 신뢰구간 하한선(Low CI) 모델 훈련 중...")
+            lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_QUANTILE_PARAMS).fit(
+                X_train_scaled, y_train_values
+            )
+            models['low'] = lgbm_low
+            quantile_progress_bar.progress(0.5)
+            
+            # 95% 신뢰구간 상한선(High CI) 훈련
+            quantile_progress_text.text("⏳ 2/2단계: 95% 신뢰구간 상한선(High CI) 모델 훈련 중...")
+            lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_QUANTILE_PARAMS).fit(
+                X_train_scaled, y_train_values
+            )
+            models['high'] = lgbm_high
+            quantile_progress_bar.progress(1.0)
+            
             st.success("✅ 퀀타일 회귀 모델 훈련 완료.")
 
             st.markdown("---")
@@ -615,92 +641,88 @@ def app():
             display_feature_importance(model_median, feature_columns) 
 
             # 예측 실행
-            with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward, 95% CI)..."):
-                
-                last_actual_close = raw_data['Close'].iloc[-1]
-                last_data_for_prediction = raw_data.iloc[-100:].copy() 
-                
-                future_predictions_df = predict_future(
-                    models, 
-                    scaler, 
-                    last_data_for_prediction, 
-                    feature_columns,
-                    current_market
-                )
-                
-                st.markdown("---")
-                st.subheader(f"📈 {selected_label} 가격 예측 시각화 (95% 신뢰구간)")
-                
-                past_prices = raw_data['Close'].iloc[-90:]
-                
-                predicted_df = pd.DataFrame({
-                    'Actual': past_prices,
-                    'Predicted': np.nan,
-                    'Low_CI': np.nan,
-                    'High_CI': np.nan
-                })
-                
-                final_df = pd.concat([predicted_df, future_predictions_df]).sort_index()
-                
-                # Plotly 시각화 (신뢰구간 포함)
-                fig = go.Figure()
-                
-                # 신뢰구간 음영 추가
-                fig.add_trace(go.Scatter(
-                    x=final_df.index, 
-                    y=final_df['High_CI'], 
-                    fill=None, 
-                    mode='lines', 
-                    line=dict(width=0), 
-                    showlegend=False
-                ))
-                fig.add_trace(go.Scatter(
-                    x=final_df.index, 
-                    y=final_df['Low_CI'], 
-                    fill='tonexty', 
-                    mode='lines', 
-                    line=dict(width=0), 
-                    fillcolor='rgba(255, 0, 0, 0.1)', 
-                    name='95% 신뢰구간'
-                ))
-                
-                # 예측선 (중앙값)
-                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines', name='예측 종가 (Median)', line=dict(color='red', dash='dot')))
-                
-                # 실제 가격
-                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
+            # predict_future 함수에 프로그래스 바 로직이 추가되었습니다.
+            future_predictions_df = predict_future(
+                models, 
+                scaler, 
+                raw_data.iloc[-100:].copy(), 
+                feature_columns,
+                current_market
+            )
+            
+            st.markdown("---")
+            st.subheader(f"📈 {selected_label} 가격 예측 시각화 (95% 신뢰구간)")
+            
+            past_prices = raw_data['Close'].iloc[-90:]
+            
+            predicted_df = pd.DataFrame({
+                'Actual': past_prices,
+                'Predicted': np.nan,
+                'Low_CI': np.nan,
+                'High_CI': np.nan
+            })
+            
+            final_df = pd.concat([predicted_df, future_predictions_df]).sort_index()
+            
+            # Plotly 시각화 (신뢰구간 포함)
+            fig = go.Figure()
+            
+            # 신뢰구간 음영 추가
+            fig.add_trace(go.Scatter(
+                x=final_df.index, 
+                y=final_df['High_CI'], 
+                fill=None, 
+                mode='lines', 
+                line=dict(width=0), 
+                showlegend=False
+            ))
+            fig.add_trace(go.Scatter(
+                x=final_df.index, 
+                y=final_df['Low_CI'], 
+                fill='tonexty', 
+                mode='lines', 
+                line=dict(width=0), 
+                fillcolor='rgba(255, 0, 0, 0.1)', 
+                name='95% 신뢰구간'
+            ))
+            
+            # 예측선 (중앙값)
+            fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines', name='예측 종가 (Median)', line=dict(color='red', dash='dot')))
+            
+            # 실제 가격
+            fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
 
-                fig.update_layout(
-                    title=f'{selected_label} 실제 가격 vs. 예측 가격 및 95% 신뢰구간',
-                    yaxis_title='가격',
-                    xaxis_title='날짜',
-                    hovermode="x unified"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                currency = "원" if current_market in ['KRX', 'COIN'] else "$"
-                st.caption(f"마지막 실제 종가: {currency}{last_actual_close:,.2f}")
+            fig.update_layout(
+                title=f'{selected_label} 실제 가격 vs. 예측 가격 및 95% 신뢰구간',
+                yaxis_title='가격',
+                xaxis_title='날짜',
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            currency = "원" if current_market in ['KRX', 'COIN'] else "$"
+            st.caption(f"마지막 실제 종가: {currency}{last_actual_close:,.2f}")
 
-                st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 결과")
-                
-                # 로그 수익률을 실제 수익률(%)로 변환하여 표시
-                predictions_display = future_predictions_df.copy()
-                
-                # 수익률 계산: P_t+1 / P_t - 1
-                return_pct = (predictions_display['Predicted'] / predictions_display['Predicted'].shift(1)) - 1
-                
-                # 첫날의 수익률은 마지막 실제 종가를 기준으로 계산
-                return_pct.iloc[0] = (predictions_display['Predicted'].iloc[0] / last_actual_close) - 1
-                
-                predictions_display['일일 예측 수익률 (%)'] = return_pct * 100
-                predictions_display.rename(columns={'Predicted': '예측 종가 (Median)', 'Low_CI': '95% CI 하한', 'High_CI': '95% CI 상한'}, inplace=True)
-                
-                st.dataframe(predictions_display[['예측 종가 (Median)', '95% CI 하한', '95% CI 상한', '일일 예측 수익률 (%)']].style.format({
-                    '예측 종가 (Median)': f'{currency}{{:.2f}}',
-                    '95% CI 하한': f'{currency}{{:.2f}}',
-                    '95% CI 상한': f'{currency}{{:.2f}}',
-                    '일일 예측 수익률 (%)': '{:.2f}%'
-                }))
+            st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 결과")
+            
+            # 로그 수익률을 실제 수익률(%)로 변환하여 표시
+            predictions_display = future_predictions_df.copy()
+            
+            # 수익률 계산: P_t+1 / P_t - 1
+            return_pct = (predictions_display['Predicted'] / predictions_display['Predicted'].shift(1)) - 1
+            
+            # 첫날의 수익률은 마지막 실제 종가를 기준으로 계산
+            return_pct.iloc[0] = (predictions_display['Predicted'].iloc[0] / last_actual_close) - 1
+            
+            predictions_display['일일 예측 수익률 (%)'] = return_pct * 100
+            predictions_display.rename(columns={'Predicted': '예측 종가 (Median)', 'Low_CI': '95% CI 하한', 'High_CI': '95% CI 상한'}, inplace=True)
+            
+            st.dataframe(predictions_display[['예측 종가 (Median)', '95% CI 하한', '95% CI 상한', '일일 예측 수익률 (%)']].style.format({
+                '예측 종가 (Median)': f'{currency}{{:.2f}}',
+                '95% CI 하한': f'{currency}{{:.2f}}',
+                '95% CI 상한': f'{currency}{{:.2f}}',
+                '일일 예측 수익률 (%)': '{:.2f}%'
+            }))
 
 
 if __name__ == "__main__":
