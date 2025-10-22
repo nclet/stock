@@ -303,7 +303,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
 def predict_future(models, scaler, last_data, feature_columns, market_key):
     
     current_date = last_data.index[-1] 
-    last_actual_close = last_data['Close'].iloc[-1]
+    last_actual_close = raw_data['Close'].iloc[-1]
     
     future_predictions = [] 
     future_low = [] 
