@@ -434,8 +434,6 @@ if st.button("🚀 크롤링 및 분석 시작"):
         st.write("👉 **감성점수 계산 방식**: Hugging Face 모델에서 추출한 '긍정' 점수에서 '부정' 점수를 뺀 값입니다.")
 
 
-
-
 # import streamlit as st
 # import pandas as pd
 # import numpy as np
