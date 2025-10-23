@@ -409,13 +409,24 @@ if st.button("🚀 크롤링 및 분석 시작", type="primary", use_container_w
                                    marker_color=sentiment_color,
                                    opacity=0.5))
 
+        # ⭐️ 오류가 발생했던 update_layout 부분 수정 ⭐️
         fig_price.update_layout(
             title=f"{company_name} 주가와 일일 감성 점수 비교",
             xaxis_title="날짜",
-            # 주가 축
-            yaxis=dict(title='종가', titlefont=dict(color="#1f77b4"), tickfont=dict(color="#1f77b4"), domain=[0.3, 1]),
-            # 감성 점수 축
-            yaxis2=dict(title='감성 점수 (-1.0 ~ 1.0)', titlefont=dict(color="#d62728"), tickfont=dict(color="#d62728"), overlaying='y', side='right', domain=[0, 0.25]),
+            # 주가 축: titlefont 대신 title.font 사용
+            yaxis=dict(
+                title=dict(text='종가', font=dict(color="#1f77b4")),
+                tickfont=dict(color="#1f77b4"), 
+                domain=[0.3, 1]
+            ),
+            # 감성 점수 축: titlefont 대신 title.font 사용
+            yaxis2=dict(
+                title=dict(text='감성 점수 (-1.0 ~ 1.0)', font=dict(color="#d62728")),
+                tickfont=dict(color="#d62728"), 
+                overlaying='y', 
+                side='right', 
+                domain=[0, 0.25]
+            ),
             hovermode="x unified",
             height=600,
             legend=dict(x=0, y=1.1, orientation="h")
@@ -470,7 +481,6 @@ if st.button("🚀 크롤링 및 분석 시작", type="primary", use_container_w
 
     st.markdown("---")
     st.write("👉 **감성점수 계산 방식**: Hugging Face 모델에서 추출한 '긍정' 점수에서 '부정' 점수를 뺀 값이며, $\pm 1.0$ 범위를 가집니다.")
-
 
 
 # import streamlit as st
