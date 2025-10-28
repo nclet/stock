@@ -146,7 +146,7 @@ def get_google_trends(keywords, start_date, end_date):
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
         
         # 2. ⚠️ 요청 후 5초 지연 추가 (Rate Limiting 방지)
-        time.sleep(5) 
+        time.sleep(10) 
         
         # 3. 데이터 로드 (실제 서버 통신 발생)
         df = pytrends.interest_over_time()
@@ -491,8 +491,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
 
     # YIELD_CURVE (2차 축)
     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['YIELD_CURVE'], name='장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
-    fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yaxis="y2") # 0점선 (역전 기준)
-    
+    fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")    
     # BBB_OAS (3차 축)
     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['BBB_OAS'], name='BBB 회사채 스프레드', line=dict(color='green', width=1.5), yaxis='y3', opacity=0.8))
 
