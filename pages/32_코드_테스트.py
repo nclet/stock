@@ -139,7 +139,8 @@ def get_fear_greed_index(limit=1095):
 def get_google_trends(keywords, start_date, end_date):
     """Google Trends에서 검색량을 가져옵니다. (별도 키 필요 없음)"""
     try:
-        pytrends = TrendReq(hl='en-US', tz=360) 
+        PROXY_LIST = ['http://user:pass@localhost;127.0.0.1:16105']
+        pytrends = TrendReq(hl='en-US', tz=360, proxies=PROXY_LIST)
         timeframe = f"{start_date.strftime('%Y-%m-%d')} {end_date.strftime('%Y-%m-%d')}"
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
         df = pytrends.interest_over_time()
