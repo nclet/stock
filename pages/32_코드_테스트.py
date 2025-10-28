@@ -116,6 +116,24 @@ def get_fred_data():
         results['YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('YIELD_CURVE').to_frame()
 
     return results
+@st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
+def get_fear_greed_index(limit=1095): 
+    """Alternative.me에서 Fear & Greed Index를 가져옵니다."""
+    # 이 API는 별도 키 필요 없음
+    url = f"https://api.alternative.me/fng/?limit={limit}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        df = pd.DataFrame(data)
+        df["value"] = df["value"].astype(float)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s").dt.date
+        df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
+        return df[["Date", "FGI"]].sort_values("Date").set_index('Date')
+    except Exception as e:
+        st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
+        return pd.DataFrame()
+
 
 @st.cache_data(show_spinner="⏳ Google Trends 데이터 로드 중...")
 def get_google_trends(keywords, start_date, end_date):
