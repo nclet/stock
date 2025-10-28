@@ -137,12 +137,18 @@ def get_fear_greed_index(limit=1095):
 
 @st.cache_data(show_spinner="⏳ Google Trends 데이터 로드 중...")
 def get_google_trends(keywords, start_date, end_date):
-    """Google Trends에서 검색량을 가져옵니다. (별도 키 필요 없음)"""
+    """Google Trends에서 검색량을 가져옵니다."""
     try:
-        PROXY_LIST = ['http://user:pass@localhost;127.0.0.1:16105']
-        pytrends = TrendReq(hl='en-US', tz=360, proxies=PROXY_LIST)
+        pytrends = TrendReq(hl='en-US', tz=360) 
         timeframe = f"{start_date.strftime('%Y-%m-%d')} {end_date.strftime('%Y-%m-%d')}"
+        
+        # 1. 페이로드(요청 내용) 구성
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
+        
+        # 2. ⚠️ 요청 후 5초 지연 추가 (Rate Limiting 방지)
+        time.sleep(5) 
+        
+        # 3. 데이터 로드 (실제 서버 통신 발생)
         df = pytrends.interest_over_time()
         
         if df.empty or 'isPartial' in df.columns:
@@ -153,6 +159,7 @@ def get_google_trends(keywords, start_date, end_date):
         df = df.rename(columns={col: f'Trend_{col}' for col in df.columns})
         return df
     except Exception as e:
+        # Code 429 오류가 발생하면 이 부분이 실행됩니다.
         st.warning(f"⚠️ Google Trends 데이터 로드 오류: {e}. PyTrends 설치 상태 확인 필요.")
         return pd.DataFrame()
 
