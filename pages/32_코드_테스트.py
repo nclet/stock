@@ -136,6 +136,7 @@ def get_google_trends(keywords, start_date, end_date):
 @st.cache_data(show_spinner="⏳ 주가 및 원자재 데이터 로드 중...")
 def load_market_data(start_date, end_date):
     """S&P 500, VIX, WTI, Copper, Gold 데이터를 로드합니다."""
+    # 시계열 피처 생성을 위해 검색 기간보다 30일 정도 더 많은 데이터를 로드
     load_start_date = start_date - timedelta(days=50) 
     
     tickers = {
@@ -144,9 +145,18 @@ def load_market_data(start_date, end_date):
     }
     
     all_data = []
+    total_tickers = len(tickers)
     
-    for ticker, name in st.progress(tickers.items(), text="시장 데이터 로드 중..."):
+    # 1. 진행률 바 위젯 생성
+    progress_bar = st.progress(0, text="시장 데이터 로드 중...")
+    
+    # 2. 루프를 돌면서 데이터 로드 및 진행률 업데이트
+    for i, (ticker, name) in enumerate(tickers.items()):
         try:
+            # 진행률 업데이트: (현재 인덱 + 1) / 전체 개수
+            progress_value = (i + 1) / total_tickers
+            progress_bar.progress(progress_value, text=f"{name} ({ticker}) 로드 중...")
+            
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             df.index = df.index.date
@@ -156,6 +166,10 @@ def load_market_data(start_date, end_date):
             st.warning(f"⚠️ {name} ({ticker}) 데이터 로드 실패: {e}")
             continue
 
+    # 3. 로드가 완료된 후 진행률 바 제거 또는 완료 표시
+    progress_bar.empty()
+    st.success("✅ 시장 데이터 로드 완료!")
+        
     if not all_data:
         return pd.DataFrame()
         
