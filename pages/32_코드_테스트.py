@@ -38,7 +38,7 @@ def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
     # 💡 FRED API 키 적용
     try:
-        fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
+        fred_api_key = st.secrets["FRED_API_KEY"]
     except KeyError:
         st.error("❌ FRED API 키가 Streamlit Secrets에 설정되어 있지 않습니다.")
         st.stop()
