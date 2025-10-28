@@ -32,15 +32,18 @@ st.markdown("""
 # ------------------------
 # 0. 매크로 데이터 수집 함수
 # ------------------------
+# ------------------------
+# 0. 매크로 데이터 수집 함수 (수정된 부분)
+# ------------------------
 
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS) 로드 중...")
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
-    # 💡 FRED API 키 적용
     try:
-        fred_api_key = st.secrets["FRED_API_KEY"]
+        # FRED API 키 참조 방식은 이미 수정되었다고 가정 (예: st.secrets["fred"]["FRED_API_KEY"])
+        fred_api_key = st.secrets["fred"]["FRED_API_KEY"] 
     except KeyError:
-        st.error("❌ FRED API 키가 Streamlit Secrets에 설정되어 있지 않습니다.")
+        st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'FRED' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
         st.stop()
         return {}
 
@@ -53,6 +56,8 @@ def get_fred_data():
     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
     
     def fetch_single_fred(ticker, observation_start):
+        # ... (fetch_single_fred 함수 내용은 동일) ...
+        # 
         params = {
             "series_id": ticker,
             "api_key": fred_api_key,
@@ -74,40 +79,43 @@ def get_fred_data():
             st.warning(f"⚠️ FRED 데이터 로드 실패 ({ticker}): {e}")
             return ticker, pd.DataFrame()
 
-    start_date = datetime.now().date() - timedelta(days=365 * 3) # 최근 3년 데이터
+    start_date = datetime.now().date() - timedelta(days=365 * 3)
     results = {}
+    total_tickers = len(TICKERS)
+    
+    # 1. 진행률 바 생성
+    progress_bar = st.empty()
     
     with ThreadPoolExecutor(max_workers=5) as executor:
+        # 2. Future 딕셔너리 생성
         futures = {executor.submit(fetch_single_fred, ticker, start_date): ticker for ticker in TICKERS.keys()}
-        for future in st.progress(futures, text="FRED 지표 로드 중..."):
-            ticker, df = future.result()
-            if not df.empty:
-                results[TICKERS[ticker]] = df
+        
+        loaded_count = 0
+        
+        # 3. Future 객체에서 결과를 하나씩 추출하며 진행률 업데이트
+        for future in futures: # 딕셔너리가 아닌 Future 객체의 리스트를 순회
+            ticker_name = futures[future] # 딕셔너리에서 키 이름 가져오기
+            try:
+                ticker, df = future.result()
+                if not df.empty:
+                    results[TICKERS[ticker]] = df
+            except Exception as e:
+                # fetch_single_fred에서 이미 warning을 띄웠으므로 여기서는 pass
+                pass 
                 
+            loaded_count += 1
+            progress_value = loaded_count / total_tickers
+            progress_bar.progress(progress_value, text=f"FRED 지표 로드 중... ({loaded_count}/{total_tickers})")
+    
+    # 4. 로드가 완료되면 진행률 바 제거
+    progress_bar.empty()
+
     # 장단기 금리차 계산 (10Y - 2Y)
     if '10Y' in results and '2Y' in results:
         df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
         results['YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('YIELD_CURVE').to_frame()
 
     return results
-
-@st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
-def get_fear_greed_index(limit=1095): 
-    """Alternative.me에서 Fear & Greed Index를 가져옵니다."""
-    # 이 API는 별도 키 필요 없음
-    url = f"https://api.alternative.me/fng/?limit={limit}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json().get("data", [])
-        df = pd.DataFrame(data)
-        df["value"] = df["value"].astype(float)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s").dt.date
-        df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
-        return df[["Date", "FGI"]].sort_values("Date").set_index('Date')
-    except Exception as e:
-        st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
-        return pd.DataFrame()
 
 @st.cache_data(show_spinner="⏳ Google Trends 데이터 로드 중...")
 def get_google_trends(keywords, start_date, end_date):
