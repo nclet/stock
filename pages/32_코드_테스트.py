@@ -12,8 +12,8 @@ import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
 import lightgbm as lgb
-import xgboost as xgb # XGBoost 추가
-from sklearn.ensemble import RandomForestRegressor, VotingRegressor # 앙상블 추가
+import xgboost as xgb
+from sklearn.ensemble import RandomForestRegressor, VotingRegressor
 from sklearn.preprocessing import MinMaxScaler
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -38,10 +38,10 @@ st.markdown("""
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
     try:
-        # FRED API 키 참조 방식은 Secrets 구조에 맞게 수정 필요
-        fred_api_key = st.secrets["FRED_API_KEY"] # 최상위 키로 가정
+        # 요청하신 대로 st.secrets["fred"]["FRED_API_KEY"]로 수정
+        fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
     except KeyError:
-        st.error("❌ FRED API 키 설정 오류: Streamlit Secrets에 'FRED_API_KEY'를 확인해주세요.")
+        st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
         st.stop()
         return {}
 
@@ -110,7 +110,7 @@ def get_fred_data():
 
 @st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
 def get_fear_greed_index(limit=1095): 
-    # ... (get_fear_greed_index 함수 내용은 변경 없음) ...
+    """Alternative.me에서 Fear & Greed Index를 가져옵니다."""
     url = f"https://api.alternative.me/fng/?limit={limit}"
     try:
         response = requests.get(url)
@@ -128,13 +128,14 @@ def get_fear_greed_index(limit=1095):
 
 @st.cache_data(show_spinner="⏳ Google Trends 데이터 로드 중...")
 def get_google_trends(keywords, start_date, end_date):
-    # ... (get_google_trends 함수 내용은 변경 없음, time.sleep(10) 유지) ...
+    """Google Trends에서 검색량을 가져옵니다."""
     try:
         pytrends = TrendReq(hl='en-US', tz=360) 
         timeframe = f"{start_date.strftime('%Y-%m-%d')} {end_date.strftime('%Y-%m-%d')}"
         
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
         
+        # Rate Limiting 방지를 위해 10초 지연 유지
         time.sleep(10) 
         
         df = pytrends.interest_over_time()
@@ -177,7 +178,6 @@ def load_market_data(start_date, end_date):
             progress_value = (i + 1) / total_tickers
             progress_bar.progress(progress_value, text=f"{name} ({ticker}) 로드 중...")
             
-            # NASDAQ 데이터 로드 시 ticker 변경
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             df.index = df.index.date
@@ -198,7 +198,7 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (변경 없음)
+# 2. 감성 분석 모델 로드 및 함수 
 # ------------------------
 @st.cache_resource
 def load_sentiment_model():
@@ -267,7 +267,7 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ------------------------
-# 3. 피처 엔지니어링 함수 (DXY, NASDAQ/S&P 비율, SP500_EPS 추가)
+# 3. 피처 엔지니어링 함수
 # ------------------------
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
@@ -284,7 +284,7 @@ def create_features(df_merge):
     # 2. 시계열 지연(Lag) 피처 생성
     lags = [1, 3, 5]
     
-    # Lag 피처를 생성할 팩터 목록 (새로운 팩터 추가)
+    # Lag 피처를 생성할 팩터 목록 (새로운 팩터 포함)
     lag_factors = ['Daily_Return', 'VIX', 'FGI', 'Sentiment_Score', 
                    'YIELD_CURVE', 'BBB_OAS', 'WTI', 'GOLD', 'COPPER',
                    'DXY', 'NASDAQ_SP500_Ratio', 'SP500_EPS'] 
@@ -308,7 +308,7 @@ def create_features(df_merge):
     return df, features
 
 # ------------------------
-# 4. Streamlit 실행 로직 (앙상블 모델 추가)
+# 4. Streamlit 실행 로직
 # ------------------------
 
 st.markdown("---")
@@ -332,7 +332,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
     trends_keywords = ["S&P 500", "Recession"]
     trends_df = get_google_trends(trends_keywords, start_date, end_date)
     
-    # 1-2. 뉴스 감성 분석 (코드 변경 없음)
+    # 1-2. 뉴스 감성 분석
     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
         all_news = get_naver_news_api(news_query, display=100)
         
@@ -412,7 +412,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
         rf_model = RandomForestRegressor(**RF_TUNED_PARAMS)
 
         # Soft Voting 앙상블 모델 정의
-        # 튜닝된 가중치를 모른다고 가정하고 동일 가중치 부여 (weights=[1, 1, 1])
         voting_model = VotingRegressor(
             estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
             weights=[1, 1, 1] 
