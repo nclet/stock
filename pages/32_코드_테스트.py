@@ -132,7 +132,7 @@ def get_google_trends(keywords, start_date, end_date):
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
         
         # ⚠️ HTTP 429 오류 방지를 위해 지연 시간을 15초로 늘림
-        time.sleep(15) 
+        time.sleep(10) 
         
         df = pytrends.interest_over_time()
         
