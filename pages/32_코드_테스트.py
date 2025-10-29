@@ -8,7 +8,7 @@ import plotly.express as px
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit # TimeSeriesSplit 추가
+from sklearn.model_selection import TimeSeriesSplit 
 import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
@@ -20,9 +20,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pytrends.request import TrendReq
 import re
-import shap # SHAP 추가
-import matplotlib.pyplot as plt # Matplotlib 추가 (SHAP, Heatmap 용)
-import seaborn as sns # Heatmap 용
+import shap 
+import matplotlib.pyplot as plt 
+import seaborn as sns 
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -128,8 +128,12 @@ def get_google_trends(keywords, start_date, end_date):
     try:
         pytrends = TrendReq(hl='en-US', tz=360) 
         timeframe = f"{start_date.strftime('%Y-%m-%d')} {end_date.strftime('%Y-%m-%d')}"
+        
         pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo='')
-        time.sleep(10) 
+        
+        # ⚠️ HTTP 429 오류 방지를 위해 지연 시간을 15초로 늘림
+        time.sleep(15) 
+        
         df = pytrends.interest_over_time()
         
         if df.empty or 'isPartial' in df.columns:
@@ -140,7 +144,9 @@ def get_google_trends(keywords, start_date, end_date):
         df = df.rename(columns={col: f'Trend_{col}' for col in df.columns})
         return df
     except Exception as e:
-        st.warning(f"⚠️ Google Trends 데이터 로드 오류: {e}. PyTrends 설치 상태 확인 필요.")
+        # 오류 메시지에 429 코드 내용을 명시
+        st.error(f"❌ Google Trends 데이터 로드 오류: {e} - Rate Limit에 도달했을 수 있습니다 (429).")
+        st.info("PyTrends가 Google API 호출을 너무 자주 시도했을 때 발생합니다. 잠시 후 재시도하거나, 지연 시간(sleep)을 늘려보세요.")
         return pd.DataFrame()
 
 
@@ -187,7 +193,7 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (생략 없이 유지)
+# 2. 감성 분석 모델 로드 및 함수 
 # ------------------------
 @st.cache_resource
 def load_sentiment_model():
@@ -300,7 +306,7 @@ col1, col2, col3 = st.columns([1.5, 1, 1])
 with col1:
     news_query = st.text_input("📰 뉴스 감성 분석 키워드", value="미국 증시 전망", help="네이버 뉴스 검색에 사용될 키워드 (예: S&P 500, 미국 주식, 연준)")
 with col2:
-    start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365 * 2)) # 2년으로 기간 확장
+    start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365 * 2)) 
 with col3:
     end_date = st.date_input("분석 종료일", datetime.now())
     
@@ -323,9 +329,9 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
             filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
             st.success("✅ 뉴스 감성 분석 완료!")
             
-            st.subheader("📰 분석에 사용된 뉴스 기사 및 감성 점수")
-            st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values('Date', ascending=False).head(200), use_container_width=True)
-            st.markdown("---")
+            # st.subheader("📰 분석에 사용된 뉴스 기사 및 감성 점수")
+            # st.dataframe(filtered_news[['Date', 'Title', 'Sentiment_Score']].sort_values('Date', ascending=False).head(200), use_container_width=True)
+            # st.markdown("---")
 
     # 2. 데이터 병합
     df_merge = market_df
@@ -367,8 +373,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
     RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
 
     # 4-2. 시계열 교차검증 (TimeSeriesSplit)
-    st.subheader("📊 시계열 교차검증 (TimeSeriesSplit)")
-    n_splits = 5 # 폴드 수
+    st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
+    
+    # ⚠️ 폴드 수를 3으로 수정
+    n_splits = 3 
     tscv = TimeSeriesSplit(n_splits=n_splits)
     
     r2_scores_lgbm = []
@@ -388,6 +396,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
         avg_r2 = np.mean(r2_scores_lgbm)
         st.info(f"✅ TimeSeriesSplit 평균 R² (LGBM 기준): **{avg_r2:.4f}**")
         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
+    st.markdown("---")
 
     # 4-3. 최종 앙상블 모델 훈련
     with st.spinner("🚀 최종 Soft Voting 앙상블 모델 훈련 중..."):
@@ -402,7 +411,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
         voting_model.fit(X_train_df, y_train) 
         
     # 잔차 기반 신뢰구간 계산 및 예측
-    lgbm_model.fit(X_train_df, y_train) # LGBM 모델 재훈련
+    lgbm_model.fit(X_train_df, y_train)
     y_train_pred_lgbm = lgbm_model.predict(X_train_df)
     residuals = y_train - y_train_pred_lgbm
     residual_std = residuals.std()
@@ -416,7 +425,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
     low_ci = next_day_return_pred - CI_FACTOR
     high_ci = next_day_return_pred + CI_FACTOR
     
-    # 5. 결과 출력 (변경 없음)
+    # 5. 결과 출력 
     mse = mean_squared_error(y_test, y_test_pred)
     r2 = r2_score(y_test, y_test_pred)
 
@@ -448,31 +457,25 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
         
     st.markdown("---")
 
-    # 6. SHAP 해석 추가 (모델 예측 설명)
+    # 6. SHAP 해석 추가 
     st.header("💡 예측 해석: SHAP (SHapley Additive exPlanations)")
     st.markdown("**SHAP**을 사용하여 모델이 최종 예측(`{:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)".format(next_day_return_pred))
     
     try:
-        # SHAP Explainer 생성 (트리 계열 모델에 최적화된 TreeExplainer 사용)
         explainer = shap.TreeExplainer(lgbm_model)
         
-        # 마지막 예측 데이터 포인트에 대한 SHAP 값 계산
-        # X_train_df의 마지막 행을 배경 데이터로 사용 (LGBM 모델이 앙상블의 첫 번째 요소이므로 해당 모델 사용)
         last_input = X_test_df.iloc[-1].values.reshape(1, -1)
         shap_values = explainer.shap_values(last_input)
         
-        # SHAP 결과를 DataFrame으로 정리
         shap_df = pd.DataFrame({
             'Feature': X_test_df.columns,
             'SHAP Value': shap_values[0],
             'Feature Value': last_input[0]
         })
         
-        # 절대값 기준으로 정렬하여 Top 5 추출
         shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
         shap_df = shap_df.sort_values('Abs SHAP', ascending=False).head(5)
 
-        # Plotly를 사용하여 SHAP Bar Plot 생성
         fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
                            color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
                            title=f"최종 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
@@ -482,31 +485,57 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
 
     except Exception as e:
         st.warning(f"⚠️ SHAP 해석 로드 중 오류 발생: {e}. SHAP 라이브러리가 올바르게 설치되었는지 확인하세요.")
+    st.markdown("---")
 
 
     # 7. 피처 상관관계 히트맵 시각화 추가
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("데이터셋에 사용된 모든 수치형 피처 간의 상관관계를 시각적으로 확인합니다.")
 
-    # 수치형 데이터만 포함하는 DataFrame 생성
     correlation_df = df_ml[features + ['Next_Day_Return']].copy()
     
-    # Heatmap 생성
-    plt.figure(figsize=(18, 15))
-    corr_matrix = correlation_df.corr()
+    N_TOP_FEATURES = 20 
     
-    # 상관계수 절대값 상위 N개 피처만 표시 (선택적으로)
-    N_TOP_FEATURES = 20 # 상위 20개 피처만 기준으로 자르기
-    cols = corr_matrix.nlargest(N_TOP_FEATURES, 'Next_Day_Return')['Next_Day_Return'].index
-    corr_matrix_subset = correlation_df[cols].corr()
+    # Plotly로 히트맵 생성 (Streamlit 환경에 더 최적화)
+    try:
+        corr_matrix = correlation_df.corr()
+        # 타겟과의 상관관계 절대값이 높은 순으로 20개 피처를 선택하여 서브셋 생성
+        cols = corr_matrix.nlargest(N_TOP_FEATURES, 'Next_Day_Return')['Next_Day_Return'].index
+        corr_matrix_subset = correlation_df[cols].corr()
+        
+        # Plotly Express Heatmap
+        fig_heatmap = px.imshow(corr_matrix_subset, 
+                                 x=corr_matrix_subset.columns, 
+                                 y=corr_matrix_subset.columns,
+                                 color_continuous_scale='RdBu_r', 
+                                 title=f'상위 {N_TOP_FEATURES}개 피처 간의 상관관계 히트맵')
+        fig_heatmap.update_xaxes(side="top")
+        
+        # 주석 추가 (상관계수 값)
+        annotations = []
+        for i, row in enumerate(corr_matrix_subset.values):
+            for j, val in enumerate(row):
+                annotations.append(
+                    dict(x=corr_matrix_subset.columns[j], y=corr_matrix_subset.columns[i], 
+                         text=f"{val:.2f}", showarrow=False, font=dict(color="black" if abs(val) < 0.6 else "white"))
+                )
+        fig_heatmap.update_layout(annotations=annotations, height=800)
+        
+        st.plotly_chart(fig_heatmap, use_container_width=True)
 
-    # Matplotlib + Seaborn으로 히트맵 플롯
-    fig, ax = plt.subplots(figsize=(15, 12))
-    sns.heatmap(corr_matrix_subset, annot=True, fmt=".2f", cmap='coolwarm', linewidths=.5, cbar_kws={'shrink': .8}, ax=ax)
-    ax.set_title(f'상위 {N_TOP_FEATURES}개 피처와 타겟 간의 상관관계 히트맵', fontsize=16)
-    
-    # Streamlit에 Matplotlib 그림 표시
-    st.pyplot(fig)
+    except Exception as e:
+        # Matplotlib/Seaborn 대체 (이전 코드 방식)
+        plt.figure(figsize=(18, 15))
+        corr_matrix = correlation_df.corr()
+        cols = corr_matrix.nlargest(N_TOP_FEATURES, 'Next_Day_Return')['Next_Day_Return'].index
+        corr_matrix_subset = correlation_df[cols].corr()
+
+        fig, ax = plt.subplots(figsize=(15, 12))
+        sns.heatmap(corr_matrix_subset, annot=True, fmt=".2f", cmap='coolwarm', linewidths=.5, cbar_kws={'shrink': .8}, ax=ax)
+        ax.set_title(f'상위 {N_TOP_FEATURES}개 피처와 타겟 간의 상관관계 히트맵 (Seaborn)', fontsize=16)
+        st.pyplot(fig)
+        
+    st.markdown("---")
 
 
     # 8. 주요 매크로 팩터 추이 시각화 (변경 없음)
@@ -551,7 +580,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", 
     fig_pred.update_layout(title=f"테스트 기간 S&P 500 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 10. 팩터 중요도 시각화 (LGBM 모델의 중요도 사용)
+    # 10. 팩터 중요도 시각화 
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
     importance_df = pd.DataFrame({
