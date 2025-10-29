@@ -404,7 +404,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
     
     # ⚠️ n_splits 2로 축소
-    n_splits = 2 
+    n_splits = 3 
     tscv = TimeSeriesSplit(n_splits=n_splits)
     
     r2_scores_lgbm = []
