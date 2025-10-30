@@ -194,15 +194,18 @@ def analyze_sentiment(text):
     positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
     return positive_score - negative_score
 
-def get_naver_news_api(query, display=30, start=1, sort="date"):
-    """Fetches data from Naver News Search API (미국 증시 관련 키워드 검색)."""
-    # ... (네이버 뉴스 API 로직은 동일) ...
+def get_naver_news_api(query, display=100, start=1, sort="date"): # display 기본값을 100으로 설정
+    """
+    Naver News Search API에서 데이터를 가져옵니다. 
+    API는 한 번에 최대 100개의 기사만 제공합니다.
+    """
     try:
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
     except KeyError:
         st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
-        return pd.DataFrame()
+        # 오류 시 컬럼을 명시한 빈 DataFrame 반환하여 KeyError 방지
+        return pd.DataFrame(columns=['Date', 'Title']) 
 
     enc_query = urllib.parse.quote(query)
     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
@@ -210,6 +213,7 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
 
     try:
         response = requests.get(url, headers=headers)
+        # ⚠️ 400 Bad Request 등 오류 발생 시 예외 처리
         response.raise_for_status() 
         data = response.json()
         items = data.get('items', [])
@@ -221,10 +225,13 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
             except Exception: pub_date_dt = None
             news_data.append({'Date': pub_date_dt, 'Title': title})
         return pd.DataFrame(news_data)
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"❌ 네이버 API 요청 실패: {http_err} - 요청 설정(display/start)을 확인하세요.")
     except Exception as e:
         st.error(f"❌ 네이버 API 요청 실패: {e}")
-        return pd.DataFrame()
-
+        
+    # 오류 발생 시 컬럼을 명시한 빈 DataFrame 반환
+    return pd.DataFrame(columns=['Date', 'Title'])
 # ------------------------
 # 3. 피처 엔지니어링 함수
 # ------------------------
@@ -308,14 +315,32 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (Google Trends 제
     
     # 1-2. 뉴스 감성 분석
     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
-        # ⚠️ display=200으로 기사 수 상향
-        all_news = get_naver_news_api(news_query, display=200) 
-        load_start_date = start_date - timedelta(days=50)
-        filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
         
-        if not filtered_news.empty:
-            filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-            st.success("✅ 뉴스 감성 분석 완료! (기사 수 200개)")
+        # ⚠️ 1회차 요청 (start=1, display=100)
+        news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
+        
+        # ⚠️ 2회차 요청 (start=101, display=100)
+        # 네이버 API는 start를 1부터 시작하며, 100개 요청 후 다음 시작 위치는 101입니다.
+        news_batch_2 = get_naver_news_api(news_query, display=100, start=101)
+        
+        # 두 배치를 병합
+        all_news = pd.concat([news_batch_1, news_batch_2]).reset_index(drop=True)
+        
+        # 빈 데이터프레임이 반환될 경우의 방어 로직 (KeyError 방지)
+        if all_news.empty:
+            st.warning("⚠️ 네이버 API로부터 유효한 기사 데이터를 수집하지 못했습니다. 감성 분석을 건너뜁니다.")
+            filtered_news = pd.DataFrame(columns=['Date', 'Sentiment_Score'])
+        else:
+            load_start_date = start_date - timedelta(days=50)
+            # 수집된 기사를 기간별로 필터링
+            filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
+            
+            if not filtered_news.empty:
+                # 감성 분석 실행
+                filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
+                st.success(f"✅ 뉴스 감성 분석 완료! (총 {len(filtered_news)}개 기사 분석)")
+            else:
+                st.warning("⚠️ 지정된 기간에 해당하는 기사가 없습니다. 감성 분석을 건너뜁니다.")
             
 
     # 2. 데이터 병합
