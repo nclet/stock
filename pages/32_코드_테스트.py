@@ -34,7 +34,7 @@ st.markdown("""
 """)
 
 # ------------------------
-# 0. 매크로 데이터 수집 함수 (기존과 동일)
+# 0. 매크로 데이터 수집 함수
 # ------------------------
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
@@ -106,7 +106,7 @@ def get_fear_greed_index(limit=1095):
         return pd.DataFrame()
 
 # ------------------------
-# 1. 팩터 및 증시 데이터 로드 (기존과 동일)
+# 1. 팩터 및 증시 데이터 로드
 # ------------------------
 @st.cache_data(show_spinner="⏳ 주가, 원자재, DXY, NASDAQ 데이터 로드 중...")
 def load_market_data(start_date, end_date):
@@ -211,7 +211,7 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
     return pd.DataFrame(columns=['Date', 'Title'])
 
 # ------------------------
-# 3. 피처 엔지니어링 함수 (🌟 타겟 변수 변경)
+# 3. 피처 엔지니어링 함수 (10일 누적 수익률 타겟 설정)
 # ------------------------
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
@@ -222,7 +222,6 @@ def create_features(df_merge):
     
     # 🌟 타겟 변수를 10일 후 누적 수익률로 변경
     df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
-    # Next_Day_Return은 제거하고 1일 수익률은 Daily_Return으로만 유지
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
     lags = [1, 3, 5, 10] # 예측 기간이 길어졌으므로 lag 10 추가
@@ -252,8 +251,9 @@ def create_features(df_merge):
 # 4. Streamlit 실행 로직 (LGBM 피처 선택 및 네이버 2회 호출 적용)
 # ------------------------
 
+# 🌟 오류 해결: _features 인수를 추가하여 피처 목록 변경 시 모델이 재훈련되도록 강제합니다.
 @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
-def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params):
+def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params, _features):
     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
     xgb_model = xgb.XGBRegressor(**_xgb_params)
     rf_model = RandomForestRegressor(**_rf_params)
@@ -262,6 +262,7 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
         estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
         weights=[1, 1, 1] 
     )
+    # XGBoost가 훈련될 때 X_train_df의 피처 이름을 저장합니다.
     voting_model.fit(_X_train_df, _y_train) 
     
     lgbm_shap_model = lgb.LGBMRegressor(**_lgbm_params)
@@ -293,10 +294,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     
     # 1-2. 뉴스 감성 분석 (2회 요청 로직 적용)
     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
-        
-        # 1회차 요청 (start=1, display=100)
         news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
-        # 2회차 요청 (start=101, display=100)
         news_batch_2 = get_naver_news_api(news_query, display=100, start=101)
         
         all_news = pd.concat([news_batch_1, news_batch_2]).drop_duplicates(subset=['Title']).reset_index(drop=True)
@@ -327,9 +325,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
-    # Data Sampling: 최근 500개 데이터 포인트로 제한 (약 2년)
     df_ml = df_ml.tail(500)
-    
     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
 
     if len(df_ml) <= 100:
@@ -337,13 +333,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         st.stop()
         
     X_full = df_ml[features_full]
-    # 🌟 타겟 변수 변경
     y = df_ml['Return_10D'] 
     
     # 4. 피처 선택: LightGBM 중요도 기반
     st.subheader("⚙️ 피처 선택 (LightGBM 중요도 기반 Top 15)")
     
-    # 모델 파라미터 정의
     LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
     XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
     RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
@@ -396,7 +390,15 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
     st.markdown("---")
 
-    voting_model, lgbm_model = train_voting_model(X_train_df, y_train, LGBM_PARAMS, XGB_PARAMS, RF_PARAMS)
+    # 🌟 수정된 호출: 피처 목록을 전달하여 캐싱 문제를 해결합니다.
+    voting_model, lgbm_model = train_voting_model(
+        X_train_df, 
+        y_train, 
+        LGBM_PARAMS, 
+        XGB_PARAMS, 
+        RF_PARAMS, 
+        tuple(features) 
+    )
         
     y_train_pred_lgbm = lgbm_model.predict(X_train_df)
     residuals = y_train - y_train_pred_lgbm
@@ -407,11 +409,13 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
     # 다음 10일 예측 및 CI 계산
     last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
-    next_day_return_pred = voting_model.predict(last_data_scaled)[0]
+    last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
+    
+    next_day_return_pred = voting_model.predict(last_data_df)[0]
     low_ci = next_day_return_pred - CI_FACTOR
     high_ci = next_day_return_pred + CI_FACTOR
     
-    # 6. 결과 출력 (🌟 제목 및 설명 변경)
+    # 6. 결과 출력
     mse = mean_squared_error(y_test, y_test_pred)
     r2 = r2_score(y_test, y_test_pred)
 
@@ -423,7 +427,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     def format_pred_value(value): return f"{value:+.2f}%"
 
     with col_pred1:
-        # 🌟 예측 결과 텍스트 변경
         st.metric(label="📊 향후 10거래일 S&P 500 예측 수익률", value=format_pred_value(next_day_return_pred), delta=f"90% CI: {low_ci:+.2f}% ~ {high_ci:+.2f}%")
     with col_pred2:
         st.metric(label="✅ 테스트 R² (앙상블)", value=f"{r2:.2f}", help=f"MSE: {mse:.4f}. 1에 가까울수록 적합도가 높음.")
@@ -444,19 +447,19 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         
     st.markdown("---")
 
-    # 7. SHAP 해석 추가 (🌟 제목 수정)
+    # 7. SHAP 해석 추가
     st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
     st.markdown("**SHAP**을 사용하여 모델이 최종 $\mathbf{10}$일 예측(`{:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)".format(next_day_return_pred))
     
     try:
         explainer = shap.TreeExplainer(lgbm_model) 
-        last_input = X_test_df.iloc[-1].values.reshape(1, -1)
-        shap_values = explainer.shap_values(last_input)
+        # last_data_df는 이미 피처 이름을 가지고 있으므로 바로 사용
+        shap_values = explainer.shap_values(last_data_df)
         
         shap_df = pd.DataFrame({
-            'Feature': X_test_df.columns,
+            'Feature': last_data_df.columns,
             'SHAP Value': shap_values[0],
-            'Feature Value': last_input[0]
+            'Feature Value': last_data_df.iloc[0].values
         })
         
         shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
@@ -474,11 +477,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown("---")
 
 
-    # 8. 피처 상관관계 히트맵 시각화 추가 (변동 없음)
+    # 8. 피처 상관관계 히트맵 시각화 추가
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟(`Return_10D`) 간의 상관관계를 시각적으로 확인합니다.")
 
-    # ... (히트맵 시각화 로직은 이전과 동일하게 유지) ...
     correlation_df = df_ml[features + ['Return_10D']].copy().rename(columns={'Return_10D': 'Target_10D_Return'})
     N_TOP_FEATURES = len(features) 
     
@@ -507,8 +509,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown("---")
 
 
-    # 9. 주요 매크로 팩터 추이 시각화 (변동 없음)
-    # ... (매크로 팩터 시각화 로직은 이전과 동일하게 유지) ...
+    # 9. 주요 매크로 팩터 추이 시각화
     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
     
     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
@@ -532,7 +533,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.plotly_chart(fig_macro, use_container_width=True)
 
 
-    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델, 🌟 설명 변경)
+    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
     y_test_df = pd.DataFrame({
@@ -550,7 +551,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     fig_pred.update_layout(title=f"테스트 기간 S&P 500 10일 누적 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 11. 팩터 중요도 시각화 (변동 없음)
+    # 11. 팩터 중요도 시각화
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
     importance_df = pd.DataFrame({
@@ -567,7 +568,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
 st.markdown("---")
 st.warning("⚠️ **면책 조항:** 이 모델은 교육 및 분석 목적으로만 제공됩니다. 실제 투자에 사용하기 전에 충분한 검증과 리스크 분석을 수행해야 합니다.")
-
 # import streamlit as st
 # import pandas as pd
 # import numpy as np
