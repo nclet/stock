@@ -449,7 +449,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
     # 7. SHAP 해석 추가
     st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
-    st.markdown("**SHAP**을 사용하여 모델이 최종 $\mathbf{10}$일 예측(`{:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)".format(next_day_return_pred))
+    st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)")
     
     try:
         explainer = shap.TreeExplainer(lgbm_model) 
