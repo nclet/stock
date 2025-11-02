@@ -26,7 +26,7 @@ except ImportError:
 # FRED API 키 로드 (secrets.toml에서)
 # ECOS 관련 코드는 모두 삭제되었습니다.
 try:
-    FRED_API_KEY = st.secrets["FRED_API_KEY"]
+    FRED_API_KEY = st.secrets['fred']["FRED_API_KEY"]
     import pandas_datareader.data as web # pandas_datareader는 FRED용으로 유지
 except ImportError:
     st.error("""
