@@ -12,7 +12,7 @@ st.set_page_config(page_title="미국-일본 10년물 금리차 및 경제 지�
 
 # FRED API 키를 st.secrets에서 불러옵니다.
 try:
-    FRED_API_KEY = st.secrets["FRED_API_KEY"]
+    FRED_API_KEY = st.secrets['fred']["FRED_API_KEY"]
 except KeyError:
     st.error("🚨 FRED API 키('FRED_API_KEY')가 Streamlit Secrets에 설정되어 있지 않습니다.")
     st.info("Streamlit Cloud 대시보드의 'Settings' -> 'Secrets' 메뉴에서 'FRED_API_KEY'를 설정해주세요.")
