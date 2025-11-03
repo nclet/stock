@@ -11,7 +11,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit 
 import urllib.parse
 from json.decoder import JSONDecodeError
-import FinanceDataReader as fdr
+import FinanceDataReader as fdr # FinanceDataReader 사용
 import lightgbm as lgb
 import xgboost as xgb
 from sklearn.ensemble import RandomForestRegressor, VotingRegressor
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns 
 
 # ------------------------
-# ✨ 상수 및 페이지 설정 (코스피 맞춤 수정)
+# ✨ 상수 및 페이지 설정
 # ------------------------
 st.set_page_config(page_title="🇰🇷 코스피 매크로 추세 예측", layout="wide")
 st.title("🐯 코스피 추세 예측 모델 (TS Split 시간 최적화 적용)")
@@ -35,9 +35,8 @@ st.markdown("""
 """)
 
 # ------------------------
-# 0. 매크로 데이터 수집 함수 (한국 증시에 맞게 수정)
+# 0. 매크로 데이터 수집 함수 (FRED)
 # ------------------------
-# FRED 데이터는 그대로 사용 (미국 금리, 유동성 등은 여전히 한국 증시에 중요)
 @st.cache_data(show_spinner="⏳ FRED 데이터 (미국 금리차, M2, BBB OAS, S&P 500 EPS) 로드 중...")
 def get_fred_data():
     """FRED에서 미국 주요 경제 지표를 병렬로 가져옵니다."""
@@ -86,7 +85,7 @@ def get_fred_data():
 
     if '10Y' in results and '2Y' in results:
         df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
-        results['US_YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('US_YIELD_CURVE').to_frame() # 이름 변경
+        results['US_YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('US_YIELD_CURVE').to_frame() 
     return results
 
 @st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
@@ -108,7 +107,7 @@ def get_fear_greed_index(limit=1095):
 
 
 # ------------------------
-# 1. 팩터 및 증시 데이터 로드 (코스피 맞춤 수정)
+# 1. 팩터 및 증시 데이터 로드 (FinanceDataReader 티커 수정)
 # ------------------------
 
 @st.cache_data(show_spinner="⏳ KOSPI, KOSDAQ, V-KOSPI, 원자재, 환율 데이터 로드 중...")
@@ -116,11 +115,12 @@ def load_market_data(start_date, end_date):
     """KOSPI, KOSDAQ, V-KOSPI, WTI, Copper, Gold, 원/달러 환율 데이터를 로드합니다."""
     load_start_date = start_date - timedelta(days=50) 
     
-    # 🌟 KOSPI, KOSDAQ, V-KOSPI, 국고채, 환율, 원자재로 변경
+    # 🌟 안정적인 FDR 티커로 변경: KS200VIX와 KRCD010Y
     tickers = {
-        '^KS11': 'KOSPI_Close', '^KQ11': 'KOSDAQ_Close', '^VKOSPI': 'VKOSPI',
-        'KR10YT=RR': 'KR_Bond_10Y', # 한국 국고채 10년물
-        'KRW=X': 'KR_FX_KRWUSD',    # 원/달러 환율
+        '^KS11': 'KOSPI_Close', '^KQ11': 'KOSDAQ_Close', 
+        'KS200VIX': 'VKOSPI',    # V-KOSPI 대체 (코스피 200 VIX)
+        'KRCD010Y': 'KR_Bond_10Y', # 한국 국고채 10년물 (FDR 안정 티커)
+        'KRW=X': 'KR_FX_KRWUSD',    
         'CL=F': 'WTI', 'GC=F': 'GOLD', 'HG=F': 'COPPER' 
     }
     
@@ -133,16 +133,19 @@ def load_market_data(start_date, end_date):
             progress_value = (i + 1) / total_tickers
             progress_bar.progress(progress_value, text=f"{name} ({ticker}) 로드 중...")
             
-            # 🌟 원/달러 환율(KRW=X)은 YFinance에서 제공하는 Ticker이므로 fdr.DataReader로 로드
+            # 모든 티커를 fdr.DataReader로 로드
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             
+            # 데이터 컬럼 처리: 'Close', 'Price' 또는 첫 번째 컬럼 사용
             if 'Close' in df.columns:
                  df = df[['Close']].rename(columns={'Close': name})
-            elif 'Price' in df.columns: # 채권/환율 데이터는 'Price' 컬럼일 수 있음
+            elif 'Price' in df.columns:
                  df = df[['Price']].rename(columns={'Price': name})
-            else:
+            elif not df.empty:
                  # 종가가 없는 경우 첫 번째 컬럼 사용 (예: 국고채 수익률)
                  df = df.iloc[:, 0].to_frame(name=name)
+            else:
+                 raise ValueError("로드된 데이터프레임에 유효한 컬럼이 없습니다.")
 
             df.index = df.index.date
             all_data.append(df)
@@ -159,9 +162,8 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (네이버 API)
+# 2. 감성 분석 모델 로드 및 함수 
 # ------------------------
-# KR-FinBert 모델과 함수는 한국어로 동일하게 사용 (수정 없음)
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
@@ -229,23 +231,20 @@ def get_naver_news_api(query, display=30, start=1, sort="date"):
         return pd.DataFrame()
 
 # ------------------------
-# 3. 피처 엔지니어링 함수 (코스피 맞춤 수정)
+# 3. 피처 엔지니어링 함수
 # ------------------------
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
     df = df_merge.copy()
     
-    # 🌟 KOSDAQ/KOSPI 비율로 변경
     if 'KOSDAQ_Close' in df.columns and 'KOSPI_Close' in df.columns:
         df['KOSDAQ_KOSPI_Ratio'] = df['KOSDAQ_Close'] / df['KOSPI_Close']
     
-    # 🌟 타겟 변수 및 일일 수익률을 KOSPI 기준으로 변경
     df['Next_Day_Return'] = df['KOSPI_Close'].pct_change().shift(-1) * 100
     df['Daily_Return'] = df['KOSPI_Close'].pct_change() * 100
 
     lags = [1, 3, 5]
     
-    # 🌟 팩터 목록을 코스피 관련 지표로 업데이트
     lag_factors = ['Daily_Return', 'VKOSPI', 'FGI', 'Sentiment_Score',  
                    'US_YIELD_CURVE', 'KR_Bond_10Y', 'BBB_OAS', 
                    'WTI', 'GOLD', 'COPPER', 
@@ -256,16 +255,13 @@ def create_features(df_merge):
             for lag in lags:
                 df[f'{factor}_Lag_{lag}'] = df[factor].shift(lag)
                 
-    # 🌟 VIX_Change_5D를 VKOSPI_Change_5D로 변경
     if 'VKOSPI' in df.columns:
         df['VKOSPI_Change_5D'] = df['VKOSPI'].diff(5)
     
-    # 🌟 SP500_SMA_20을 KOSPI_SMA_20로 변경
     df['KOSPI_SMA_20'] = df['KOSPI_Close'].rolling(window=20).mean()
     
     df = df.dropna()
     
-    # 🌟 피처 목록 업데이트
     base_features = [col for col in df.columns if not col.endswith(('Return', 'Close')) and 'KOSPI_' not in col and 'KOSDAQ_' not in col]
     features = [f for f in base_features + ['KOSPI_Close'] if f in df.columns and ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'KR_FX_KRWUSD', 'KOSDAQ_KOSPI_Ratio'])]
     features = list(set(features))
@@ -298,7 +294,6 @@ st.markdown("---")
 # UI 입력 요소
 col1, col2, col3 = st.columns([1.5, 1, 1])
 with col1:
-    # 🌟 코스피 관련 키워드로 변경
     news_query = st.text_input("📰 뉴스 감성 분석 키워드", 
                                value="코스피 전망|반도체 전망|삼성전자 실적|SK하이닉스 실적", 
                                help="네이버 뉴스 검색에 사용될 키워드 (예: 코스피, 반도체, 삼성전자)")
@@ -313,7 +308,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     market_df = load_market_data(start_date, end_date)
     fred_data = get_fred_data()
     fg_df = get_fear_greed_index(limit=365 * 3)
-    # 🌟 Google Trends는 한국어 키워드나 'kospi'로 변경 필요하지만, 일단 제외 (PyTrends의 한계)
     
     # 1-2. 뉴스 감성 분석
     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
@@ -331,7 +325,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     df_merge = market_df
     if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
     for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
-    # if not trends_df.empty: df_merge = pd.merge(df_merge, trends_df, left_index=True, right_index=True, how='left') # Trends 제외
     if not filtered_news.empty:
         news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().to_frame()
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
@@ -416,8 +409,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
 
     # 다음 날 예측 및 CI 계산
     last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
-    
-    # 🌟 XGBoost 예측에 필요한 DataFrame 형태 변환 (피처 이름 포함)
     last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
     
     next_day_return_pred = voting_model.predict(last_data_df)[0]
@@ -436,13 +427,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     def format_pred_value(value): return f"{value:+.2f}%"
 
     with col_pred1:
-        # 🌟 KOSPI 예측으로 변경
         st.metric(label="📊 다음 거래일 KOSPI 예측 수익률", value=format_pred_value(next_day_return_pred), delta=f"90% CI: {low_ci:+.2f}% ~ {high_ci:+.2f}%")
     with col_pred2:
         st.metric(label="✅ 테스트 R² (앙상블)", value=f"{r2:.2f}", help=f"MSE: {mse:.4f}. 1에 가까울수록 적합도가 높음.")
     with col_pred3:
-        # 🌟 VKOSPI 지수로 변경
-        if 'VKOSPI' in df_ml.columns:
+        if 'VKOSPI' in df_ml.columns and 'VKOSPI_Change_5D' in df_ml.columns:
             current_vix = df_ml['VKOSPI'].iloc[-1]
             vix_trend = "하락 (강세) 🟢" if df_ml['VKOSPI_Change_5D'].iloc[-1] < 0 else "상승 (약세) 🔴"
             st.metric(label="🔥 현재 V-KOSPI 지수", value=f"{current_vix:.2f}", delta=vix_trend)
@@ -464,11 +453,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
 
     # 7. SHAP 해석 추가 
     st.header("💡 예측 해석: SHAP (SHapley Additive exPlanations)")
-    st.markdown("**SHAP**을 사용하여 모델이 최종 예측(`{:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)".format(next_day_return_pred))
+    # 💡 오류 수정: f-string 사용 및 LaTeX 이스케이프 반영
+    st.markdown(f"**SHAP**을 사용하여 모델이 최종 예측(`{next_day_return_pred:+.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)")
     
     try:
         explainer = shap.TreeExplainer(lgbm_model) 
-        # 🌟 last_data_df 사용 (XGBoost 오류 방지용)
         shap_values = explainer.shap_values(last_data_df)
         
         shap_df = pd.DataFrame({
@@ -492,7 +481,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     st.markdown("---")
 
 
-    # 8. 피처 상관관계 히트맵 시각화 추가 (수정 없음)
+    # 8. 피처 상관관계 히트맵 시각화 추가
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("훈련에 사용된 **축소된 Top 15 피처**와 타겟 간의 상관관계를 시각적으로 확인합니다.")
 
@@ -525,22 +514,22 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     st.markdown("---")
 
 
-    # 9. 주요 매크로 팩터 추이 시각화 (코스피 맞춤 수정)
+    # 9. 주요 매크로 팩터 추이 시각화
     st.header("📊 주요 매크로 팩터 추이 (KOSPI와 비교)")
     
     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
 
     fig_macro = go.Figure()
     
-    # 🌟 KOSPI 지표 사용
     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['KOSPI_Close'], name='KOSPI (좌측 축)', line=dict(color='#1f77b4', width=2), yaxis='y1'))
-    # 🌟 미국 금리차 사용
-    fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['US_YIELD_CURVE'], name='미국 장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
-    fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")     
-    # 🌟 원/달러 환율 사용
+    
+    if 'US_YIELD_CURVE' in df_macro_plot.columns:
+        fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['US_YIELD_CURVE'], name='미국 장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
+        fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")     
+    
     if 'KR_FX_KRWUSD' in df_macro_plot.columns:
         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['KR_FX_KRWUSD'], name='원/달러 환율', line=dict(color='purple', width=1.5), yaxis='y3', opacity=0.8))
-    # 🌟 국고채 10년물 사용
+    
     if 'KR_Bond_10Y' in df_macro_plot.columns:
         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['KR_Bond_10Y'], name='국고채 10년물 수익률', line=dict(color='green', width=1.5), yaxis='y4', opacity=0.8))
     
@@ -569,11 +558,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화)", type
     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='markers', name='실제 수익률', marker=dict(color='blue', size=5, opacity=0.8)))
     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='앙상블 예측 수익률 (Median)', line=dict(color='red', width=2)))
 
-    # 🌟 KOSPI 예측 결과로 변경
     fig_pred.update_layout(title=f"테스트 기간 KOSPI 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 11. 팩터 중요도 시각화 (수정 없음)
+    # 11. 팩터 중요도 시각화
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
     importance_df = pd.DataFrame({
