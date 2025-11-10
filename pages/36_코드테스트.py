@@ -200,6 +200,13 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         response.raise_for_status() 
         data = response.json()
         items = data.get('items', [])
+        # 🌟🌟🌟 새로운 디버깅 로직 추가 🌟🌟🌟
+        if not items:
+            # st.error 대신 st.info를 사용하여 API가 정상 응답했으나 결과가 0개임을 표시
+            st.info(f"✅ 네이버 API (쿼리: '{query[:20]}...')가 **정상적으로 응답했으나**, 검색 결과가 **0건**입니다. (키워드를 확인하거나, API 사용량 및 기간을 확인하세요.)")
+            return pd.DataFrame(columns=['Date', 'Title'])
+        # 🌟🌟🌟 디버깅 로직 끝 🌟🌟🌟
+        
         news_data = []
         for item in items:
             title = re.sub('<[^<]+?>', '', item.get('title', ''))
