@@ -362,7 +362,7 @@ with col1:
     # 🌟 [수정]: value 값을 단순화하여 API 오류 해결
     news_query = st.text_input(
         "📰 뉴스 감성 분석 키워드", 
-        value="미국증시전망 OR 금리인상 OR 연준", 
+        value="금리인하 OR 매파발언 OR 금리인하 OR 반도체사이클 OR 경기둔화 OR 투자확대 OR AI데이터센터", 
         help="네이버 뉴스 검색에 사용될 키워드를 '|'로 구분하여 입력하세요. (최대 200개 기사 수집)"
     )
 with col2:
