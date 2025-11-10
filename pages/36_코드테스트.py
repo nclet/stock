@@ -348,7 +348,7 @@ with col1:
     # 🔑 사용자가 새로 기재한 키워드로 기본값 변경
     news_query = st.text_input(
         "📰 뉴스 감성 분석 키워드", 
-        value="미국증시전망 OR 금리인상 OR 연준 OR FOMC OR 경기침체 OR 경기과열 OR 금리인상 OR 은행부실 OR 기업파산 OR 노동시장 OR 기대인플레이션 OR 정책완화 OR 정책규제 OR 반도체슈퍼사이클 OR 국채변동성", 
+        value="미국증시전망 OR 금리인상 OR 연준", 
         help="네이버 뉴스 검색에 사용될 키워드를 '|'로 구분하여 입력하세요. (최대 200개 기사 수집)"
     )
 with col2:
