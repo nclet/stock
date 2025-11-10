@@ -8,7 +8,7 @@ import plotly.express as px
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit 
+from sklearn.model_selection import TimeSeriesSplit 
 import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
@@ -19,11 +19,11 @@ from sklearn.preprocessing import MinMaxScaler
 import time
 from concurrent.futures import ThreadPoolExecutor
 import re
-import shap 
-import matplotlib.pyplot as plt 
-import seaborn as sns 
+import shap 
+import matplotlib.pyplot as plt 
+import seaborn as sns 
 # CatBoost 사용을 위해 주석 해제 (설치 필요: pip install catboost)
-# from catboost import CatBoostRegressor 
+# from catboost import CatBoostRegressor 
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -36,7 +36,7 @@ st.markdown("""
 """)
 
 # ------------------------
-# 0. 매크로 데이터 수집 함수
+# 0. 매크로 데이터 수집 함수 (생략 - 변경 없음)
 # ------------------------
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
@@ -110,7 +110,7 @@ def get_fear_greed_index(limit=1095):
         return pd.DataFrame()
 
 # ------------------------
-# 1. 팩터 및 증시 데이터 로드
+# 1. 팩터 및 증시 데이터 로드 (생략 - 변경 없음)
 # ------------------------
 @st.cache_data(show_spinner="⏳ 주가, 원자재, DXY, NASDAQ 데이터 로드 중...")
 def load_market_data(start_date, end_date):
@@ -142,7 +142,7 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (개선된 뉴스 키워드 분석 로직 포함)
+# 2. 감성 분석 모델 로드 및 함수 (개선된 API 에러 로직 반영)
 # ------------------------
 @st.cache_resource
 def load_sentiment_model():
@@ -179,20 +179,22 @@ def analyze_sentiment(text):
     return positive_score - negative_score
 
 def get_naver_news_api(query, display=100, start=1, sort="date"): 
-    """Naver News Search API에서 데이터를 가져옵니다."""
+    """Naver News Search API에서 데이터를 가져옵니다. (API 오류 로깅 강화)"""
     try:
         client_id = st.secrets.get("naver", {}).get("client_id")
         client_secret = st.secrets.get("naver", {}).get("client_secret")
         if not client_id or not client_secret:
-             st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
+             st.error("❌ 네이버 API 키(client_id/client_secret)가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
              return pd.DataFrame(columns=['Date', 'Title']) 
-    except Exception:
+    except Exception as e:
+        st.error(f"❌ 네이버 API 키 로드 중 예외 발생: {e}")
         return pd.DataFrame(columns=['Date', 'Title'])
 
     enc_query = urllib.parse.quote(query)
     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
     headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
 
+    response = None
     try:
         response = requests.get(url, headers=headers)
         response.raise_for_status() 
@@ -207,13 +209,16 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
             news_data.append({'Date': pub_date_dt, 'Title': title})
         return pd.DataFrame(news_data)
     except requests.exceptions.HTTPError as http_err:
-        st.error(f"❌ 네이버 API 요청 실패: {http_err} - 요청 설정(display/start)을 확인하세요.")
+        # HTTP 4xx, 5xx 에러 처리
+        st.error(f"❌ 네이버 API 요청 실패 (HTTP Error): {http_err}. 응답: {response.text[:100]}...")
+    except JSONDecodeError:
+        st.error("❌ 네이버 API 응답이 유효한 JSON 형식이 아닙니다. (API 사용량 초과, 잘못된 쿼리 가능성)")
     except Exception as e:
-        st.error(f"❌ 네이버 API 요청 실패: {e}")
+        st.error(f"❌ 네이버 API 요청 중 기타 오류 발생: {e}")
          
     return pd.DataFrame(columns=['Date', 'Title'])
 
-# 핵심 키워드 목록 정의 (단기/중기/장기/리스크 통합)
+# 핵심 키워드 목록 정의 (사용자 제공 목록 유지)
 RISK_KEYWORDS = [
     "긴축", "금리인상", "매파발언", "고용둔화","노동시장", 
     "CPI", "AI", "반도체 사이클", "반도체 수요 둔화", 
@@ -249,7 +254,7 @@ def extract_news_features(df_news):
     return news_grouped
 
 # ------------------------
-# 3. 피처 엔지니어링 함수 (개선 반영)
+# 3. 피처 엔지니어링 함수 (생략 - 변경 없음)
 # ------------------------
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
@@ -266,8 +271,6 @@ def create_features(df_merge):
         df['Sentiment_MA_3D'] = df['Sentiment_Score'].rolling(window=3).mean()
         df['Sentiment_MA_5D'] = df['Sentiment_Score'].rolling(window=5).mean()
     if 'News_Count' in df.columns:
-         # ffill 후에도 NaN이 남아있을 경우 0으로 채워질 수 있으므로, 롤링 전에 NaN을 처리해야 합니다.
-         # 이미 df_merge = df_merge.fillna(method='ffill').fillna(0) 으로 처리되었습니다.
          df['News_Count_5D'] = df['News_Count'].rolling(window=5).mean() # 뉴스량 5일 MA 사용
         
     # 2. 매크로/비정상 시계열 피처 개선: Pct Change 추가
@@ -307,7 +310,7 @@ def create_features(df_merge):
     return df, features
 
 # ------------------------
-# 4. Streamlit 실행 로직
+# 4. Streamlit 실행 로직 (뉴스 분석 로깅 강화)
 # ------------------------
 
 # CatBoost를 포함한 앙상블 모델 훈련 함수 (옵션)
@@ -320,17 +323,6 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
     estimators = [('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)]
     weights = [1, 1, 1]
 
-    # CatBoost 사용을 위한 코드 (선택적)
-    # try:
-    #     cat_model = CatBoostRegressor(
-    #         iterations=500, learning_rate=0.01, depth=7, loss_function='RMSE', 
-    #         random_seed=42, verbose=0
-    #     )
-    #     estimators.append(('cat', cat_model))
-    #     weights.append(1)
-    # except NameError:
-    #     pass # CatBoost가 설치되지 않은 경우 건너뜀
-    
     voting_model = VotingRegressor(
         estimators=estimators,
         weights=weights
@@ -371,6 +363,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
         
         all_news = pd.concat([news_batch_1, news_batch_2]).drop_duplicates(subset=['Title']).reset_index(drop=True)
         
+        st.info(f"🔍 네이버 API에서 총 **{len(all_news)}**개의 기사를 수집했습니다.")
+        
         if all_news.empty or 'Date' not in all_news.columns or all_news['Date'].isnull().all():
             st.warning("⚠️ 네이버 API로부터 유효한 기사 데이터를 수집하지 못했습니다. 뉴스 분석을 건너뜁니다.")
             news_features_df = pd.DataFrame(columns=['Date', 'Sentiment_Score', 'Risk_Keyword_Count', 'News_Count']).set_index('Date')
@@ -381,12 +375,12 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
             if not filtered_news.empty:
                 # 개선된 뉴스 피처 추출 함수 사용
                 news_features_df = extract_news_features(filtered_news) 
-                st.success(f"✅ 뉴스 감성/키워드 분석 완료! (총 {len(filtered_news)}개 기사 분석)")
+                st.success(f"✅ 뉴스 감성/키워드 분석 완료! (최종 **{len(filtered_news)}**개 기사 분석)")
             else:
-                st.warning("⚠️ 지정된 기간에 해당하는 기사가 없습니다. 뉴스 분석을 건너뜁니다.")
+                st.warning("⚠️ 지정된 분석 기간에 해당하는 기사가 **없습니다**. (수집된 기사 수: 0개) 분석을 건너뜁니다.")
                 news_features_df = pd.DataFrame(columns=['Date', 'Sentiment_Score', 'Risk_Keyword_Count', 'News_Count']).set_index('Date')
 
-    # 2. 데이터 병합
+    # 2. 데이터 병합 (이하 생략 - 변경 없음)
     df_merge = market_df
     if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
     for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
@@ -410,7 +404,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     X_full = df_ml[features_full]
     y = df_ml['Return_10D'] 
     
-    # 4. 피처 선택: LightGBM 중요도 기반 (개선된 피처 사용)
+    # 4. 피처 선택: LightGBM 중요도 기반 (이하 생략 - 변경 없음)
     st.subheader("⚙️ 피처 선택 (LightGBM 중요도 기반 Top 15)")
     
     LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
@@ -427,13 +421,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     X = df_ml[features] 
     
     # 🌟🌟🌟 오류 해결을 위한 데이터 클리닝 강화 🌟🌟🌟
-    
-    # 1. 무한대 (Inf) 값을 NaN으로 대체합니다. (MinMaxScaler가 처리 못함)
     X.replace([np.inf, -np.inf], np.nan, inplace=True)
-    
-    # 2. 최종적으로 남은 NaN을 0으로 대체합니다.
     X.fillna(0, inplace=True) 
-    
     # 🌟🌟🌟 클리닝 로직 끝 🌟🌟🌟
     
     # 전체 데이터 스케일링 준비
@@ -501,7 +490,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     low_ci = next_day_return_pred - CI_FACTOR
     high_ci = next_day_return_pred + CI_FACTOR
     
-    # 6. 결과 출력
+    # 6. 결과 출력 (이하 생략 - 변경 없음)
     mse = mean_squared_error(y_test, y_test_pred)
     r2 = r2_score(y_test, y_test_pred)
 
@@ -533,9 +522,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
         
     st.markdown("---")
 
-    # 7. SHAP 해석 추가
+    # 7. SHAP 해석 추가 (이하 생략 - 변경 없음)
     st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
-    st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)")
     
     try:
         explainer = shap.TreeExplainer(lgbm_model) 
@@ -562,7 +550,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     st.markdown("---")
 
 
-    # 8. 피처 상관관계 히트맵 시각화 추가
+    # 8. 피처 상관관계 히트맵 시각화 추가 (이하 생략 - 변경 없음)
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟(`Return_10D`) 간의 상관관계를 시각적으로 확인합니다.")
 
@@ -594,7 +582,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     st.markdown("---")
 
 
-    # 9. 주요 매크로 팩터 추이 시각화
+    # 9. 주요 매크로 팩터 추이 시각화 (이하 생략 - 변경 없음)
     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
     
     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
@@ -623,7 +611,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     st.plotly_chart(fig_macro, use_container_width=True)
 
 
-    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
+    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델) (이하 생략 - 변경 없음)
     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
     y_test_df = pd.DataFrame({
@@ -641,7 +629,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     fig_pred.update_layout(title=f"테스트 기간 S&P 500 10일 누적 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 11. 팩터 중요도 시각화
+    # 11. 팩터 중요도 시각화 (이하 생략 - 변경 없음)
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
     importance_df = pd.DataFrame({
