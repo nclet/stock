@@ -1,3 +1,4 @@
+# streamlit_app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,7 +9,7 @@ import plotly.express as px
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit 
+from sklearn.model_selection import TimeSeriesSplit
 import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
@@ -19,1121 +20,605 @@ from sklearn.preprocessing import MinMaxScaler
 import time
 from concurrent.futures import ThreadPoolExecutor
 import re
-import shap 
-import matplotlib.pyplot as plt 
-import seaborn as sns 
+import shap
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.inspection import permutation_importance
+from sklearn.utils.validation import check_is_fitted
 
-# ------------------------
-# ✨ 상수 및 페이지 설정
-# ------------------------
-st.set_page_config(page_title="🇺🇸 미국 증시 중단기 추세 예측", layout="wide")
-st.title("🦅 미국 증시 추세 예측 모델 (10일 누적 수익률 예측)")
+# Optional packages
+try:
+    from catboost import CatBoostRegressor
+    CATBOOST_AVAILABLE = True
+except Exception:
+    CATBOOST_AVAILABLE = False
+
+try:
+    import optuna
+    OPTUNA_AVAILABLE = True
+except Exception:
+    OPTUNA_AVAILABLE = False
+
+st.set_page_config(page_title="🇺🇸 미국 증시 중단기 추세 예측 (향상판)", layout="wide")
+st.title("🦅 미국 증시 추세 예측 모델 (10일 누적 수익률 예측 — 뉴스량/키워드 기반, Optuna, CatBoost 포함)")
 
 st.markdown("""
-**S&P 500**의 **향후 $\mathbf{10}$거래일 누적 수익률**을 예측합니다. $\text{LGBM}$ 중요도 기반으로 피처를 선택하고, 네이버 뉴스 감성 분석을 활용합니다.
+- 뉴스: **뉴스량 + 키워드 카운트**를 사용합니다. (감성 점수 대신)
+- Macro: 발표 지연(shift)을 적용합니다.
+- 추가 팩터: Breadth, VIX term, Put/Call 비율(가능한 경우), Put/Call이 없으면 NaN 처리
+- Feature selection: **rolling 방식**(최근 window에서 상관도/중요도로 top-k 선택)
+- Hyperparam tuning: **Optuna (선택)**으로 LightGBM 튜닝 가능
+- 모델: LGBM, XGB, RF, (가능하면 CatBoost) → VotingRegressor
+- 해석: **SHAP + Permutation Importance 비교** (둘 다 plotly 시각화)
 """)
 
-# ------------------------
-# 0. 매크로 데이터 수집 함수
-# ------------------------
-@st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
-def get_fred_data():
-    """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
+# -----------------------
+# 0. 유틸 및 설정
+# -----------------------
+@st.cache_data
+def get_today_date():
+    return datetime.now().date()
+
+TODAY = get_today_date()
+
+def safe_request_json(url, params=None, headers=None, timeout=15):
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=timeout)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        st.warning(f"HTTP 오류/JSON 파싱 오류: {e}")
+        return None
+
+# -----------------------
+# 1. 데이터 로드 함수들
+# -----------------------
+@st.cache_data(show_spinner="⏳ FRED 데이터 로드 중...")
+def get_fred_data(start_date):
+    """
+    FRED에서 주요 시계열(10Y, 2Y, BBB OAS, M2, SP500 EPS) 가져오기.
+    start_date: date 객체
+    """
     try:
         fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
-    except KeyError:
-        st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
-        st.stop()
-        return {}
+    except Exception:
+        st.warning("FRED API 키가 설정되지 않았습니다. FRED 관련 변수는 비어있을 수 있습니다.")
+        fred_api_key = None
+
     TICKERS = {
-        "DGS10": "10Y", "DGS2": "2Y", 
+        "DGS10": "10Y", "DGS2": "2Y",
         "BAMLC0A4CBBB": "BBB_OAS", "M2SL": "M2", "GDPC1": "GDP",
         "SP500PE": "SP500_EPS"
     }
     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
-    def fetch_single_fred(ticker, observation_start):
-        params = {
-            "series_id": ticker, "api_key": fred_api_key, "file_type": "json", 
-            "observation_start": observation_start.strftime("%Y-%m-%d")
-        }
+
+    results = {}
+    if not fred_api_key:
+        return results
+
+    def fetch_single(ticker):
+        params = {"series_id": ticker, "api_key": fred_api_key, "file_type": "json", "observation_start": start_date.strftime("%Y-%m-%d")}
         try:
-            response = requests.get(BASE_URL, params=params)
-            response.raise_for_status()
-            data = response.json().get('observations', [])
-            df = pd.DataFrame(data)
+            data = safe_request_json(BASE_URL, params=params)
+            if not data:
+                return ticker, pd.DataFrame()
+            obs = data.get('observations', [])
+            df = pd.DataFrame(obs)
+            if df.empty:
+                return ticker, pd.DataFrame()
             df['date'] = pd.to_datetime(df['date']).dt.date
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
             df = df.dropna(subset=['value'])
-            return ticker, df[['date', 'value']].rename(columns={'value': TICKERS[ticker]}).set_index('date')
+            df = df[['date','value']].rename(columns={'date':'Date','value':TICKERS[ticker]}).set_index('Date')
+            return ticker, df
         except Exception as e:
-            st.warning(f"⚠️ FRED 데이터 로드 실패 ({ticker}): {e}")
             return ticker, pd.DataFrame()
 
-    start_date = datetime.now().date() - timedelta(days=365 * 3)
-    results = {}
-    total_tickers = len(TICKERS)
-    progress_bar = st.empty()
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(fetch_single_fred, ticker, start_date): ticker for ticker in TICKERS.keys()}
-        loaded_count = 0
-        for future in futures:
-            ticker, df = future.result()
-            if not df.empty: results[TICKERS[ticker]] = df
-            loaded_count += 1
-            progress_bar.progress(loaded_count / total_tickers, text=f"FRED 지표 로드 중... ({loaded_count}/{total_tickers})")
-    progress_bar.empty()
-
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(fetch_single, t): t for t in TICKERS}
+        for fut in futures:
+            ticker, df = fut.result()
+            if not df.empty:
+                results[TICKERS[ticker]] = df
+    # yield curve if possible
     if '10Y' in results and '2Y' in results:
-        df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
-        results['YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('YIELD_CURVE').to_frame()
+        df_y = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
+        results['YIELD_CURVE'] = (df_y['10Y'] - df_y['2Y']).rename('YIELD_CURVE').to_frame()
     return results
 
-@st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
-def get_fear_greed_index(limit=1095): 
-    """Alternative.me에서 Fear & Greed Index를 가져옵니다."""
-    url = f"https://api.alternative.me/fng/?limit={limit}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json().get("data", [])
-        df = pd.DataFrame(data)
-        df["value"] = df["value"].astype(float)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s").dt.date
-        df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
-        return df[["Date", "FGI"]].sort_values("Date").set_index('Date')
-    except Exception as e:
-        st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
-        return pd.DataFrame()
-
-# ------------------------
-# 1. 팩터 및 증시 데이터 로드
-# ------------------------
-@st.cache_data(show_spinner="⏳ 주가, 원자재, DXY, NASDAQ 데이터 로드 중...")
+@st.cache_data(show_spinner="⏳ 시장 데이터 로드 중...")
 def load_market_data(start_date, end_date):
-    """S&P 500, NASDAQ, VIX, WTI, Copper, Gold, DXY 데이터를 로드합니다."""
-    load_start_date = start_date - timedelta(days=50) 
+    """
+    FinanceDataReader로 S&P500, NASDAQ, VIX, WTI, GOLD, COPPER, DXY 불러오기
+    """
+    load_start = start_date - timedelta(days=60)
     tickers = {
-        '^GSPC': 'SP500_Close', '^IXIC': 'NASDAQ_Close', '^VIX': 'VIX', 
+        '^GSPC': 'SP500_Close', '^IXIC': 'NASDAQ_Close', '^VIX': 'VIX',
         'CL=F': 'WTI', 'GC=F': 'GOLD', 'HG=F': 'COPPER', 'DX-Y.NYB': 'DXY'
     }
-    all_data = []
-    total_tickers = len(tickers)
-    progress_bar = st.progress(0, text="시장 데이터 로드 중...")
-    for i, (ticker, name) in enumerate(tickers.items()):
+    all_dfs = []
+    for t, name in tickers.items():
         try:
-            progress_bar.progress((i + 1) / total_tickers, text=f"{name} ({ticker}) 로드 중...")
-            df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
+            df = fdr.DataReader(t, start=load_start, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             df.index = df.index.date
-            all_data.append(df)
-            time.sleep(0.05)
+            all_dfs.append(df)
         except Exception as e:
-            st.warning(f"⚠️ {name} ({ticker}) 데이터 로드 실패: {e}")
+            st.warning(f"{name} 데이터 로드 실패: {e}")
             continue
-    progress_bar.empty()
-    st.success("✅ 시장 데이터 로드 완료!")
-    if not all_data: return pd.DataFrame()
-    df_merged = pd.concat(all_data, axis=1, join='outer').sort_index()
-    df_merged.index.name = 'Date'
-    return df_merged
+    if not all_dfs:
+        return pd.DataFrame()
+    merged = pd.concat(all_dfs, axis=1).sort_index()
+    merged.index.name = 'Date'
+    return merged
 
-# ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (네이버 API 안정화 로직 적용)
-# ------------------------
-@st.cache_resource
-def load_sentiment_model():
-    """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    hf_token = st.secrets.get("HF_TOKEN")
-    model_name = "snunlp/KR-FinBert-SC"
+# Try to fetch Put/Call ratio from FRED if available (example series name might differ)
+@st.cache_data(show_spinner="⏳ Put/Call 데이터 로드 시도중...")
+def get_put_call_series(start_date):
+    # try a known provider or FRED series; fallback to NaN series
     try:
-        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
-        model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='auto')
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model.to(device)
-        return tokenizer, model, device
-    except Exception as e:
-        st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
-        st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
-        st.stop()
-        return None, None, None
+        fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
+        if not fred_api_key:
+            return pd.DataFrame()
+        BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
+        # There is no universal 'PUTCALL' series; many timelines differ. Try common series:
+        cand = ["PUTCALL", "CBOEPC"]  # placeholders
+        for series in cand:
+            params = {"series_id": series, "api_key": fred_api_key, "file_type": "json", "observation_start": start_date.strftime("%Y-%m-%d")}
+            data = safe_request_json(BASE_URL, params=params)
+            if data and data.get('observations'):
+                df = pd.DataFrame(data['observations'])
+                df['date'] = pd.to_datetime(df['date']).dt.date
+                df['value'] = pd.to_numeric(df['value'], errors='coerce')
+                df = df.dropna(subset=['value']).rename(columns={'date':'Date','value':series}).set_index('Date')
+                return df
+    except Exception:
+        pass
+    return pd.DataFrame()
 
-tokenizer, sentiment_model, device = load_sentiment_model()
-
-def analyze_sentiment(text):
-    """Calculates sentiment score for the given text."""
-    if not text: return 0.0
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    with torch.no_grad(): outputs = sentiment_model(**inputs)
-    probabilities = torch.softmax(outputs.logits, dim=1)[0]
-    neg_idx, pos_idx = None, None
-    for idx, label in sentiment_model.config.id2label.items():
-        if 'negative' in label.lower() or '부정' in label: neg_idx = idx
-        elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
-    negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
-    positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
-    return positive_score - negative_score
-
-# 네이버 API 안정화 로직이 적용된 함수 유지
-def get_naver_news_api(query, display=100, start=1, sort="date"): 
+# -----------------------
+# 2. 뉴스 크롤링 및 피처
+# -----------------------
+def get_naver_news_api(query, display=100, start=1, sort="date"):
     """
-    Naver News Search API에서 데이터를 가져옵니다. API는 한 번에 최대 100개의 기사만 제공합니다.
+    네이버 뉴스 검색 (한 번에 최대 100건).
+    query: already a short string (e.g., '미국증시 전망 OR 금리인상')
     """
     try:
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
-    except KeyError:
-        st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
-        return pd.DataFrame(columns=['Date', 'Title']) 
+    except Exception:
+        st.warning("네이버 API 키가 설정되어 있지 않습니다. 뉴스 피처는 비어있게됩니다.")
+        return pd.DataFrame(columns=['Date','Title'])
 
-    enc_query = urllib.parse.quote(query)
-    url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
+    enc = urllib.parse.quote(query)
+    url = f"https://openapi.naver.com/v1/search/news.json?query={enc}&display={display}&start={start}&sort={sort}"
     headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
-
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status() 
-        data = response.json()
+        r = requests.get(url, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
         items = data.get('items', [])
-        news_data = []
-        for item in items:
-            title = re.sub('<[^<]+?>', '', item.get('title', ''))
-            pub_date = item.get('pubDate', '')
-            try: pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
-            except Exception: pub_date_dt = None
-            news_data.append({'Date': pub_date_dt, 'Title': title})
-        return pd.DataFrame(news_data)
-    except requests.exceptions.HTTPError as http_err:
-        st.error(f"❌ 네이버 API 요청 실패: {http_err} - 요청 설정(display/start)을 확인하세요.")
+        if not items:
+            return pd.DataFrame(columns=['Date','Title'])
+        news = []
+        for it in items:
+            title = re.sub('<[^<]+?>','', it.get('title',''))
+            pub = it.get('pubDate','')
+            try:
+                d = datetime.strptime(pub, "%a, %d %b %Y %H:%M:%S %z").date()
+            except Exception:
+                d = None
+            news.append({'Date': d, 'Title': title})
+        return pd.DataFrame(news)
     except Exception as e:
-        st.error(f"❌ 네이버 API 요청 실패: {e}")
-        
-    return pd.DataFrame(columns=['Date', 'Title'])
+        st.warning(f"네이버 뉴스 API 오류: {e}")
+        return pd.DataFrame(columns=['Date','Title'])
 
-# ------------------------
-# 3. 피처 엔지니어링 함수 (10일 누적 수익률 타겟 설정)
-# ------------------------
-def create_features(df_merge):
-    """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
+# 뉴스->피처 추출: 뉴스량 + 키워드 카운트 (악재/호재)
+NEGATIVE_KEYWORDS = ["긴축","금리인상","매파","경기침체","은행부실","디폴트","인플레이션","유가급등"]
+POSITIVE_KEYWORDS = ["금리인하","정책완화","유동성","경기회복","실적호조","수요증가","투자증가"]
+NEG_RE = re.compile(r'\b(' + '|'.join(map(re.escape,NEGATIVE_KEYWORDS)) + r')\b', flags=re.I)
+POS_RE = re.compile(r'\b(' + '|'.join(map(re.escape,POSITIVE_KEYWORDS)) + r')\b', flags=re.I)
+
+def extract_news_features(df_news):
+    """
+    입력: raw news dataframe with columns ['Date','Title']
+    출력: daily aggregated df with columns:
+      Sentiment_Score (optional, here we don't use model sentiment), News_Count,
+      Negative_Keyword_Count, Positive_Keyword_Count
+    """
+    if df_news is None or df_news.empty:
+        return pd.DataFrame(columns=['News_Count','Negative_Keyword_Count','Positive_Keyword_Count'])
+    df = df_news.copy()
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    df['News_Count'] = 1
+    # keyword counts on Title
+    df['Negative_Keyword_Count'] = df['Title'].apply(lambda s: len(NEG_RE.findall(s)) if isinstance(s,str) else 0)
+    df['Positive_Keyword_Count'] = df['Title'].apply(lambda s: len(POS_RE.findall(s)) if isinstance(s,str) else 0)
+    grouped = df.groupby('Date').agg({
+        'News_Count':'sum',
+        'Negative_Keyword_Count':'sum',
+        'Positive_Keyword_Count':'sum'
+    })
+    # ensure date index name
+    grouped.index.name = 'Date'
+    return grouped
+
+# -----------------------
+# 3. 피처 엔지니어링
+# -----------------------
+def compute_breadth_proxy(df_prices):
+    """
+    Breadth proxy: 비중(%) of days where SP500_Close > SP500_SMA20
+    If we had constituents, we would compute advancing/declining.
+    Returns Series indexed by Date with 'Breadth' measure [0,1]
+    """
+    s = df_prices['SP500_Close']
+    sma20 = s.rolling(20).mean()
+    breadth = (s > sma20).astype(int)
+    # smooth
+    breadth_ma = breadth.rolling(5).mean()
+    return breadth_ma.rename('Breadth')
+
+def create_features(df_merge, macro_shift_days=1):
+    """
+    df_merge: merged DataFrame indexed by Date with columns for macro and news raw features
+    macro_shift_days: how many business days to shift macro variables to account release lag
+    """
     df = df_merge.copy()
-    
-    if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
-        df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
-    
-    # 🌟 타겟 변수를 10일 후 누적 수익률로 변경
-    df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
+    # shift macro variables (to simulate release lag)
+    macro_cols = [c for c in df.columns if c in ['YIELD_CURVE','10Y','2Y','M2','BBB_OAS','SP500_EPS','GDP']]
+    for c in macro_cols:
+        df[c] = df[c].shift(macro_shift_days)
+
+    # Basic returns
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
+    df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
 
-    lags = [1, 3, 5, 10] # 예측 기간이 길어졌으므로 lag 10 추가
-    
-    lag_factors = ['Daily_Return', 'VIX', 'FGI', 'Sentiment_Score', 
-                   'YIELD_CURVE', 'BBB_OAS', 'WTI', 'GOLD', 'COPPER',
-                   'DXY', 'NASDAQ_SP500_Ratio', 'SP500_EPS'] 
-    
-    for factor in lag_factors:
-        if factor in df.columns:
-            for lag in lags:
-                df[f'{factor}_Lag_{lag}'] = df[factor].shift(lag)
-                
-    df['VIX_Change_5D'] = df['VIX'].diff(5)
-    df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
-    
-    # 🌟 타겟 변수가 NaN이 되는 마지막 10일을 제거
+    # News derived: ensure News_Count exists
+    if 'News_Count' in df.columns:
+        df['News_Count_5D'] = df['News_Count'].rolling(5).mean()
+    if 'Negative_Keyword_Count' in df.columns:
+        df['Neg_KW_MA_5D'] = df['Negative_Keyword_Count'].rolling(5).mean()
+    if 'Positive_Keyword_Count' in df.columns:
+        df['Pos_KW_MA_5D'] = df['Positive_Keyword_Count'].rolling(5).mean()
+
+    # VIX term: difference between short-term VIX and 20-day mean (proxy)
+    if 'VIX' in df.columns:
+        df['VIX_20d_MA'] = df['VIX'].rolling(20).mean()
+        df['VIX_Term'] = df['VIX'] - df['VIX_20d_MA']  # positive => term steepness
+        df['VIX_Term_5d'] = df['VIX_Term'].rolling(5).mean()
+
+    # Breadth proxy
+    try:
+        breadth = compute_breadth_proxy(df)
+        df = df.join(breadth)
+    except Exception:
+        pass
+
+    # Put/Call: keep as-is if exists
+    # lag features
+    lags = [1,3,5,10]
+    lag_factors = [c for c in df.columns if c not in ['Return_10D']]
+    for f in lag_factors:
+        for lag in lags:
+            df[f'{f}_lag_{lag}'] = df[f].shift(lag)
+
+    # Additional technicals
+    df['SP500_SMA_20'] = df['SP500_Close'].rolling(20).mean()
+    df['VIX_Change_5D'] = df['VIX'].diff(5) if 'VIX' in df.columns else np.nan
+
+    # drop rows where target NaN
     df = df.dropna()
-    
-    base_features = [col for col in df.columns if not col.endswith(('Return', 'Close', '10D')) and 'SP500_' not in col and 'NASDAQ_' not in col]
-    features = [f for f in base_features + ['SP500_Close'] if f in df.columns and ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'DXY', 'NASDAQ_SP500_Ratio'])]
-    features = list(set(features))
-    
-    return df, features
+    # select candidate features automatically
+    candidate_features = [col for col in df.columns if col not in ['Return_10D']]
+    # keep numeric
+    candidate_features = [c for c in candidate_features if np.issubdtype(df[c].dtype, np.number)]
+    return df, candidate_features
 
-# ------------------------
-# 4. Streamlit 실행 로직 (LGBM 피처 선택 및 네이버 2회 호출 적용)
-# ------------------------
+# -----------------------
+# 4. Rolling Feature Selection
+# -----------------------
+def rolling_feature_selection(df, candidate_features, target_col='Return_10D', rolling_window=250, top_k=15):
+    """
+    Rolling feature selection:
+      - compute correlation on the most recent rolling_window days,
+      - select top_k by absolute correlation.
+    Returns selected_features list.
+    """
+    if len(df) < max(rolling_window, 50):
+        # fallback: global correlation
+        corr = df[candidate_features].corrwith(df[target_col]).abs().sort_values(ascending=False)
+        return corr.head(top_k).index.tolist()
+    recent = df.tail(rolling_window)
+    corr = recent[candidate_features].corrwith(recent[target_col]).abs().sort_values(ascending=False)
+    return corr.head(top_k).index.tolist()
 
-# 🌟 오류 해결: _features 인수를 추가하여 피처 목록 변경 시 모델이 재훈련되도록 강제합니다.
-@st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
-def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params, _features):
-    lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
-    xgb_model = xgb.XGBRegressor(**_xgb_params)
-    rf_model = RandomForestRegressor(**_rf_params)
-    
-    voting_model = VotingRegressor(
-        estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
-        weights=[1, 1, 1] 
-    )
-    # XGBoost가 훈련될 때 X_train_df의 피처 이름을 저장합니다.
-    voting_model.fit(_X_train_df, _y_train) 
-    
-    lgbm_shap_model = lgb.LGBMRegressor(**_lgbm_params)
-    lgbm_shap_model.fit(_X_train_df, _y_train)
-    
-    return voting_model, lgbm_shap_model
+# -----------------------
+# 5. Optuna tuning for LGBM (optional)
+# -----------------------
+def optuna_tune_lgb(X_train, y_train, n_trials=25, timeout=None):
+    if not OPTUNA_AVAILABLE:
+        st.warning("Optuna가 설치되어 있지 않습니다. 튜닝을 건너뜁니다.")
+        return None
+    def objective(trial):
+        params = {
+            'objective':'regression',
+            'metric':'rmse',
+            'boosting_type': trial.suggest_categorical('boosting', ['gbdt','dart']),
+            'num_leaves': trial.suggest_int('num_leaves', 8, 128),
+            'learning_rate': trial.suggest_loguniform('learning_rate', 1e-3, 0.1),
+            'n_estimators': trial.suggest_int('n_estimators', 100, 800),
+            'max_depth': trial.suggest_int('max_depth', 3, 16),
+            'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
+            'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            'reg_alpha': trial.suggest_float('reg_alpha', 0.0, 10.0),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.0, 10.0),
+            'random_state': 42,
+            'n_jobs': -1,
+            'verbose': -1
+        }
+        cv = TimeSeriesSplit(n_splits=3)
+        rmse_scores = []
+        for tr_idx, val_idx in cv.split(X_train):
+            Xtr, Xv = X_train.iloc[tr_idx], X_train.iloc[val_idx]
+            ytr, yv = y_train.iloc[tr_idx], y_train.iloc[val_idx]
+            m = lgb.LGBMRegressor(**params)
+            m.fit(Xtr, ytr, eval_set=[(Xv,yv)], early_stopping_rounds=50, verbose=False)
+            pred = m.predict(Xv)
+            rmse_scores.append(np.sqrt(mean_squared_error(yv,pred)))
+        return np.mean(rmse_scores)
 
+    study = optuna.create_study(direction='minimize')
+    study.optimize(objective, n_trials=n_trials, timeout=timeout)
+    return study.best_params
+
+# -----------------------
+# 6. Training helper
+# -----------------------
+@st.cache_resource
+def train_voting_model(_X_train_df, _y_train, lgb_params, xgb_params, rf_params, features, use_catboost=False):
+    models = []
+    lgbm_model = lgb.LGBMRegressor(**lgb_params)
+    models.append(('lgbm', lgbm_model))
+    xgb_model = xgb.XGBRegressor(**xgb_params)
+    models.append(('xgb', xgb_model))
+    rf_model = RandomForestRegressor(**rf_params)
+    models.append(('rf', rf_model))
+    if use_catboost and CATBOOST_AVAILABLE:
+        cat = CatBoostRegressor(verbose=0, random_state=42)
+        models.append(('cat', cat))
+    voting = VotingRegressor(estimators=models)
+    voting.fit(_X_train_df[features], _y_train)
+    # also train a standalone LGBM for SHAP
+    lgbm_shap = lgb.LGBMRegressor(**lgb_params)
+    lgbm_shap.fit(_X_train_df[features], _y_train)
+    return voting, lgbm_shap
+
+# -----------------------
+# 7. Permutation importance
+# -----------------------
+def compute_permutation_importance(model, X, y, features, n_repeats=10):
+    try:
+        res = permutation_importance(model, X[features], y, n_repeats=n_repeats, random_state=42, n_jobs=-1)
+        imp = pd.Series(res.importances_mean, index=features).sort_values(ascending=False)
+        return imp
+    except Exception as e:
+        st.warning(f"Permutation importance 실패: {e}")
+        return pd.Series(dtype=float)
+
+# -----------------------
+# 8. Streamlit UI / Main flow
+# -----------------------
 st.markdown("---")
-# UI 입력 요소
-col1, col2, col3 = st.columns([1.5, 1, 1])
+col1, col2, col3 = st.columns([1.5,1,1])
 with col1:
-    news_query = st.text_input(
-        "📰 뉴스 감성 분석 키워드", 
-        value="미국 증시 전망|금리 인상|연준|경기 침체", 
-        help="네이버 뉴스 검색에 사용될 키워드를 '|' (파이프 기호)로 구분하여 입력하세요. (예: S&P 500|경기 침체)"
-    )
+    news_query = st.text_input("뉴스 키워드 (짧게, OR/| 로 연결)", value="미국증시 OR 금리인상 OR 연준", help="플레이스홀더: '미국증시 OR 금리인상'")
 with col2:
-    start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365 * 2)) 
+    start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365*2))
 with col3:
     end_date = st.date_input("분석 종료일", datetime.now())
-    
-if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예측)", type="primary", use_container_width=True):
-    
-    # 1. 데이터 로드
-    market_df = load_market_data(start_date, end_date)
-    fred_data = get_fred_data()
-    fg_df = get_fear_greed_index(limit=365 * 3)
-    trends_df = pd.DataFrame() 
-    
-    # 1-2. 뉴스 감성 분석 (2회 요청 로직 적용)
-    with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
-        news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
-        news_batch_2 = get_naver_news_api(news_query, display=100, start=101)
-        
-        all_news = pd.concat([news_batch_1, news_batch_2]).drop_duplicates(subset=['Title']).reset_index(drop=True)
-        
-        if all_news.empty or 'Date' not in all_news.columns or all_news['Date'].isnull().all():
-            st.warning("⚠️ 네이버 API로부터 유효한 기사 데이터를 수집하지 못했습니다. 감성 분석을 건너뜁니다.")
-            filtered_news = pd.DataFrame(columns=['Date', 'Sentiment_Score'])
-        else:
-            load_start_date = start_date - timedelta(days=50)
-            filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
-            
-            if not filtered_news.empty:
-                filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-                st.success(f"✅ 뉴스 감성 분석 완료! (총 {len(filtered_news)}개 기사 분석)")
-            else:
-                st.warning("⚠️ 지정된 기간에 해당하는 기사가 없습니다. 감성 분석을 건너뜁니다.")
 
-    # 2. 데이터 병합
-    df_merge = market_df
-    if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
-    for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
-    if not filtered_news.empty:
-        news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().to_frame()
-        df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
-    
-    df_merge = df_merge.fillna(method='ffill').fillna(0)
-    
-    # 3. 피처 엔지니어링 및 데이터 준비
-    df_ml, features_full = create_features(df_merge)
-    
+# tuning / options
+st.sidebar.header("옵션")
+use_optuna = st.sidebar.checkbox("Optuna로 LGBM 하이퍼파라미터 튜닝 (시간 소요됨)", value=False)
+optuna_trials = st.sidebar.number_input("Optuna trials", min_value=10, max_value=200, value=25, step=5)
+use_cat = st.sidebar.checkbox("CatBoost 포함 (설치되어 있으면)", value=False)
+macro_shift_days = st.sidebar.number_input("Macro release shift days", min_value=0, max_value=5, value=1)
+rolling_window = st.sidebar.number_input("Rolling window for feature selection", min_value=60, max_value=1000, value=250)
+top_k_features = st.sidebar.number_input("Top-K features (rolling selection)", min_value=5, max_value=50, value=15)
+
+if st.button("🚀 실행: 데이터 로드 → 특성 생성 → 학습 → 예측"):
+    with st.spinner("데이터 로드 중..."):
+        market_df = load_market_data(start_date, end_date)
+        fred = get_fred_data(start_date)
+        putcall = get_put_call_series(start_date)
+        # assemble merge
+        df_merge = market_df.copy()
+        if fred:
+            for name, df in fred.items():
+                df_merge = pd.merge(df_merge, df, left_index=True, right_index=True, how='left')
+        if not putcall.empty:
+            df_merge = pd.merge(df_merge, putcall, left_index=True, right_index=True, how='left')
+
+        # news
+        # first and second batch
+        # keep query short to avoid 0 results
+        q = news_query
+        try:
+            nb1 = get_naver_news_api(q, display=100, start=1)
+            nb2 = get_naver_news_api(q, display=100, start=101)
+            all_news = pd.concat([nb1, nb2]).drop_duplicates(subset=['Title']).reset_index(drop=True)
+        except Exception:
+            all_news = pd.DataFrame(columns=['Date','Title'])
+        st.info(f"네이버에서 수집된 기사 수: {len(all_news)}")
+
+        news_features = extract_news_features(all_news) if not all_news.empty else pd.DataFrame()
+        if not news_features.empty:
+            df_merge = pd.merge(df_merge, news_features, left_index=True, right_index=True, how='left')
+
+        # fillna
+        df_merge = df_merge.fillna(method='ffill').fillna(0)
+
+    with st.spinner("피처 생성 중..."):
+        df_ml, candidate_features = create_features(df_merge, macro_shift_days=macro_shift_days)
+        st.write(f"후보 피처 수: {len(candidate_features)}")
+        if df_ml.empty or 'Return_10D' not in df_ml.columns:
+            st.error("학습용 데이터가 부족합니다. 데이터 소스를 확인하세요.")
+            st.stop()
+
+    # limit to recent 500 rows for speed (same logic as before)
     df_ml = df_ml.tail(500)
-    df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
-
+    df_ml = df_ml.loc[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
     if len(df_ml) <= 100:
-        st.error("데이터가 부족합니다. 분석 기간을 늘리세요. (최소 100일 필요)")
+        st.error("데이터 포인트가 부족합니다 (최소 100일 권장).")
         st.stop()
-        
-    X_full = df_ml[features_full]
-    y = df_ml['Return_10D'] 
-    
-    # 4. 피처 선택: LightGBM 중요도 기반
-    st.subheader("⚙️ 피처 선택 (LightGBM 중요도 기반 Top 15)")
-    
-    LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
-    XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
-    RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
 
-    temp_model = lgb.LGBMRegressor(**LGBM_PARAMS) 
-    temp_model.fit(X_full, y)
+    # Rolling feature selection
+    selected_features = rolling_feature_selection(df_ml, candidate_features, target_col='Return_10D', rolling_window=rolling_window, top_k=top_k_features)
+    st.write(f"선택된 피처 (Top {top_k_features}): {selected_features}")
 
-    feature_importances = pd.Series(temp_model.feature_importances_, index=X_full.columns)
-    features = feature_importances.nlargest(15).index.tolist()
-    
-    st.info(f"선택된 피처 수: {len(features)}개. (전체 {len(features_full)}개 중 상위 15개, LGBM 기반)")
-    X = df_ml[features] 
-    
-    # 전체 데이터 스케일링 준비
+    X = df_ml[selected_features]
+    y = df_ml['Return_10D']
+
+    # cleaning
+    X.replace([np.inf, -np.inf], np.nan, inplace=True)
+    X.fillna(0, inplace=True)
+
+    # scale
     scaler = MinMaxScaler()
-    X_scaled_all = scaler.fit_transform(X)
-    X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
-    
-    # 테스트 데이터셋 분리 (마지막 30일)
-    test_size = max(30, int(0.2 * len(X_scaled_all_df)))
-    X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
-    y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
-    
-    # 5. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
-    st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
-    
-    n_splits = 2 
+    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=X.columns, index=X.index)
+
+    # train-test split
+    test_size = max(30, int(0.2 * len(X_scaled)))
+    X_train = X_scaled.iloc[:-test_size]
+    X_test = X_scaled.iloc[-test_size:]
+    y_train = y.iloc[:-test_size]
+    y_test = y.iloc[-test_size:]
+
+    # optuna tuning (if chosen)
+    if use_optuna:
+        with st.spinner("Optuna 튜닝 중... (시간 소요)"):
+            best = optuna_tune_lgb(X_train, y_train, n_trials=optuna_trials)
+            if best:
+                # map optuna params to lgb params keys (ensure required defaults)
+                lgb_params = dict(best)
+                lgb_params.update({'objective':'regression','metric':'rmse','random_state':42,'n_jobs':-1,'verbose':-1})
+            else:
+                lgb_params = {'objective':'regression','metric':'rmse','n_estimators':300,'learning_rate':0.01,'num_leaves':21,'max_depth':7,'random_state':42,'n_jobs':-1,'verbose':-1}
+    else:
+        lgb_params = {'objective':'regression','metric':'rmse','n_estimators':300,'learning_rate':0.01,'num_leaves':21,'max_depth':7,'random_state':42,'n_jobs':-1,'verbose':-1}
+
+    xgb_params = {'objective':'reg:squarederror','n_estimators':500,'learning_rate':0.01,'max_depth':7,'random_state':42,'n_jobs':-1}
+    rf_params = {'n_estimators':100,'max_depth':10,'random_state':42,'n_jobs':-1}
+
+    # CV with TimeSeriesSplit (display R2 per fold)
+    st.header("📊 TimeSeriesSplit 교차검증 (LGBM)")
+    n_splits = 3
     tscv = TimeSeriesSplit(n_splits=n_splits)
-    
-    r2_scores_lgbm = []
-    
-    with st.spinner(f"⏳ TimeSeriesSplit 교차검증 중 (폴드 {n_splits}개, n_estimators=300, Early Stopping=30 적용)..."):
-        
-        for i, (train_index, val_index) in enumerate(tscv.split(X_train_df)):
-            X_train_fold, X_val_fold = X_train_df.iloc[train_index], X_train_df.iloc[val_index]
-            y_train_fold, y_val_fold = y_train.iloc[train_index], y_train.iloc[val_index]
+    r2s = []
+    fold_idx = 1
+    for tr_idx, val_idx in tscv.split(X_train):
+        Xtr, Xv = X_train.iloc[tr_idx], X_train.iloc[val_idx]
+        ytr, yv = y_train.iloc[tr_idx], y_train.iloc[val_idx]
+        m = lgb.LGBMRegressor(**lgb_params)
+        m.fit(Xtr, ytr, eval_set=[(Xv,yv)], early_stopping_rounds=50, verbose=False)
+        pred = m.predict(Xv)
+        r2s.append(r2_score(yv,pred))
+        st.write(f"Fold {fold_idx} R2: {r2s[-1]:.4f}")
+        fold_idx += 1
+    st.info(f"평균 R2: {np.mean(r2s):.4f}")
 
-            lgbm_fold = lgb.LGBMRegressor(**LGBM_PARAMS)
-            
-            lgbm_fold.fit(X_train_fold, y_train_fold,
-                          eval_set=[(X_val_fold, y_val_fold)],
-                          eval_metric='rmse',
-                          callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)])
-            
-            y_val_pred = lgbm_fold.predict(X_val_fold)
-            r2_scores_lgbm.append(r2_score(y_val_fold, y_val_pred))
-            
-        avg_r2 = np.mean(r2_scores_lgbm)
-        st.info(f"✅ TimeSeriesSplit 평균 R² (LGBM 기준): **{avg_r2:.4f}**")
-        st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
+    # Train final Voting model
+    with st.spinner("최종 앙상블 모델 훈련 중..."):
+        voting_model, lgbm_shap_model = train_voting_model(X_train, y_train, lgb_params, xgb_params, rf_params, selected_features, use_cat=use_cat and CATBOOST_AVAILABLE)
+
+    # predictions
+    y_pred_test = voting_model.predict(X_test[selected_features])
+    mse = mean_squared_error(y_test, y_pred_test)
+    r2 = r2_score(y_test, y_pred_test)
+
+    # residual-based CI (using lgbm_shap_model residuals)
+    y_train_pred = lgbm_shap_model.predict(X_train[selected_features])
+    residuals = y_train - y_train_pred
+    resid_std = residuals.std()
+    CI_FACTOR = 1.645 * resid_std
+
+    # next 10-day prediction (use last row)
+    last_row = X_scaled.iloc[[-1]][selected_features]
+    next_pred = voting_model.predict(last_row)[0]
+    low_ci = next_pred - CI_FACTOR
+    high_ci = next_pred + CI_FACTOR
+
+    # Results display
     st.markdown("---")
+    st.header("📈 최종 예측 결과")
+    c1,c2,c3,c4 = st.columns(4)
+    def fmt(x): return f"{x:+.2f}%"
+    c1.metric("향후 10거래일 예측 수익률", fmt(next_pred), delta=f"90% CI: {low_ci:+.2f}% ~ {high_ci:+.2f}%")
+    c2.metric("테스트 R² (앙상블)", f"{r2:.3f}", help=f"MSE: {mse:.4f}")
+    current_vix = df_ml['VIX'].iloc[-1] if 'VIX' in df_ml.columns else np.nan
+    c3.metric("현재 VIX (마지막값)", f"{current_vix:.2f}")
+    action = "강력 매수" if (next_pred>1.0 and low_ci>0) else ("매도" if (next_pred<-1.0) else "관망")
+    c4.markdown(f"### 최종 시그널: **{action}**")
 
-    # 🌟 수정된 호출: 피처 목록을 전달하여 캐싱 문제를 해결합니다.
-    voting_model, lgbm_model = train_voting_model(
-        X_train_df, 
-        y_train, 
-        LGBM_PARAMS, 
-        XGB_PARAMS, 
-        RF_PARAMS, 
-        tuple(features) 
-    )
-        
-    y_train_pred_lgbm = lgbm_model.predict(X_train_df)
-    residuals = y_train - y_train_pred_lgbm
-    residual_std = residuals.std()
-    CI_FACTOR = 1.645 * residual_std 
-    
-    y_test_pred = voting_model.predict(X_test_df)
-
-    # 다음 10일 예측 및 CI 계산
-    last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
-    last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
-    
-    next_day_return_pred = voting_model.predict(last_data_df)[0]
-    low_ci = next_day_return_pred - CI_FACTOR
-    high_ci = next_day_return_pred + CI_FACTOR
-    
-    # 6. 결과 출력
-    mse = mean_squared_error(y_test, y_test_pred)
-    r2 = r2_score(y_test, y_test_pred)
-
+    # SHAP
     st.markdown("---")
-    st.header("📈 최종 예측 결과 및 모델 성능")
-    
-    col_pred1, col_pred2, col_pred3, col_pred4 = st.columns(4)
-
-    def format_pred_value(value): return f"{value:+.2f}%"
-
-    with col_pred1:
-        st.metric(label="📊 향후 10거래일 S&P 500 예측 수익률", value=format_pred_value(next_day_return_pred), delta=f"90% CI: {low_ci:+.2f}% ~ {high_ci:+.2f}%")
-    with col_pred2:
-        st.metric(label="✅ 테스트 R² (앙상블)", value=f"{r2:.2f}", help=f"MSE: {mse:.4f}. 1에 가까울수록 적합도가 높음.")
-    with col_pred3:
-        current_vix = df_ml['VIX'].iloc[-1]
-        vix_trend = "하락 (강세) 🟢" if df_ml['VIX_Change_5D'].iloc[-1] < 0 else "상승 (약세) 🔴"
-        st.metric(label="🔥 현재 VIX 지수", value=f"{current_vix:.2f}", delta=vix_trend)
-    with col_pred4:
-        action = "강력 매수/추세 추종" if next_day_return_pred > 1.0 and low_ci > 0.0 else ("매도/리스크 관리" if next_day_return_pred < -1.0 else "관망/중립")
-        action_color = "#D4EDDA" if "매수" in action else ("#F8D7DA" if "매도" in action else "#FFF3CD")
-        st.markdown(f"""
-        <div style='padding: 10px; border-radius: 5px; text-align: center; 
-            background-color: {action_color}; color: {"#155724" if "매수" in action else ("#721C24" if "매도" in action else "#856404")}; 
-            font-weight: bold; margin-top: 15px;'>
-            최종 투자 시그널: {action}
-        </div>
-        """, unsafe_allow_html=True)
-        
-    st.markdown("---")
-
-    # 7. SHAP 해석 추가
-    st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
-    st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)")
-    
+    st.header("🔍 모델 해석: SHAP + Permutation Importance 비교 (Top features)")
     try:
-        explainer = shap.TreeExplainer(lgbm_model) 
-        # last_data_df는 이미 피처 이름을 가지고 있으므로 바로 사용
-        shap_values = explainer.shap_values(last_data_df)
-        
-        shap_df = pd.DataFrame({
-            'Feature': last_data_df.columns,
-            'SHAP Value': shap_values[0],
-            'Feature Value': last_data_df.iloc[0].values
-        })
-        
-        shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
-        shap_df = shap_df.sort_values('Abs SHAP', ascending=False).head(5)
-
-        fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
-                           color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
-                           title=f"향후 10일 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
-                           hover_data={'Feature Value': True, 'SHAP Value': ':.4f'})
-        fig_shap.update_layout(yaxis={'categoryorder':'total ascending'})
+        explainer = shap.TreeExplainer(lgbm_shap_model)
+        shap_vals = explainer.shap_values(last_row)
+        shap_summary = pd.DataFrame({'feature': selected_features, 'shap_value': np.abs(shap_vals[0])})
+        shap_summary = shap_summary.sort_values('shap_value', ascending=False).head(10)
+        fig_shap = px.bar(shap_summary, x='shap_value', y='feature', orientation='h', title="SHAP (abs) Top features")
         st.plotly_chart(fig_shap, use_container_width=True)
-
     except Exception as e:
-        st.warning(f"⚠️ SHAP 해석 로드 중 오류 발생: {e}.")
-    st.markdown("---")
+        st.warning(f"SHAP 계산 실패: {e}")
 
-
-    # 8. 피처 상관관계 히트맵 시각화 추가
-    st.header("🔗 피처 상관관계 히트맵")
-    st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟(`Return_10D`) 간의 상관관계를 시각적으로 확인합니다.")
-
-    correlation_df = df_ml[features + ['Return_10D']].copy().rename(columns={'Return_10D': 'Target_10D_Return'})
-    N_TOP_FEATURES = len(features) 
-    
+    # Permutation importance
     try:
-        corr_matrix = correlation_df.corr()
-        fig_heatmap = px.imshow(corr_matrix, 
-                                 x=corr_matrix.columns, 
-                                 y=corr_matrix.columns,
-                                 color_continuous_scale='RdBu_r', 
-                                 title=f'LGBM 선택 {N_TOP_FEATURES}개 피처 간의 상관관계 히트맵')
-        fig_heatmap.update_xaxes(side="top")
-        
-        annotations = []
-        for i, row in enumerate(corr_matrix.values):
-            for j, val in enumerate(row):
-                annotations.append(
-                    dict(x=corr_matrix.columns[j], y=corr_matrix.columns[i], 
-                         text=f"{val:.2f}", showarrow=False, font=dict(color="black" if abs(val) < 0.6 else "white"))
-                )
-        fig_heatmap.update_layout(annotations=annotations, height=800)
-        st.plotly_chart(fig_heatmap, use_container_width=True)
-
+        perm_imp = compute_permutation_importance(voting_model, X_test, y_test, selected_features, n_repeats=10)
+        perm_top = perm_imp.head(10).reset_index()
+        perm_top.columns = ['feature','importance']
+        fig_perm = px.bar(perm_top, x='importance', y='feature', orientation='h', title='Permutation Importance (test)')
+        st.plotly_chart(fig_perm, use_container_width=True)
     except Exception as e:
-        st.warning(f"⚠️ 히트맵 생성 중 오류: {e}")
-        
+        st.warning(f"Permutation importance 계산 실패: {e}")
+
+    # Compare SHAP vs Permutation (merge)
+    try:
+        if 'shap_summary' in locals() and not perm_imp.empty:
+            comp = shap_summary.set_index('feature').join(perm_imp.rename('perm_imp'), how='inner')
+            comp = comp.reset_index().rename(columns={'index':'feature','shap_value':'shap_abs'})
+            comp = comp.sort_values(['perm_imp'], ascending=False).head(10)
+            fig_comp = px.scatter(comp, x='perm_imp', y='shap_abs', text='feature', title='Permutation Importance vs SHAP(abs)')
+            fig_comp.update_traces(textposition='middle right')
+            st.plotly_chart(fig_comp, use_container_width=True)
+    except Exception as e:
+        st.warning(f"SHAP vs Permutation 비교 실패: {e}")
+
+    # Prediction vs Actual chart
     st.markdown("---")
+    st.header("예측 vs 실제 (테스트 구간)")
+    df_plot = pd.DataFrame({'Actual': y_test, 'Predicted': y_pred_test}, index=X_test.index)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Actual'], mode='markers+lines', name='Actual'))
+    fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['Predicted'], mode='lines', name='Predicted'))
+    fig.update_layout(title='테스트 기간: Actual vs Predicted 10D Return', xaxis_title='Date', yaxis_title='Return(%)')
+    st.plotly_chart(fig, use_container_width=True)
 
+    # Feature importance from LGBM model
+    try:
+        fi = pd.Series(lgbm_shap_model.feature_importances_, index=selected_features).sort_values(ascending=False).head(20).reset_index()
+        fi.columns = ['feature','importance']
+        fig_fi = px.bar(fi, x='importance', y='feature', orientation='h', title='LGBM Feature Importance (top20)')
+        st.plotly_chart(fig_fi, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Feature importance 출력 실패: {e}")
 
-    # 9. 주요 매크로 팩터 추이 시각화
-    st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
-    
-    df_macro_plot = df_ml[df_ml.index >= start_date].copy()
-
-    fig_macro = go.Figure()
-    
-    fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['SP500_Close'], name='S&P 500 (좌측 축)', line=dict(color='#1f77b4', width=2), yaxis='y1'))
-    fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['YIELD_CURVE'], name='장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
-    fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")     
-    fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['BBB_OAS'], name='BBB 회사채 스프레드', line=dict(color='green', width=1.5), yaxis='y3', opacity=0.8))
-    if 'DXY' in df_macro_plot.columns:
-         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['DXY'], name='USD Index (DXY)', line=dict(color='purple', width=1.5), yaxis='y4', opacity=0.8))
-
-    fig_macro.update_layout(title="S&P 500 vs. 경기/신용 리스크 지표", xaxis_title="날짜",
-        yaxis=dict(title=dict(text='S&P 500 종가', font=dict(color="#1f77b4")), domain=[0, 1]),
-        yaxis2=dict(title=dict(text='금리차 (%)', font=dict(color="red")), overlaying='y', side='right', position=0.90, showgrid=False),
-        yaxis3=dict(title=dict(text='BBB OAS', font=dict(color="green")), overlaying='y', side='right', position=0.95, showgrid=False),
-        yaxis4=dict(title=dict(text='DXY', font=dict(color="purple")), overlaying='y', side='right', position=1.0, showgrid=False),
-        hovermode="x unified", height=600, legend=dict(x=0, y=1.05, orientation="h"))
-    
-    st.plotly_chart(fig_macro, use_container_width=True)
-
-
-    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
-    st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
-    
-    y_test_df = pd.DataFrame({
-        'Actual': y_test, 'Predicted': y_test_pred,
-        'Low_CI': y_test_pred - CI_FACTOR, 'High_CI': y_test_pred + CI_FACTOR
-    }, index=df_ml.index[-test_size:])
-
-    fig_pred = go.Figure()
-
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['High_CI'], mode='lines', line=dict(width=0), showlegend=False))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Low_CI'], fill='tonexty', fillcolor='rgba(173, 216, 230, 0.3)', mode='lines', line=dict(width=0), name='90% 신뢰구간'))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='markers', name='실제 10일 누적 수익률', marker=dict(color='blue', size=5, opacity=0.8)))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='앙상블 예측 수익률 (Median)', line=dict(color='red', width=2)))
-
-    fig_pred.update_layout(title=f"테스트 기간 S&P 500 10일 누적 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
-    st.plotly_chart(fig_pred, use_container_width=True)
-    
-    # 11. 팩터 중요도 시각화
-    st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
-    
-    importance_df = pd.DataFrame({
-        'Feature': features,
-        'Importance': lgbm_model.feature_importances_
-    }).sort_values('Importance', ascending=False).head(15)
-
-    fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
-                     title='LightGBM 모델 상위 15개 팩터 중요도',
-                     color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
-    fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
-    st.plotly_chart(fig_imp, use_container_width=True)
-
+    st.success("모델 실행 완료 ✅")
 
 st.markdown("---")
-st.warning("⚠️ **면책 조항:** 이 모델은 교육 및 분석 목적으로만 제공됩니다. 실제 투자에 사용하기 전에 충분한 검증과 리스크 분석을 수행해야 합니다.")
-# import streamlit as st
-# import pandas as pd
-# import numpy as np
-# import requests
-# from datetime import datetime, timedelta
-# import plotly.graph_objects as go
-# import plotly.express as px
-# from transformers import AutoTokenizer, AutoModelForSequenceClassification
-# import torch
-# from sklearn.metrics import mean_squared_error, r2_score
-# from sklearn.model_selection import TimeSeriesSplit 
-# import urllib.parse
-# from json.decoder import JSONDecodeError
-# import FinanceDataReader as fdr
-# import lightgbm as lgb
-# import xgboost as xgb
-# from sklearn.ensemble import RandomForestRegressor, VotingRegressor
-# from sklearn.preprocessing import MinMaxScaler
-# import time
-# from concurrent.futures import ThreadPoolExecutor
-# import re
-# import shap 
-# import matplotlib.pyplot as plt 
-# import seaborn as sns 
-
-# # ------------------------
-# # ✨ 상수 및 페이지 설정
-# # ------------------------
-# st.set_page_config(page_title="🇺🇸 미국 증시 매크로 추세 예측", layout="wide")
-# st.title("🦅 미국 증시 추세 예측 모델 (LGBM 피처 선택 & 네이버 안정화)")
-
-# st.markdown("""
-# **S&P 500**의 다음 날 수익률을 예측합니다. **$\text{LightGBM}$ 중요도 기반**으로 최적 피처를 선택하고, 네이버 뉴스 감성 분석을 강화했습니다.
-# """)
-
-# # ------------------------
-# # 0. 매크로 데이터 수집 함수 (FRED API KEY 참조 방식 유지)
-# # ------------------------
-# @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
-# def get_fred_data():
-#     """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
-#     try:
-#         fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
-#     except KeyError:
-#         st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
-#         st.stop()
-#         return {}
-#     TICKERS = {
-#         "DGS10": "10Y", "DGS2": "2Y", 
-#         "BAMLC0A4CBBB": "BBB_OAS", "M2SL": "M2", "GDPC1": "GDP",
-#         "SP500PE": "SP500_EPS"
-#     }
-#     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
-#     def fetch_single_fred(ticker, observation_start):
-#         params = {
-#             "series_id": ticker, "api_key": fred_api_key, "file_type": "json", 
-#             "observation_start": observation_start.strftime("%Y-%m-%d")
-#         }
-#         try:
-#             response = requests.get(BASE_URL, params=params)
-#             response.raise_for_status()
-#             data = response.json().get('observations', [])
-#             df = pd.DataFrame(data)
-#             df['date'] = pd.to_datetime(df['date']).dt.date
-#             df['value'] = pd.to_numeric(df['value'], errors='coerce')
-#             df = df.dropna(subset=['value'])
-#             return ticker, df[['date', 'value']].rename(columns={'value': TICKERS[ticker]}).set_index('date')
-#         except Exception as e:
-#             st.warning(f"⚠️ FRED 데이터 로드 실패 ({ticker}): {e}")
-#             return ticker, pd.DataFrame()
-
-#     start_date = datetime.now().date() - timedelta(days=365 * 3)
-#     results = {}
-#     total_tickers = len(TICKERS)
-#     progress_bar = st.empty()
-#     with ThreadPoolExecutor(max_workers=5) as executor:
-#         futures = {executor.submit(fetch_single_fred, ticker, start_date): ticker for ticker in TICKERS.keys()}
-#         loaded_count = 0
-#         for future in futures:
-#             ticker, df = future.result()
-#             if not df.empty: results[TICKERS[ticker]] = df
-#             loaded_count += 1
-#             progress_bar.progress(loaded_count / total_tickers, text=f"FRED 지표 로드 중... ({loaded_count}/{total_tickers})")
-#     progress_bar.empty()
-
-#     if '10Y' in results and '2Y' in results:
-#         df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
-#         results['YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('YIELD_CURVE').to_frame()
-#     return results
-
-# @st.cache_data(show_spinner="⏳ Fear & Greed Index 로드 중...")
-# def get_fear_greed_index(limit=1095): 
-#     """Alternative.me에서 Fear & Greed Index를 가져옵니다."""
-#     url = f"https://api.alternative.me/fng/?limit={limit}"
-#     try:
-#         response = requests.get(url)
-#         response.raise_for_status()
-#         data = response.json().get("data", [])
-#         df = pd.DataFrame(data)
-#         df["value"] = df["value"].astype(float)
-#         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s").dt.date
-#         df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
-#         return df[["Date", "FGI"]].sort_values("Date").set_index('Date')
-#     except Exception as e:
-#         st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
-#         return pd.DataFrame()
-
-# # ------------------------
-# # 1. 팩터 및 증시 데이터 로드 
-# # ------------------------
-
-# @st.cache_data(show_spinner="⏳ 주가, 원자재, DXY, NASDAQ 데이터 로드 중...")
-# def load_market_data(start_date, end_date):
-#     """S&P 500, NASDAQ, VIX, WTI, Copper, Gold, DXY 데이터를 로드합니다."""
-#     load_start_date = start_date - timedelta(days=50) 
-#     tickers = {
-#         '^GSPC': 'SP500_Close', '^IXIC': 'NASDAQ_Close', '^VIX': 'VIX', 
-#         'CL=F': 'WTI', 'GC=F': 'GOLD', 'HG=F': 'COPPER', 'DX-Y.NYB': 'DXY'
-#     }
-#     all_data = []
-#     total_tickers = len(tickers)
-#     progress_bar = st.progress(0, text="시장 데이터 로드 중...")
-#     for i, (ticker, name) in enumerate(tickers.items()):
-#         try:
-#             progress_bar.progress((i + 1) / total_tickers, text=f"{name} ({ticker}) 로드 중...")
-#             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
-#             df = df[['Close']].rename(columns={'Close': name})
-#             df.index = df.index.date
-#             all_data.append(df)
-#             time.sleep(0.05)
-#         except Exception as e:
-#             st.warning(f"⚠️ {name} ({ticker}) 데이터 로드 실패: {e}")
-#             continue
-#     progress_bar.empty()
-#     st.success("✅ 시장 데이터 로드 완료!")
-#     if not all_data: return pd.DataFrame()
-#     df_merged = pd.concat(all_data, axis=1, join='outer').sort_index()
-#     df_merged.index.name = 'Date'
-#     return df_merged
-
-# # ------------------------
-# # 2. 감성 분석 모델 로드 및 함수 (네이버 API 안정화 로직 적용)
-# # ------------------------
-# @st.cache_resource
-# def load_sentiment_model():
-#     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-#     hf_token = st.secrets.get("HF_TOKEN")
-#     model_name = "snunlp/KR-FinBert-SC"
-#     try:
-#         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
-#         model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='auto')
-#         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#         model.to(device)
-#         return tokenizer, model, device
-#     except Exception as e:
-#         st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
-#         st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
-#         st.stop()
-#         return None, None, None
-
-# tokenizer, sentiment_model, device = load_sentiment_model()
-
-# def analyze_sentiment(text):
-#     """Calculates sentiment score for the given text."""
-#     if not text: return 0.0
-#     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-#     inputs = {k: v.to(device) for k, v in inputs.items()}
-#     with torch.no_grad(): outputs = sentiment_model(**inputs)
-#     probabilities = torch.softmax(outputs.logits, dim=1)[0]
-#     neg_idx, pos_idx = None, None
-#     for idx, label in sentiment_model.config.id2label.items():
-#         if 'negative' in label.lower() or '부정' in label: neg_idx = idx
-#         elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
-#     negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
-#     positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
-#     return positive_score - negative_score
-
-# # 🌟 수정된 get_naver_news_api 함수: API 제한(display=100) 준수 및 오류 방지
-# def get_naver_news_api(query, display=100, start=1, sort="date"): 
-#     """
-#     Naver News Search API에서 데이터를 가져옵니다. API는 한 번에 최대 100개의 기사만 제공합니다.
-#     """
-#     try:
-#         client_id = st.secrets["naver"]["client_id"]
-#         client_secret = st.secrets["naver"]["client_secret"]
-#     except KeyError:
-#         st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
-#         # 오류 시 컬럼을 명시한 빈 DataFrame 반환하여 KeyError 방지
-#         return pd.DataFrame(columns=['Date', 'Title']) 
-
-#     enc_query = urllib.parse.quote(query)
-#     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
-#     headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
-
-#     try:
-#         response = requests.get(url, headers=headers)
-#         # ⚠️ 400 Bad Request 등 오류 발생 시 예외 처리
-#         response.raise_for_status() 
-#         data = response.json()
-#         items = data.get('items', [])
-#         news_data = []
-#         for item in items:
-#             title = re.sub('<[^<]+?>', '', item.get('title', ''))
-#             pub_date = item.get('pubDate', '')
-#             try: pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
-#             except Exception: pub_date_dt = None
-#             news_data.append({'Date': pub_date_dt, 'Title': title})
-#         return pd.DataFrame(news_data)
-#     except requests.exceptions.HTTPError as http_err:
-#         st.error(f"❌ 네이버 API 요청 실패: {http_err} - 요청 설정(display/start)을 확인하세요.")
-#     except Exception as e:
-#         st.error(f"❌ 네이버 API 요청 실패: {e}")
-        
-#     # 오류 발생 시 컬럼을 명시한 빈 DataFrame 반환
-#     return pd.DataFrame(columns=['Date', 'Title'])
-
-# # ------------------------
-# # 3. 피처 엔지니어링 함수
-# # ------------------------
-# def create_features(df_merge):
-#     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
-#     df = df_merge.copy()
-    
-#     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
-#         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
-    
-#     df['Next_Day_Return'] = df['SP500_Close'].pct_change().shift(-1) * 100
-#     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
-
-#     lags = [1, 3, 5]
-    
-#     # Google Trends 피처 제거 상태 유지
-#     lag_factors = ['Daily_Return', 'VIX', 'FGI', 'Sentiment_Score', 
-#                    'YIELD_CURVE', 'BBB_OAS', 'WTI', 'GOLD', 'COPPER',
-#                    'DXY', 'NASDAQ_SP500_Ratio', 'SP500_EPS'] 
-    
-#     for factor in lag_factors:
-#         if factor in df.columns:
-#             for lag in lags:
-#                 df[f'{factor}_Lag_{lag}'] = df[factor].shift(lag)
-                
-#     df['VIX_Change_5D'] = df['VIX'].diff(5)
-#     df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
-    
-#     df = df.dropna()
-    
-#     base_features = [col for col in df.columns if not col.endswith(('Return', 'Close')) and 'SP500_' not in col and 'NASDAQ_' not in col]
-#     features = [f for f in base_features + ['SP500_Close'] if f in df.columns and ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'DXY', 'NASDAQ_SP500_Ratio'])]
-#     features = list(set(features))
-    
-#     return df, features
-
-# # ------------------------
-# # 4. Streamlit 실행 로직 (LGBM 피처 선택 및 네이버 2회 호출 적용)
-# # ------------------------
-
-# @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
-# def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params):
-#     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
-#     xgb_model = xgb.XGBRegressor(**_xgb_params)
-#     rf_model = RandomForestRegressor(**_rf_params)
-    
-#     voting_model = VotingRegressor(
-#         estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
-#         weights=[1, 1, 1] 
-#     )
-#     voting_model.fit(_X_train_df, _y_train) 
-    
-#     lgbm_shap_model = lgb.LGBMRegressor(**_lgbm_params)
-#     lgbm_shap_model.fit(_X_train_df, _y_train)
-    
-#     return voting_model, lgbm_shap_model
-
-# st.markdown("---")
-# # UI 입력 요소
-# col1, col2, col3 = st.columns([1.5, 1, 1])
-# with col1:
-#     news_query = st.text_input("📰 뉴스 감성 분석 키워드", value="미국 증시 전망", help="네이버 뉴스 검색에 사용될 키워드 (예: S&P 500, 미국 주식, 연준)")
-# with col2:
-#     start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365 * 2)) 
-# with col3:
-#     end_date = st.date_input("분석 종료일", datetime.now())
-    
-# if st.button("🚀 데이터 로드, 분석 및 예측 시작", type="primary", use_container_width=True):
-    
-#     # 1. 데이터 로드
-#     market_df = load_market_data(start_date, end_date)
-#     fred_data = get_fred_data()
-#     fg_df = get_fear_greed_index(limit=365 * 3)
-#     trends_df = pd.DataFrame() # Google Trends 제거 상태 유지
-    
-#     # 1-2. 뉴스 감성 분석 (🌟 2회 요청 로직 적용)
-#     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
-        
-#         # 1회차 요청 (start=1, display=100)
-#         news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
-#         # 2회차 요청 (start=101, display=100)
-#         news_batch_2 = get_naver_news_api(news_query, display=100, start=101)
-        
-#         all_news = pd.concat([news_batch_1, news_batch_2]).drop_duplicates(subset=['Title']).reset_index(drop=True)
-        
-#         if all_news.empty or 'Date' not in all_news.columns or all_news['Date'].isnull().all():
-#             st.warning("⚠️ 네이버 API로부터 유효한 기사 데이터를 수집하지 못했습니다. 감성 분석을 건너뜁니다.")
-#             filtered_news = pd.DataFrame(columns=['Date', 'Sentiment_Score'])
-#         else:
-#             load_start_date = start_date - timedelta(days=50)
-#             filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
-            
-#             if not filtered_news.empty:
-#                 filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
-#                 st.success(f"✅ 뉴스 감성 분석 완료! (총 {len(filtered_news)}개 기사 분석)")
-#             else:
-#                 st.warning("⚠️ 지정된 기간에 해당하는 기사가 없습니다. 감성 분석을 건너뜁니다.")
-
-#     # 2. 데이터 병합
-#     df_merge = market_df
-#     if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
-#     for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
-#     if not filtered_news.empty:
-#         news_grouped = filtered_news.groupby('Date')['Sentiment_Score'].mean().to_frame()
-#         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
-    
-#     df_merge = df_merge.fillna(method='ffill').fillna(0)
-    
-#     # 3. 피처 엔지니어링 및 데이터 준비
-#     df_ml, features_full = create_features(df_merge)
-    
-#     # Data Sampling: 최근 500개 데이터 포인트로 제한 (약 2년)
-#     df_ml = df_ml.tail(500)
-    
-#     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
-
-#     if len(df_ml) <= 100:
-#         st.error("데이터가 부족합니다. 분석 기간을 늘리세요. (최소 100일 필요)")
-#         st.stop()
-        
-#     X_full = df_ml[features_full]
-#     y = df_ml['Next_Day_Return']
-    
-#     # 🌟 4. 피처 선택: LightGBM 중요도 기반으로 변경
-#     st.subheader("⚙️ 피처 선택 (LightGBM 중요도 기반 Top 15)")
-    
-#     # 모델 파라미터 정의 (훈련 및 캐싱을 위한 정의와 동일하게 유지)
-#     LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
-#     XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
-#     RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
-
-#     # 🌟 임시 모델을 훈련하여 피처 중요도 계산
-#     temp_model = lgb.LGBMRegressor(**LGBM_PARAMS) 
-#     temp_model.fit(X_full, y)
-
-#     feature_importances = pd.Series(temp_model.feature_importances_, index=X_full.columns)
-#     features = feature_importances.nlargest(15).index.tolist()
-    
-#     st.info(f"선택된 피처 수: {len(features)}개. (전체 {len(features_full)}개 중 상위 15개, LGBM 기반)")
-#     X = df_ml[features] # 축소된 피처셋 사용
-    
-#     # 전체 데이터 스케일링 준비
-#     scaler = MinMaxScaler()
-#     X_scaled_all = scaler.fit_transform(X)
-#     X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
-    
-#     # 테스트 데이터셋 분리 (마지막 30일)
-#     test_size = max(30, int(0.2 * len(X_scaled_all_df)))
-#     X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
-#     y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
-    
-#     # 5. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
-    
-#     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
-    
-#     n_splits = 2 
-#     tscv = TimeSeriesSplit(n_splits=n_splits)
-    
-#     r2_scores_lgbm = []
-    
-#     with st.spinner(f"⏳ TimeSeriesSplit 교차검증 중 (폴드 {n_splits}개, n_estimators=300, Early Stopping=30 적용)..."):
-        
-#         for i, (train_index, val_index) in enumerate(tscv.split(X_train_df)):
-#             X_train_fold, X_val_fold = X_train_df.iloc[train_index], X_train_df.iloc[val_index]
-#             y_train_fold, y_val_fold = y_train.iloc[train_index], y_train.iloc[val_index]
-
-#             lgbm_fold = lgb.LGBMRegressor(**LGBM_PARAMS)
-            
-#             lgbm_fold.fit(X_train_fold, y_train_fold,
-#                           eval_set=[(X_val_fold, y_val_fold)],
-#                           eval_metric='rmse',
-#                           callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)])
-            
-#             y_val_pred = lgbm_fold.predict(X_val_fold)
-#             r2_scores_lgbm.append(r2_score(y_val_fold, y_val_pred))
-            
-#         avg_r2 = np.mean(r2_scores_lgbm)
-#         st.info(f"✅ TimeSeriesSplit 평균 R² (LGBM 기준): **{avg_r2:.4f}**")
-#         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
-#     st.markdown("---")
-
-#     # 최종 앙상블 모델 훈련 (캐싱 적용)
-#     voting_model, lgbm_model = train_voting_model(X_train_df, y_train, LGBM_PARAMS, XGB_PARAMS, RF_PARAMS)
-        
-#     # 잔차 기반 신뢰구간 계산 및 예측
-#     y_train_pred_lgbm = lgbm_model.predict(X_train_df)
-#     residuals = y_train - y_train_pred_lgbm
-#     residual_std = residuals.std()
-#     CI_FACTOR = 1.645 * residual_std 
-    
-#     y_test_pred = voting_model.predict(X_test_df)
-
-#     # 다음 날 예측 및 CI 계산
-#     last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
-#     next_day_return_pred = voting_model.predict(last_data_scaled)[0]
-#     low_ci = next_day_return_pred - CI_FACTOR
-#     high_ci = next_day_return_pred + CI_FACTOR
-    
-#     # 6. 결과 출력 
-#     # ... (결과 출력 로직 생략) ...
-#     mse = mean_squared_error(y_test, y_test_pred)
-#     r2 = r2_score(y_test, y_test_pred)
-
-#     st.markdown("---")
-#     st.header("📈 최종 예측 결과 및 모델 성능")
-    
-#     col_pred1, col_pred2, col_pred3, col_pred4 = st.columns(4)
-
-#     def format_pred_value(value): return f"{value:+.2f}%"
-
-#     with col_pred1:
-#         st.metric(label="📊 다음 거래일 S&P 500 예측 수익률", value=format_pred_value(next_day_return_pred), delta=f"90% CI: {low_ci:+.2f}% ~ {high_ci:+.2f}%")
-#     with col_pred2:
-#         st.metric(label="✅ 테스트 R² (앙상블)", value=f"{r2:.2f}", help=f"MSE: {mse:.4f}. 1에 가까울수록 적합도가 높음.")
-#     with col_pred3:
-#         current_vix = df_ml['VIX'].iloc[-1]
-#         vix_trend = "하락 (강세) 🟢" if df_ml['VIX_Change_5D'].iloc[-1] < 0 else "상승 (약세) 🔴"
-#         st.metric(label="🔥 현재 VIX 지수", value=f"{current_vix:.2f}", delta=vix_trend)
-#     with col_pred4:
-#         action = "매수/추세 추종" if next_day_return_pred > 0.3 and low_ci > -0.1 else ("매도/리스크 관리" if next_day_return_pred < -0.3 else "관망/중립")
-#         action_color = "#D4EDDA" if "매수" in action else ("#F8D7DA" if "매도" in action else "#FFF3CD")
-#         st.markdown(f"""
-#         <div style='padding: 10px; border-radius: 5px; text-align: center; 
-#             background-color: {action_color}; color: {"#155724" if "매수" in action else ("#721C24" if "매도" in action else "#856404")}; 
-#             font-weight: bold; margin-top: 15px;'>
-#             최종 투자 시그널: {action}
-#         </div>
-#         """, unsafe_allow_html=True)
-        
-#     st.markdown("---")
-
-#     # 7. SHAP 해석 추가 
-#     st.header("💡 예측 해석: SHAP (SHapley Additive exPlanations)")
-#     st.markdown("**SHAP**을 사용하여 모델이 최종 예측(`{:.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)".format(next_day_return_pred))
-    
-#     try:
-#         explainer = shap.TreeExplainer(lgbm_model) 
-#         last_input = X_test_df.iloc[-1].values.reshape(1, -1)
-#         shap_values = explainer.shap_values(last_input)
-        
-#         shap_df = pd.DataFrame({
-#             'Feature': X_test_df.columns,
-#             'SHAP Value': shap_values[0],
-#             'Feature Value': last_input[0]
-#         })
-        
-#         shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
-#         shap_df = shap_df.sort_values('Abs SHAP', ascending=False).head(5)
-
-#         fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
-#                            color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
-#                            title=f"최종 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
-#                            hover_data={'Feature Value': True, 'SHAP Value': ':.4f'})
-#         fig_shap.update_layout(yaxis={'categoryorder':'total ascending'})
-#         st.plotly_chart(fig_shap, use_container_width=True)
-
-#     except Exception as e:
-#         st.warning(f"⚠️ SHAP 해석 로드 중 오류 발생: {e}.")
-#     st.markdown("---")
-
-
-#     # 8. 피처 상관관계 히트맵 시각화 추가 (LGBM 중요도로 피처 선택했으므로 시각화 제목 수정)
-#     st.header("🔗 피처 상관관계 히트맵")
-#     st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟 간의 상관관계를 시각적으로 확인합니다.")
-
-#     correlation_df = df_ml[features + ['Next_Day_Return']].copy()
-#     N_TOP_FEATURES = len(features) 
-    
-#     try:
-#         corr_matrix = correlation_df.corr()
-#         fig_heatmap = px.imshow(corr_matrix, 
-#                                  x=corr_matrix.columns, 
-#                                  y=corr_matrix.columns,
-#                                  color_continuous_scale='RdBu_r', 
-#                                  title=f'LGBM 선택 {N_TOP_FEATURES}개 피처 간의 상관관계 히트맵')
-#         fig_heatmap.update_xaxes(side="top")
-        
-#         annotations = []
-#         for i, row in enumerate(corr_matrix.values):
-#             for j, val in enumerate(row):
-#                 annotations.append(
-#                     dict(x=corr_matrix.columns[j], y=corr_matrix.columns[i], 
-#                          text=f"{val:.2f}", showarrow=False, font=dict(color="black" if abs(val) < 0.6 else "white"))
-#                 )
-#         fig_heatmap.update_layout(annotations=annotations, height=800)
-#         st.plotly_chart(fig_heatmap, use_container_width=True)
-
-#     except Exception as e:
-#         st.warning(f"⚠️ 히트맵 생성 중 오류: {e}")
-        
-#     st.markdown("---")
-
-
-#     # 9. 주요 매크로 팩터 추이 시각화 (변경 없음)
-#     # ... (시각화 로직은 이전과 동일하게 유지) ...
-#     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
-    
-#     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
-
-#     fig_macro = go.Figure()
-    
-#     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['SP500_Close'], name='S&P 500 (좌측 축)', line=dict(color='#1f77b4', width=2), yaxis='y1'))
-#     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['YIELD_CURVE'], name='장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
-#     fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")     
-#     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['BBB_OAS'], name='BBB 회사채 스프레드', line=dict(color='green', width=1.5), yaxis='y3', opacity=0.8))
-#     if 'DXY' in df_macro_plot.columns:
-#          fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['DXY'], name='USD Index (DXY)', line=dict(color='purple', width=1.5), yaxis='y4', opacity=0.8))
-
-#     fig_macro.update_layout(title="S&P 500 vs. 경기/신용 리스크 지표", xaxis_title="날짜",
-#         yaxis=dict(title=dict(text='S&P 500 종가', font=dict(color="#1f77b4")), domain=[0, 1]),
-#         yaxis2=dict(title=dict(text='금리차 (%)', font=dict(color="red")), overlaying='y', side='right', position=0.90, showgrid=False),
-#         yaxis3=dict(title=dict(text='BBB OAS', font=dict(color="green")), overlaying='y', side='right', position=0.95, showgrid=False),
-#         yaxis4=dict(title=dict(text='DXY', font=dict(color="purple")), overlaying='y', side='right', position=1.0, showgrid=False),
-#         hovermode="x unified", height=600, legend=dict(x=0, y=1.05, orientation="h"))
-    
-#     st.plotly_chart(fig_macro, use_container_width=True)
-
-
-#     # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
-#     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
-    
-#     y_test_df = pd.DataFrame({
-#         'Actual': y_test, 'Predicted': y_test_pred,
-#         'Low_CI': y_test_pred - CI_FACTOR, 'High_CI': y_test_pred + CI_FACTOR
-#     }, index=df_ml.index[-test_size:])
-
-#     fig_pred = go.Figure()
-
-#     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['High_CI'], mode='lines', line=dict(width=0), showlegend=False))
-#     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Low_CI'], fill='tonexty', fillcolor='rgba(173, 216, 230, 0.3)', mode='lines', line=dict(width=0), name='90% 신뢰구간'))
-#     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='markers', name='실제 수익률', marker=dict(color='blue', size=5, opacity=0.8)))
-#     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='앙상블 예측 수익률 (Median)', line=dict(color='red', width=2)))
-
-#     fig_pred.update_layout(title=f"테스트 기간 S&P 500 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
-#     st.plotly_chart(fig_pred, use_container_width=True)
-    
-#     # 11. 팩터 중요도 시각화 
-#     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
-    
-#     importance_df = pd.DataFrame({
-#         'Feature': features,
-#         'Importance': lgbm_model.feature_importances_
-#     }).sort_values('Importance', ascending=False).head(15)
-
-#     fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
-#                      title='LightGBM 모델 상위 15개 팩터 중요도',
-#                      color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
-#     fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
-#     st.plotly_chart(fig_imp, use_container_width=True)
-
-
-# st.markdown("---")
-# st.warning("⚠️ **면책 조항:** 이 모델은 교육 및 분석 목적으로만 제공됩니다. 실제 투자에 사용하기 전에 충분한 검증과 리스크 분석을 수행해야 합니다.")
+st.warning("⚠️ 면책: 이 모델은 교육/연구용입니다. 실제 투자 결정 전에 충분한 검증 및 리스크 점검을 하세요.")
