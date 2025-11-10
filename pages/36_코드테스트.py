@@ -8,7 +8,7 @@ import plotly.express as px
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import TimeSeriesSplit 
+from sklearn.model_selection import TimeSeriesSplit
 import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
