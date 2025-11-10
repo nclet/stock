@@ -23,8 +23,8 @@ import re
 import shap 
 import matplotlib.pyplot as plt 
 import seaborn as sns 
-from pykrx import bond, stock # pykrx 임포트
-
+from pykrx import stock # pykrx 임포트
+from pykrx import bond
 # ------------------------
 # ✨ 상수 및 페이지 설정
 # ------------------------
@@ -116,11 +116,19 @@ def get_fear_greed_index(limit=1095):
 def fetch_pykrx_vix(start_date, end_date):
     """pykrx를 사용하여 KS200 VIX 지수 (121000)를 로드합니다."""
     try:
-        df = stock.get_index_series("121000", start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d"))
+        # KS200 VIX 지수 코드: '121000'
+        # 함수명을 get_index_ohlcv로 변경
+        df = stock.get_index_ohlcv(
+            start_date.strftime("%Y%m%d"), 
+            end_date.strftime("%Y%m%d"), 
+            "121000"
+        )
+        # 종가('종가') 컬럼만 선택하여 이름 변경
         df = df.rename(columns={'종가': 'VKOSPI'})
         df.index = df.index.date
         return df[['VKOSPI']]
     except Exception as e:
+        # 오류 발생 시 이전 함수명에 대한 힌트 추가
         st.warning(f"⚠️ pykrx VKOSPI (121000) 데이터 로드 실패: {e}")
         return pd.DataFrame()
 
