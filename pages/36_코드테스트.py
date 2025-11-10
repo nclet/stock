@@ -132,7 +132,7 @@ def load_market_data(start_date, end_date):
             progress_bar.progress(i / len(tickers), text=f"{name} ({ticker}) 로드 중...")
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
-            df.index = df.index.date
+            df.index = df.index.date # 인덱스를 datetime.date 객체로 설정
             all_data.append(df)
             time.sleep(0.05)
         except Exception as e:
@@ -153,16 +153,25 @@ def load_market_data(start_date, end_date):
     df_merged = pd.concat(all_data, axis=1, join='outer').sort_index()
     df_merged.index.name = 'Date'
     
+    # ------------------------------------------------------------------
+    # 🚨 수정된 부분: 인덱스를 datetime.date 객체에서 DatetimeIndex로 변환
+    # 이 과정이 있어야 shift(freq='D')가 NotImplementedError 없이 작동합니다.
+    try:
+        df_merged.index = pd.to_datetime(df_merged.index)
+    except Exception as e:
+        st.error(f"❌ 데이터프레임 인덱스 변환 오류: {e}")
+        return pd.DataFrame()
+    # ------------------------------------------------------------------
+    
     if 'DXY' in df_merged.columns:
         df_merged['DXY'] = df_merged['DXY'].shift(1, freq='D').ffill()
         
     return df_merged
 
 # ------------------------
-# 2. 감성/키워드 분석 모델 로드 및 함수 정의 (순서 조정)
+# 2. 감성/키워드 분석 모델 로드 및 함수 정의
 # ------------------------
 
-# 🚨 NameError 해결: 함수 정의를 먼저 배치
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
@@ -177,10 +186,14 @@ def load_sentiment_model():
     except Exception as e:
         st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
         st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
-        st.stop()
+        # 모델 로드 실패 시 None 반환 후 호출부에서 오류 처리
         return None, None, None
 
-tokenizer, sentiment_model, device = load_sentiment_model() # 👈 호출 (이제 정의가 위에 있음)
+tokenizer, sentiment_model, device = load_sentiment_model() 
+if tokenizer is None:
+    st.error("감성 분석 모델 로드에 실패하여 앱을 실행할 수 없습니다.")
+    st.stop()
+
 
 def analyze_sentiment(text):
     """Calculates sentiment score for the given text."""
@@ -363,14 +376,18 @@ with col1:
         help="OR 연산으로 연결된 핵심 키워드를 입력하여 관련 기사 200개를 수집합니다."
     )
 with col2:
-    start_date = st.date_input("분석 시작일", datetime.now() - timedelta(days=365 * 2)) 
+    start_date = st.date_input("분석 시작일", datetime.now().date() - timedelta(days=365 * 2)) 
 with col3:
-    end_date = st.date_input("분석 종료일", datetime.now())
+    end_date = st.date_input("분석 종료일", datetime.now().date())
     
 if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 적용)", type="primary", use_container_width=True):
     
     # 1. 데이터 로드
     market_df = load_market_data(start_date, end_date)
+    
+    if market_df.empty:
+        st.stop()
+        
     fred_data = get_fred_data()
     fg_df = get_fear_greed_index(limit=365 * 3)
     
@@ -387,12 +404,19 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
             news_features_df = pd.DataFrame(columns=['Date', 'Sentiment_Score', 'Negative_Keyword_Count', 'Positive_Keyword_Count', 'News_Count']).set_index('Date')
         else:
             news_features_df = extract_news_features(all_news) 
+            # 뉴스 피처의 인덱스도 datetime 객체로 변환하여 병합 시 오류 방지
+            if not news_features_df.empty:
+                 news_features_df.index = pd.to_datetime(news_features_df.index)
             st.success(f"✅ 뉴스 감성/키워드 분석 완료! (총 {len(all_news)}개 기사 분석)")
 
     # 2. 데이터 병합 (개선된 피처 반영)
     df_merge = market_df
-    if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
-    for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
+    if not fg_df.empty: 
+        fg_df.index = pd.to_datetime(fg_df.index)
+        df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
+    for name, df_fred in fred_data.items(): 
+        df_fred.index = pd.to_datetime(df_fred.index)
+        df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
     if not news_features_df.empty:
         df_merge = pd.merge(df_merge, news_features_df, left_index=True, right_index=True, how='left')
     
@@ -401,9 +425,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
-    df_ml = df_ml.tail(500)
-    df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
-
+    # 날짜 범위 조정 (DatetimeIndex 사용)
+    df_ml = df_ml[(df_ml.index >= pd.to_datetime(start_date)) & (df_ml.index <= pd.to_datetime(end_date))]
+    df_ml = df_ml.tail(500) # 최근 500개만 사용
+    
     if len(df_ml) <= 100:
         st.error("데이터가 부족합니다. 분석 기간을 늘리세요. (최소 100일 필요)")
         st.stop()
@@ -612,7 +637,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     # 9. 주요 매크로 팩터 추이 시각화
     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
     
-    df_macro_plot = df_ml[df_ml.index >= start_date].copy()
+    df_macro_plot = df_ml[df_ml.index >= pd.to_datetime(start_date)].copy()
 
     fig_macro = go.Figure()
     
