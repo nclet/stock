@@ -32,7 +32,7 @@ st.set_page_config(page_title="🇺🇸 미국 증시 중단기 추세 예측 (�
 st.title("🦅 미국 증시 추세 예측 모델 (성능/파이프라인 개선 반영)")
 
 st.markdown("""
-**S&P 500**의 향후 $\mathbf{10}$거래일 누적 수익률을 예측합니다. $\text{ChatGPT}$의 조언을 반영하여 **뉴스 분석 강화, 매크로 변수 변화율($\text{Pct Change}$) 추가, 앙상블 모델 다양성**을 높였습니다.
+**S&P 500**의 향후 $\mathbf{10}$거래일 누적 수익률을 예측합니다. **뉴스 분석 강화 및 데이터 클리닝 로직**을 반영하여 안정성을 높였습니다.
 """)
 
 # ------------------------
@@ -42,7 +42,6 @@ st.markdown("""
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
     try:
-        # st.secrets['fred'] 구조에 맞게 변경 (KeyError 방지)
         fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
         if not fred_api_key:
              st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
@@ -268,6 +267,8 @@ def create_features(df_merge):
         df['Sentiment_MA_3D'] = df['Sentiment_Score'].rolling(window=3).mean()
         df['Sentiment_MA_5D'] = df['Sentiment_Score'].rolling(window=5).mean()
     if 'News_Count' in df.columns:
+         # ffill 후에도 NaN이 남아있을 경우 0으로 채워질 수 있으므로, 롤링 전에 NaN을 처리해야 합니다.
+         # 이미 df_merge = df_merge.fillna(method='ffill').fillna(0) 으로 처리되었습니다.
          df['News_Count_5D'] = df['News_Count'].rolling(window=5).mean() # 뉴스량 5일 MA 사용
         
     # 2. 매크로/비정상 시계열 피처 개선: Pct Change 추가
@@ -320,7 +321,7 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
     estimators = [('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)]
     weights = [1, 1, 1]
 
-    # CatBoost를 사용하려면 주석을 해제하고, CatBoostRegressor를 임포트하세요.
+    # CatBoost 사용을 위한 코드 (선택적)
     # try:
     #     cat_model = CatBoostRegressor(
     #         iterations=500, learning_rate=0.01, depth=7, loss_function='RMSE', 
@@ -329,7 +330,7 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
     #     estimators.append(('cat', cat_model))
     #     weights.append(1)
     # except NameError:
-    #     st.warning("⚠️ CatBoostRegressor를 찾을 수 없습니다. (pip install catboost 필요)")
+    #     pass # CatBoost가 설치되지 않은 경우 건너뜀
     
     voting_model = VotingRegressor(
         estimators=estimators,
@@ -346,6 +347,7 @@ st.markdown("---")
 # UI 입력 요소
 col1, col2, col3 = st.columns([1.5, 1, 1])
 with col1:
+    # 🔑 사용자가 새로 기재한 키워드로 기본값 변경
     news_query = st.text_input(
         "📰 뉴스 감성 분석 키워드", 
         value="미국증시전망|금리인상|연준|FOMC|경기침체|경기과열|AI|금리인상|유동성경색|은행부실|기업파산|Capex 슈퍼사이클|노동시장이완|장기기대인플레이션|정채스탠스변화|완화사이클|반도체슈퍼사이클|희토류|국채시장변동성", 
@@ -385,20 +387,20 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
                 st.warning("⚠️ 지정된 기간에 해당하는 기사가 없습니다. 뉴스 분석을 건너뜁니다.")
                 news_features_df = pd.DataFrame(columns=['Date', 'Sentiment_Score', 'Risk_Keyword_Count', 'News_Count']).set_index('Date')
 
-    # 2. 데이터 병합 (매크로/뉴스/시장 데이터)
+    # 2. 데이터 병합
     df_merge = market_df
     if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
     for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
     if not news_features_df.empty:
         df_merge = pd.merge(df_merge, news_features_df, left_index=True, right_index=True, how='left')
     
-    # 매크로 변수의 Release Lag 반영 (월/분기 발표 변수는 30일/90일 ffill)
-    # 현재는 단순 ffill을 사용하며, 향후 더 정교한 시차 반영이 필요함.
+    # 매크로/뉴스 변수의 Release Lag 반영 및 초기 NaN 처리
     df_merge = df_merge.fillna(method='ffill').fillna(0)
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
+    # 데이터 기간 조정
     df_ml = df_ml.tail(500)
     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
 
@@ -425,9 +427,19 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     st.info(f"선택된 피처 수: **{len(features)}개**. (개선된 피처 포함, LGBM 기반)")
     X = df_ml[features] 
     
+    # 🌟🌟🌟 오류 해결을 위한 데이터 클리닝 강화 🌟🌟🌟
+    
+    # 1. 무한대 (Inf) 값을 NaN으로 대체합니다. (MinMaxScaler가 처리 못함)
+    X.replace([np.inf, -np.inf], np.nan, inplace=True)
+    
+    # 2. 최종적으로 남은 NaN을 0으로 대체합니다.
+    X.fillna(0, inplace=True) 
+    
+    # 🌟🌟🌟 클리닝 로직 끝 🌟🌟🌟
+    
     # 전체 데이터 스케일링 준비
     scaler = MinMaxScaler()
-    X_scaled_all = scaler.fit_transform(X)
+    X_scaled_all = scaler.fit_transform(X) 
     X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
     
     # 테스트 데이터셋 분리 (마지막 30일)
