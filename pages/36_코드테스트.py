@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.inspection import permutation_importance # 🌟 Permutation Importance 추가
+from sklearn.inspection import permutation_importance 
 import urllib.parse
 from json.decoder import JSONDecodeError
 import FinanceDataReader as fdr
@@ -23,7 +23,7 @@ import re
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
-from catboost import CatBoostRegressor # 🌟 CatBoost 추가
+from catboost import CatBoostRegressor 
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -38,11 +38,11 @@ st.markdown("""
 # ------------------------
 # 0. 매크로 데이터 수집 함수 (발표 지연 shift 적용)
 # ------------------------
+# ... (get_fred_data, get_fear_greed_index 함수 정의) ... 
 @st.cache_data(show_spinner="⏳ FRED 데이터 로드 중...")
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다. (1일 shift 적용)"""
     try:
-        # st.secrets 접근 방식 수정 (KeyError 방지)
         fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
         if not fred_api_key:
              st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
@@ -82,7 +82,6 @@ def get_fred_data():
         for future in futures:
             ticker, df = future.result()
             if not df.empty: 
-                 # 🌟 [개선 2]: 매크로 변수 발표 지연을 고려해 1일 shift 적용
                  results[TICKERS[ticker]] = df.shift(1, freq='D').ffill()
     
     if '10Y' in results and '2Y' in results:
@@ -103,14 +102,14 @@ def get_fear_greed_index(limit=1095):
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s").dt.date
         df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
         df = df[["Date", "FGI"]].sort_values("Date").set_index('Date')
-        # 🌟 [개선 2]: FGI도 발표 지연을 고려해 1일 shift 적용
         return df.shift(1, freq='D').ffill()
     except Exception as e:
         st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
         return pd.DataFrame()
 
+
 # ------------------------
-# 1. 팩터 및 증시 데이터 로드 (Breadth, Put/Call, VIX Term 추가)
+# 1. 팩터 및 증시 데이터 로드
 # ------------------------
 @st.cache_data(show_spinner="⏳ 주가, Breadth, Put/Call, VIX Term 로드 중...")
 def load_market_data(start_date, end_date):
@@ -119,12 +118,10 @@ def load_market_data(start_date, end_date):
     tickers = {
         '^GSPC': 'SP500_Close', '^IXIC': 'NASDAQ_Close', '^VIX': 'VIX', 
         'CL=F': 'WTI', 'GC=F': 'GOLD', 'HG=F': 'COPPER', 'DX-Y.NYB': 'DXY',
-        '^VIX9D': 'VIX_9D' # 🌟 [개선 3]: VIX Term Structure 용 VIX 9D 추가
+        '^VIX9D': 'VIX_9D'
     }
     
-    # 🌟 [개선 3]: Breadth (A/D Line) 및 Put/Call Ratio (GSPC: S&P 500) 데이터 추가
-    BREADTH_TICKER = '^ADLINE' # A/D Line (대안: QQQ A/D)
-    PUT_CALL_RATIO_TICKER = 'SPY' # Put/Call Ratio 데이터가 일반적으로 제공되는 심볼 없음 -> 직접 크롤링/다른 API 필요. 임시로 제외.
+    BREADTH_TICKER = '^ADLINE' 
     
     all_data = []
     
@@ -142,17 +139,12 @@ def load_market_data(start_date, end_date):
             st.warning(f"⚠️ {name} ({ticker}) 데이터 로드 실패: {e}")
             continue
 
-    # A/D Line 로드 (FinanceDataReader에서 지원한다면)
     try:
          df_ad = fdr.DataReader(BREADTH_TICKER, start=load_start_date, end=end_date)[['Close']].rename(columns={'Close': 'AD_Line'})
          df_ad.index = df_ad.index.date
          all_data.append(df_ad)
     except Exception:
          st.warning("⚠️ A/D Line 데이터 로드 실패. 피처에서 제외됩니다.")
-
-    # Put/Call Ratio는 신뢰성 있는 무료 API가 없어 제외. (직접 크롤링 또는 유료 API 필요)
-    # df_pcr = load_put_call_ratio(load_start_date, end_date)
-    # if not df_pcr.empty: all_data.append(df_pcr)
 
     progress_bar.empty()
     st.success("✅ 시장 데이터 로드 완료!")
@@ -161,18 +153,50 @@ def load_market_data(start_date, end_date):
     df_merged = pd.concat(all_data, axis=1, join='outer').sort_index()
     df_merged.index.name = 'Date'
     
-    # 🌟 [개선 2]: DXY도 발표 지연을 고려해 1일 shift 적용
     if 'DXY' in df_merged.columns:
         df_merged['DXY'] = df_merged['DXY'].shift(1, freq='D').ffill()
         
     return df_merged
 
 # ------------------------
-# 2. 감성/키워드 분석 함수 (키워드 카운트 주력 사용)
+# 2. 감성/키워드 분석 모델 로드 및 함수 정의 (순서 조정)
 # ------------------------
 
-# 모델 로드 (Sentiment는 보조적으로 사용)
-tokenizer, sentiment_model, device = load_sentiment_model()
+# 🚨 NameError 해결: 함수 정의를 먼저 배치
+@st.cache_resource
+def load_sentiment_model():
+    """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
+    hf_token = st.secrets.get("HF_TOKEN")
+    model_name = "snunlp/KR-FinBert-SC"
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='auto')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+        return tokenizer, model, device
+    except Exception as e:
+        st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
+        st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
+        st.stop()
+        return None, None, None
+
+tokenizer, sentiment_model, device = load_sentiment_model() # 👈 호출 (이제 정의가 위에 있음)
+
+def analyze_sentiment(text):
+    """Calculates sentiment score for the given text."""
+    if not text: return 0.0
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad(): outputs = sentiment_model(**inputs)
+    probabilities = torch.softmax(outputs.logits, dim=1)[0]
+    neg_idx, pos_idx = None, None
+    for idx, label in sentiment_model.config.id2label.items():
+        if 'negative' in label.lower() or '부정' in label: neg_idx = idx
+        elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
+    negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
+    positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
+    return positive_score - negative_score
+
 
 def get_naver_news_api(query, display=100, start=1, sort="date"): 
     """Naver News Search API에서 데이터를 가져옵니다. (기존 로직 유지)"""
@@ -186,7 +210,6 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         st.error(f"❌ 네이버 API 키 로드 중 예외 발생: {e}")
         return pd.DataFrame(columns=['Date', 'Title'])
 
-    # ... (기존 API 호출 및 파싱 로직 유지) ...
     enc_query = urllib.parse.quote(query)
     url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display={display}&start={start}&sort={sort}"
     headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
@@ -208,7 +231,6 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
     except Exception:
         return pd.DataFrame(columns=['Date', 'Title'])
 
-# 🌟 [개선 1]: 호재/악재 키워드 분리 및 뉴스 카운트 주력
 NEGATIVE_KEYWORDS = [
     "긴축", "금리인상", "매파", "고용둔화", "경기침체", 
     "정책 규제", "파산", "물가 폭등", "인플레이션", "유가 급등"
@@ -250,6 +272,7 @@ def extract_news_features(df_news):
 # ------------------------
 # 3. 피처 엔지니어링 함수 (개선된 피처 포함)
 # ------------------------
+# ... (create_features 함수 정의) ...
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
     df = df_merge.copy()
@@ -257,16 +280,13 @@ def create_features(df_merge):
     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
     
-    # 🌟 타겟 변수를 10일 후 누적 수익률로 변경
     df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
-    # 🌟 [개선 3]: VIX Term Structure (9D/30D 비율)
     if 'VIX_9D' in df.columns and 'VIX' in df.columns:
         df['VIX_9D_VIX_Ratio'] = df['VIX_9D'] / df['VIX']
-        df['VIX_Term_Structure'] = df['VIX_9D_VIX_Ratio'].apply(lambda x: 1 if x > 1.0 else 0) # 백워데이션 = 1
+        df['VIX_Term_Structure'] = df['VIX_9D_VIX_Ratio'].apply(lambda x: 1 if x > 1.0 else 0) 
         
-    # 뉴스 피처 이동평균/Lag 추가
     if 'Sentiment_Score' in df.columns:
         df['Sentiment_MA_5D'] = df['Sentiment_Score'].rolling(window=5).mean()
     if 'News_Count' in df.columns:
@@ -280,7 +300,6 @@ def create_features(df_merge):
 
     lags = [1, 3, 5, 10] 
     
-    # Lag 피처 목록 (새로운 피처 포함)
     lag_factors = [
         'Daily_Return', 'VIX', 'FGI', 
         'Sentiment_MA_5D', 'News_Count_5D', 
@@ -288,7 +307,7 @@ def create_features(df_merge):
         'Keyword_Net_MA_5D',
         'YIELD_CURVE', 'BBB_OAS', 'WTI', 'GOLD', 'COPPER',
         'DXY', 'NASDAQ_SP500_Ratio', 'SP500_EPS',
-        'VIX_9D_VIX_Ratio', 'AD_Line' # 🌟 [개선 3, 4] 추가된 피처
+        'VIX_9D_VIX_Ratio', 'AD_Line' 
     ]
     
     for factor in lag_factors:
@@ -299,25 +318,22 @@ def create_features(df_merge):
     df['VIX_Change_5D'] = df['VIX'].diff(5)
     df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
     
-    # 🌟 타겟 변수가 NaN이 되는 마지막 10일을 제거
     df = df.dropna()
     
-    # 최종 피처 목록
     features_to_include = [f for f in df.columns if 'Lag' in f or 'Change' in f or 'Ratio' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'VIX_Term_Structure']]
     features = list(set(features_to_include))
     
     return df, features
 
 # ------------------------
-# 4. Streamlit 실행 로직 (모델 및 튜닝, SHAP/Permutation 반영)
+# 4. Streamlit 실행 로직
 # ------------------------
 
-# 🌟 [개선 5, 6]: CatBoost 추가 및 모델 훈련 함수 (버전 키 추가)
 @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
 def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _cat_params, _features, version_key=1):
     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
     xgb_model = xgb.XGBRegressor(**_xgb_params)
-    cat_model = CatBoostRegressor(**_cat_params) # 🌟 CatBoost 모델
+    cat_model = CatBoostRegressor(**_cat_params) 
     
     estimators = [('lgbm', lgbm_model), ('xgb', xgb_model), ('cat', cat_model)]
     weights = [1, 1, 1]
@@ -326,19 +342,15 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _cat_pa
         estimators=estimators,
         weights=weights
     )
-    # XGBoost 피처 순서 불일치 방지 로직 (훈련 시점 피처 이름 저장)
     voting_model.fit(_X_train_df, _y_train) 
     
-    # SHAP/Permutation을 위한 LightGBM 모델
     lgbm_shap_model = lgb.LGBMRegressor(**_lgbm_params)
     lgbm_shap_model.fit(_X_train_df, _y_train)
     
     return voting_model, lgbm_shap_model
 
-# 🌟 [개선 5]: 간단한 Optuna 대안 (Grid Search 대신 Hyperparameters 직접 정의)
 LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
 XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
-# 🌟 CatBoost 파라미터 추가
 CAT_PARAMS = {'loss_function': 'RMSE', 'iterations': 300, 'learning_rate': 0.05, 'depth': 6, 'random_seed': 42, 'verbose': 0}
 
 st.markdown("---")
@@ -384,13 +396,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     if not news_features_df.empty:
         df_merge = pd.merge(df_merge, news_features_df, left_index=True, right_index=True, how='left')
     
-    # 매크로/뉴스 변수의 Release Lag 반영 및 초기 NaN 처리
     df_merge = df_merge.fillna(method='ffill').fillna(0)
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
-    # 데이터 기간 조정
     df_ml = df_ml.tail(500)
     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
 
@@ -408,28 +418,23 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     temp_model.fit(X_full, y)
 
     feature_importances = pd.Series(temp_model.feature_importances_, index=X_full.columns)
-    # 🌟 [개선 4]: 롤링 피처 셀렉션 대신 단순 Top-15 선택 로직 유지 (복잡성 최소화)
     features = feature_importances.nlargest(15).index.tolist()
     
     st.info(f"선택된 피처 수: **{len(features)}개**.")
     X = df_ml[features] 
     
-    # XGBoost 오류 방지를 위한 클리닝 및 순서 보장
     X.replace([np.inf, -np.inf], np.nan, inplace=True)
     X.fillna(0, inplace=True) 
-    X = X[features] # 순서 보장
+    X = X[features] 
 
-    # 전체 데이터 스케일링 준비
     scaler = MinMaxScaler()
     X_scaled_all = scaler.fit_transform(X) 
     X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
     
-    # 테스트 데이터셋 분리 (마지막 30일)
     test_size = max(30, int(0.2 * len(X_scaled_all_df)))
     X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
     y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
     
-    # 🌟 XGBoost 오류 방지를 위해 훈련/테스트 데이터의 피처 순서 강제 일치
     X_train_df = X_train_df[features]
     X_test_df = X_test_df[features]
 
@@ -442,7 +447,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     r2_scores_lgbm = []
     
     with st.spinner(f"⏳ TimeSeriesSplit 교차검증 중..."):
-        # ... (교차검증 로직 유지) ...
+        
         for i, (train_index, val_index) in enumerate(tscv.split(X_train_df)):
             X_train_fold, X_val_fold = X_train_df.iloc[train_index], X_train_df.iloc[val_index]
             y_train_fold, y_val_fold = y_train.iloc[train_index], y_train.iloc[val_index]
@@ -462,15 +467,14 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
     st.markdown("---")
 
-    # 최종 앙상블 모델 훈련 (CatBoost 포함)
     voting_model, lgbm_model = train_voting_model(
         X_train_df, 
         y_train, 
         LGBM_PARAMS, 
         XGB_PARAMS, 
-        CAT_PARAMS, # 🌟 CatBoost Params 전달
+        CAT_PARAMS, 
         tuple(features),
-        version_key=1 # 🌟 버전 키를 사용하여 캐시 무효화 강제 (이 값을 2로 바꾸면 재훈련됨)
+        version_key=1 
     )
         
     y_train_pred_lgbm = lgbm_model.predict(X_train_df)
@@ -478,16 +482,14 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     residual_std = residuals.std()
     CI_FACTOR = 1.645 * residual_std 
     
-    # 예측
     y_test_pred = voting_model.predict(X_test_df)
-    last_data_df = X_scaled_all_df.iloc[-1][features].to_frame().T # 피처 순서 재확인
+    last_data_df = X_scaled_all_df.iloc[-1][features].to_frame().T 
     next_day_return_pred = voting_model.predict(last_data_df)[0]
     
     low_ci = next_day_return_pred - CI_FACTOR
     high_ci = next_day_return_pred + CI_FACTOR
     
-    # 6. 결과 출력 (생략)
-    # ... (결과 출력 로직 유지) ...
+    # 6. 결과 출력
     mse = mean_squared_error(y_test, y_test_pred)
     r2 = r2_score(y_test, y_test_pred)
 
@@ -548,7 +550,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
         except Exception as e:
             st.warning(f"⚠️ SHAP 해석 로드 중 오류 발생: {e}.")
 
-    # 🌟 [개선 7]: Permutation Importance 분석
+    # Permutation Importance 분석
     with col_perm:
         st.subheader("2. Permutation Importance (LightGBM)")
         st.markdown("테스트 데이터셋에서 **전역적 중요도** 분석 (랜덤하게 섞었을 때 성능 저하)")
@@ -575,8 +577,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     st.markdown("---")
 
 
-    # 8. 피처 상관관계 히트맵 시각화 추가 (유지)
-    # ... (상관관계 히트맵 시각화 로직 유지) ...
+    # 8. 피처 상관관계 히트맵 시각화 추가
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟(`Return_10D`) 간의 상관관계를 시각적으로 확인합니다.")
 
@@ -608,7 +609,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     st.markdown("---")
 
 
-    # 9. 주요 매크로 팩터 추이 시각화 (AD Line 반영)
+    # 9. 주요 매크로 팩터 추이 시각화
     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
     
     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
@@ -641,8 +642,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     st.plotly_chart(fig_macro, use_container_width=True)
 
 
-    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델) (유지)
-    # ... (예측 vs. 실제 수익률 시각화 로직 유지) ...
+    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
     y_test_df = pd.DataFrame({
@@ -660,8 +660,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (7가지 개선 �
     fig_pred.update_layout(title=f"테스트 기간 S&P 500 10일 누적 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 11. 팩터 중요도 시각화 (유지)
-    # ... (팩터 중요도 시각화 로직 유지) ...
+    # 11. 팩터 중요도 시각화
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
     importance_df = pd.DataFrame({
