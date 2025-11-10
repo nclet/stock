@@ -23,7 +23,7 @@ import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
 # CatBoost 사용을 위해 주석 해제 (설치 필요: pip install catboost)
-# from catboost import CatBoostRegressor 
+# from catboost import CatBoostRegressor 
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -200,12 +200,10 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         response.raise_for_status() 
         data = response.json()
         items = data.get('items', [])
-        # 🌟🌟🌟 새로운 디버깅 로직 추가 🌟🌟🌟
+        # 🌟 디버깅 로직 유지: 0건 반환 시 알림
         if not items:
-            # st.error 대신 st.info를 사용하여 API가 정상 응답했으나 결과가 0개임을 표시
             st.info(f"✅ 네이버 API (쿼리: '{query[:20]}...')가 **정상적으로 응답했으나**, 검색 결과가 **0건**입니다. (키워드를 확인하거나, API 사용량 및 기간을 확인하세요.)")
             return pd.DataFrame(columns=['Date', 'Title'])
-        # 🌟🌟🌟 디버깅 로직 끝 🌟🌟🌟
         
         news_data = []
         for item in items:
@@ -222,7 +220,7 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         st.error("❌ 네이버 API 응답이 유효한 JSON 형식이 아닙니다. (API 사용량 초과, 잘못된 쿼리 가능성)")
     except Exception as e:
         st.error(f"❌ 네이버 API 요청 중 기타 오류 발생: {e}")
-         
+        
     return pd.DataFrame(columns=['Date', 'Title'])
 
 # 핵심 키워드 목록 정의 (사용자 제공 목록 유지)
@@ -278,7 +276,7 @@ def create_features(df_merge):
         df['Sentiment_MA_3D'] = df['Sentiment_Score'].rolling(window=3).mean()
         df['Sentiment_MA_5D'] = df['Sentiment_Score'].rolling(window=5).mean()
     if 'News_Count' in df.columns:
-         df['News_Count_5D'] = df['News_Count'].rolling(window=5).mean() # 뉴스량 5일 MA 사용
+          df['News_Count_5D'] = df['News_Count'].rolling(window=5).mean() # 뉴스량 5일 MA 사용
         
     # 2. 매크로/비정상 시계열 피처 개선: Pct Change 추가
     if 'YIELD_CURVE' in df.columns:
@@ -302,7 +300,7 @@ def create_features(df_merge):
         if factor in df.columns:
             for lag in lags:
                 df[f'{factor}_Lag_{lag}'] = df[factor].shift(lag)
-                
+            
     df['VIX_Change_5D'] = df['VIX'].diff(5)
     df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
     
@@ -317,7 +315,7 @@ def create_features(df_merge):
     return df, features
 
 # ------------------------
-# 4. Streamlit 실행 로직 (뉴스 분석 로깅 강화)
+# 4. Streamlit 실행 로직
 # ------------------------
 
 # CatBoost를 포함한 앙상블 모델 훈련 함수 (옵션)
@@ -345,7 +343,7 @@ st.markdown("---")
 # UI 입력 요소
 col1, col2, col3 = st.columns([1.5, 1, 1])
 with col1:
-    # 🔑 사용자가 새로 기재한 키워드로 기본값 변경
+    # 🌟 [수정]: value 값을 단순화하여 API 오류 해결
     news_query = st.text_input(
         "📰 뉴스 감성 분석 키워드", 
         value="미국증시전망 OR 금리인상 OR 연준", 
@@ -442,6 +440,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
     y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
     
+    # 🌟 [수정]: 피처 이름 불일치 오류(ValueError) 해결을 위해 순서 강제 일치
+    X_train_df = X_train_df[features]
+    X_test_df = X_test_df[features]
+
     # 5. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
     
@@ -487,11 +489,12 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
     residual_std = residuals.std()
     CI_FACTOR = 1.645 * residual_std 
     
+    # 490행: 예측 시 XGBoost의 피처 순서 문제가 해결됨
     y_test_pred = voting_model.predict(X_test_df)
 
     # 다음 10일 예측 및 CI 계산
-    last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
-    last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
+    # X_scaled_all_df에서 마지막 행(피처)을 가져와서 피처 순서를 'features'에 맞게 재정렬
+    last_data_df = X_scaled_all_df.iloc[-1][features].to_frame().T
     
     next_day_return_pred = voting_model.predict(last_data_df)[0]
     low_ci = next_day_return_pred - CI_FACTOR
@@ -546,9 +549,9 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
         shap_df = shap_df.sort_values('Abs SHAP', ascending=False).head(5)
 
         fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
-                           color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
-                           title=f"향후 10일 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
-                           hover_data={'Feature Value': True, 'SHAP Value': ':.4f'})
+                          color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
+                          title=f"향후 10일 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
+                          hover_data={'Feature Value': True, 'SHAP Value': ':.4f'})
         fig_shap.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_shap, use_container_width=True)
 
