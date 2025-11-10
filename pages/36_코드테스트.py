@@ -370,7 +370,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (최적화 반영)
             news_features_df = pd.DataFrame(columns=['Date', 'Sentiment_Score', 'Risk_Keyword_Count', 'News_Count']).set_index('Date')
         else:
             load_start_date = start_date - timedelta(days=50)
-            filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
+            filtered_news = all_news.copy()
             
             if not filtered_news.empty:
                 # 개선된 뉴스 피처 추출 함수 사용
