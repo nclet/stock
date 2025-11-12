@@ -43,8 +43,8 @@ def get_fred_data():
     try:
         fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
         if not fred_api_key:
-             st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
-             return {}
+            st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
+            return {}
     except Exception:
         return {}
 
@@ -66,7 +66,7 @@ def get_fred_data():
             data = response.json().get('observations', [])
             df = pd.DataFrame(data)
             
-            # 🚨 수정: .dt.date 제거하여 DatetimeIndex 유지
+            # DatetimeIndex 유지
             df['date'] = pd.to_datetime(df['date']) 
             
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
@@ -82,16 +82,15 @@ def get_fred_data():
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fetch_single_fred, ticker, start_date): ticker for ticker in TICKERS.keys()}
         loaded_count = 0
+        total_tickers = len(TICKERS)
         for future in futures:
             ticker, df = future.result()
             if not df.empty: 
-                 # 🚨 지연 피처를 위해 shift를 여기서 적용 (데이터 파이프라인 개선 항목 2를 미리 적용)
-                 results[TICKERS[ticker]] = df.shift(1, freq='D').ffill()
+                # 1일 지연 피처를 위해 shift를 적용
+                results[TICKERS[ticker]] = df.shift(1, freq='D').ffill()
             loaded_count += 1
-            # Streamlit 프로그레스 바는 메인 스레드에서만 업데이트해야 합니다.
-            # 이 로직은 현재 Streamlit 환경에서 병렬 실행 중이므로, 이 부분을 주석 처리하고
-            # 최종 로딩 완료 시에만 메시지를 출력하는 방식으로 변경했습니다.
-            # progress_bar.progress(loaded_count / total_tickers, text=f"FRED 지표 로드 중... ({loaded_count}/{total_tickers})")
+            # 병렬 실행 중 Streamlit 업데이트는 주석 처리
+
     
     if '10Y' in results and '2Y' in results:
         df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
@@ -109,13 +108,13 @@ def get_fear_greed_index(limit=1095):
         df = pd.DataFrame(data)
         df["value"] = df["value"].astype(float)
         
-        # 🚨 수정: .dt.date 제거하여 DatetimeIndex 유지
+        # DatetimeIndex 유지
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
         
         df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
         df = df[["Date", "FGI"]].sort_values("Date").set_index('Date')
         
-        # 🚨 지연 피처를 위해 shift를 여기서 적용
+        # 1일 지연 피처를 위해 shift를 여기서 적용
         return df.shift(1, freq='D').ffill()
     except Exception as e:
         st.warning(f"⚠️ Fear & Greed Index 로드 오류: {e}")
@@ -142,7 +141,7 @@ def load_market_data(start_date, end_date):
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             
-            # 🚨 수정: .dt.date 제거하여 DatetimeIndex 유지
+            # DatetimeIndex 유지
             df.index = pd.to_datetime(df.index) 
             
             all_data.append(df)
@@ -158,7 +157,7 @@ def load_market_data(start_date, end_date):
     df_merged = pd.concat(all_data, axis=1, join='outer').sort_index()
     df_merged.index.name = 'Date'
     
-    # 🚨 DXY만 1일 지연 피처를 적용 (데이터 파이프라인 개선 항목 2를 미리 적용)
+    # DXY만 1일 지연 피처를 적용
     if 'DXY' in df_merged.columns:
         df_merged['DXY'] = df_merged['DXY'].shift(1, freq='D').ffill()
     
@@ -171,6 +170,7 @@ def load_market_data(start_date, end_date):
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
+    # NOTE: 한국어 키워드 뉴스 검색에 대비해 한국어 모델을 유지합니다.
     hf_token = st.secrets.get("HF_TOKEN")
     model_name = "snunlp/KR-FinBert-SC"
     try:
@@ -208,8 +208,8 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         client_id = st.secrets.get("naver", {}).get("client_id")
         client_secret = st.secrets.get("naver", {}).get("client_secret")
         if not client_id or not client_secret:
-             st.error("❌ 네이버 API 키(client_id/client_secret)가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
-             return pd.DataFrame(columns=['Date', 'Title']) 
+            st.error("❌ 네이버 API 키(client_id/client_secret)가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
+            return pd.DataFrame(columns=['Date', 'Title']) 
     except Exception as e:
         st.error(f"❌ 네이버 API 키 로드 중 예외 발생: {e}")
         return pd.DataFrame(columns=['Date', 'Title'])
@@ -229,10 +229,10 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
             title = re.sub('<[^<]+?>', '', item.get('title', ''))
             pub_date = item.get('pubDate', '')
             try: 
-                 # 🚨 수정: .date() 제거하여 Timestamp 유지
-                 pub_date_dt = pd.to_datetime(datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")).normalize()
+                # .date() 제거하여 Timestamp 유지 (Timezone aware)
+                pub_date_dt = pd.to_datetime(datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")).normalize()
             except Exception: 
-                 pub_date_dt = None
+                pub_date_dt = None
             news_data.append({'Date': pub_date_dt, 'Title': title})
         return pd.DataFrame(news_data)
     except Exception:
@@ -245,9 +245,15 @@ def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
     df = df_merge.copy()
     
+    # S&P 500 종가가 없는 경우 피처 생성 불가
+    if 'SP500_Close' not in df.columns or df['SP500_Close'].empty:
+        st.error("❌ S&P 500 데이터가 없어 피처를 생성할 수 없습니다.")
+        return pd.DataFrame(), []
+
     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
     
+    # Target Variable: 향후 10일 수익률
     df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
@@ -268,8 +274,10 @@ def create_features(df_merge):
     # 타겟 변수가 NaN이 되는 마지막 10일 제거 및 NaN 포함 행 제거
     df = df.dropna()
     
+    # 최종 사용할 피처 목록 정의
+    # (SP500_Close, NASDAQ_Close, Daily_Return 등은 제외하고 Lag/Change/Ratio 피처 위주로 선택)
     base_features = [col for col in df.columns if not col.endswith(('Return', 'Close', '10D')) and 'SP500_' not in col and 'NASDAQ_' not in col]
-    features = [f for f in base_features + ['SP500_Close'] if f in df.columns and ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'DXY', 'NASDAQ_SP500_Ratio'])]
+    features = [f for f in base_features if ('Lag' in f or 'Change' in f or 'Ratio' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'DXY'])]
     features = list(set(features))
     
     return df, features
@@ -295,17 +303,14 @@ def get_rolling_feature_importance(_X_train_df, _y_train, _lgbm_params, window_s
     all_importances = {}
     
     # 롤링 윈도우 생성 (6개월 이동)
-    start_idx = min_window_days
+    start_idx = 0 # 인덱스 0부터 시작하도록 수정
     
     progress_bar = st.progress(0, text="Rolling Feature Importance 계산 중...")
     
-    while start_idx < len(X_train_df):
+    while start_idx + min_window_days <= len(X_train_df): # 최소 윈도우 크기 확보 체크
         end_idx = min(start_idx + window_days, len(X_train_df))
         
-        # 윈도우 크기 확보
-        if end_idx - start_idx < min_window_days:
-            break
-            
+        # 실제 사용 윈도우 크기
         X_roll = X_train_df.iloc[start_idx:end_idx]
         y_roll = y_train.iloc[start_idx:end_idx]
         
@@ -326,7 +331,7 @@ def get_rolling_feature_importance(_X_train_df, _y_train, _lgbm_params, window_s
     progress_bar.empty()
     
     if not all_importances:
-        st.error("⚠️ Rolling Importance를 계산하기에 데이터 기간이 너무 짧습니다. 전체 기간을 사용합니다.")
+        # 데이터가 너무 짧아 롤링 윈도우가 생성되지 않은 경우
         return None, None
         
     # 결과 집계
@@ -335,7 +340,7 @@ def get_rolling_feature_importance(_X_train_df, _y_train, _lgbm_params, window_s
         summary.append({
             'Feature': feature,
             'Mean_Importance': np.mean(imps),
-            'Frequency': len(imps) # 등장 빈도
+            'Frequency': len(imps) # 등장 빈도 (윈도우 수)
         })
         
     df_summary = pd.DataFrame(summary).sort_values(['Frequency', 'Mean_Importance'], ascending=False)
@@ -393,6 +398,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
     fred_data = get_fred_data()
     fg_df = get_fear_greed_index(limit=365 * 3)
     
+    if market_df.empty:
+        st.error("❌ 시장 데이터(S&P 500 포함) 로드에 실패했습니다. API 키 또는 네트워크 상태를 확인하세요.")
+        st.stop()
+        
     # 1-2. 뉴스 감성 분석
     with st.spinner(f"뉴스 크롤링 및 감성 분석 중... (키워드: {news_query})"):
         news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
@@ -407,7 +416,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
             load_start_date = start_date - timedelta(days=50)
             # 인덱스를 DatetimeIndex로 변환
             all_news['Date'] = pd.to_datetime(all_news['Date'])
-            # filtered_news = all_news[(all_news['Date'] >= pd.to_datetime(load_start_date)) & (all_news['Date'] <= pd.to_datetime(end_date))]
+            # 날짜 비교 시 Timezone aware 객체로 변환
             filtered_news = all_news[
                 (all_news['Date'] >= pd.to_datetime(load_start_date).tz_localize('UTC+09:00')) & 
                 (all_news['Date'] <= pd.to_datetime(end_date).tz_localize('UTC+09:00'))
@@ -423,17 +432,36 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
                 news_grouped = pd.DataFrame(columns=['Sentiment_Score'])
 
 
-    # 2. 데이터 병합
+    # 2. 데이터 병합 (NameError: df_merge is not defined 해결)
+    df_merge = market_df.copy() # ⬅️ df_merge 초기화 (NameError 해결)
+
+    # 2-1. 매크로 데이터 병합 (FRED)
+    for name, df_fred in fred_data.items():
+        if not df_fred.empty:
+            df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
+            
+    # 2-2. Fear & Greed Index 병합
+    if not fg_df.empty:
+        df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
+        
+    # 2-3. 뉴스 감성 분석 데이터 병합
+    # news_grouped의 인덱스가 tz-aware 상태일 경우, 병합 전에 타임존 정보 제거
     if 'Date' in news_grouped.index.name and news_grouped.index.tz is not None:
         news_grouped.index = news_grouped.index.tz_localize(None)
     
     if not news_grouped.empty:                                          
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
+    # 2-4. 결측치 처리 (병합 완료 후)
     df_merge = df_merge.fillna(method='ffill').fillna(0)     
+    
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
+    if df_ml.empty:
+        st.error("❌ 데이터 병합 및 피처 생성 후 유효한 데이터가 없습니다. 데이터 로드 기간을 확인하세요.")
+        st.stop()
+        
     # 날짜 범위 조정 (DatetimeIndex 사용)
     df_ml = df_ml[(df_ml.index >= pd.to_datetime(start_date)) & (df_ml.index <= pd.to_datetime(end_date))]
     df_ml = df_ml.tail(500) # 최근 500개만 사용
@@ -442,6 +470,12 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
         st.error("데이터가 부족합니다. 분석 기간을 늘리세요. (최소 100일 필요)")
         st.stop()
         
+    # 선택된 피처만 포함하는 X_full 구성
+    missing_features = [f for f in features_full if f not in df_ml.columns]
+    if missing_features:
+        st.warning(f"⚠️ 다음 피처가 데이터프레임에 없어 제외됩니다: {', '.join(missing_features)}")
+        features_full = [f for f in features_full if f in df_ml.columns]
+
     X_full = df_ml[features_full]
     y = df_ml['Return_10D'] 
 
@@ -468,6 +502,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
         temp_model.fit(X_train_df, y_train)
         feature_importances = pd.Series(temp_model.feature_importances_, index=X_train_df.columns)
         selected_features = feature_importances.nlargest(15).index.tolist()
+        df_importance_summary = pd.DataFrame({
+            'Feature': selected_features,
+            'Mean_Importance': feature_importances.loc[selected_features].values,
+            'Frequency': 1 # 전체 기간을 1회로 간주
+        })
         st.warning("⚠️ Rolling Importance 실패. 전체 기간 LGBM 중요도로 대체 선택했습니다.")
         
     features = selected_features
@@ -610,8 +649,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
             }).head(5)
             
             fig_perm = px.bar(perm_df, x='Importance', y='Feature', orientation='h', 
-                             title='Top 5 Permutation Importance', height=400,
-                             color='Importance', color_continuous_scale=px.colors.sequential.Sunset)
+                              title='Top 5 Permutation Importance', height=400,
+                              color='Importance', color_continuous_scale=px.colors.sequential.Sunset)
             fig_perm.update_layout(yaxis={'categoryorder':'total ascending'})
             st.plotly_chart(fig_perm, use_container_width=True)
 
