@@ -22,7 +22,7 @@ import re
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.inspection import permutation_importance # Permutation Importance 사용을 위해 추가
+from sklearn.inspection import permutation_importance
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -35,12 +35,13 @@ st.markdown("""
 """)
 
 # ------------------------
-# 0. 매크로 데이터 수집 함수 (NotImplementedError 방지를 위해 DatetimeIndex 유지)
+# 0. 매크로 데이터 수집 함수 (DatetimeIndex 유지)
 # ------------------------
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다. (DatetimeIndex 유지)"""
     try:
+        # Note: FRED API Key는 Streamlit Secrets에서 가져옵니다.
         fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
         if not fred_api_key:
             st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
@@ -82,16 +83,13 @@ def get_fred_data():
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fetch_single_fred, ticker, start_date): ticker for ticker in TICKERS.keys()}
         loaded_count = 0
-        total_tickers = len(TICKERS)
         for future in futures:
             ticker, df = future.result()
             if not df.empty: 
                 # 1일 지연 피처를 위해 shift를 적용
                 results[TICKERS[ticker]] = df.shift(1, freq='D').ffill()
             loaded_count += 1
-            # 병렬 실행 중 Streamlit 업데이트는 주석 처리
 
-    
     if '10Y' in results and '2Y' in results:
         df_yield = pd.merge(results['10Y'], results['2Y'], left_index=True, right_index=True, how='inner')
         results['YIELD_CURVE'] = (df_yield['10Y'] - df_yield['2Y']).rename('YIELD_CURVE').to_frame()
@@ -108,8 +106,8 @@ def get_fear_greed_index(limit=1095):
         df = pd.DataFrame(data)
         df["value"] = df["value"].astype(float)
         
-        # DatetimeIndex 유지
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+        # DatetimeIndex 유지 및 'to_datetime' unit 경고 해결: unit='s' 사용 시 int로 캐스팅
+        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="s") 
         
         df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
         df = df[["Date", "FGI"]].sort_values("Date").set_index('Date')
@@ -138,10 +136,11 @@ def load_market_data(start_date, end_date):
     for i, (ticker, name) in enumerate(tickers.items()):
         try:
             progress_bar.progress((i + 1) / total_tickers, text=f"{name} ({ticker}) 로드 중...")
+            # FinanceDataReader는 DatetimeIndex를 반환
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             
-            # DatetimeIndex 유지
+            # DatetimeIndex 유지 및 명시적 변환
             df.index = pd.to_datetime(df.index) 
             
             all_data.append(df)
@@ -164,7 +163,7 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (기존 로직 유지)
+# 2. 감성 분석 모델 로드 및 함수
 # ------------------------
 
 @st.cache_resource
@@ -190,7 +189,8 @@ tokenizer, sentiment_model, device = load_sentiment_model()
 def analyze_sentiment(text):
     """Calculates sentiment score for the given text."""
     if not text: return 0.0
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+    # Asking to truncate to max_length but no maximum length is provided 경고는 모델 내부에서 발생합니다.
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True) 
     inputs = {k: v.to(device) for k, v in inputs.items()}
     with torch.no_grad(): outputs = sentiment_model(**inputs)
     probabilities = torch.softmax(outputs.logits, dim=1)[0]
@@ -283,7 +283,7 @@ def create_features(df_merge):
     return df, features
 
 # ------------------------
-# 4. Rolling Feature Importance 함수 (새로 추가)
+# 4. Rolling Feature Importance 함수
 # ------------------------
 @st.cache_data(show_spinner="🛞 Rolling Feature Importance 계산 중...")
 def get_rolling_feature_importance(_X_train_df, _y_train, _lgbm_params, window_size_months=6, top_n_features=15):
@@ -354,7 +354,6 @@ def get_rolling_feature_importance(_X_train_df, _y_train, _lgbm_params, window_s
 # 5. Streamlit 실행 로직
 # ------------------------
 
-# 🌟 오류 해결: _features 인수를 추가하여 피처 목록 변경 시 모델이 재훈련되도록 강제합니다.
 @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
 def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params, _features):
     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
@@ -391,7 +390,7 @@ with col2:
 with col3:
     end_date = st.date_input("분석 종료일", datetime.now().date())
     
-if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 적용)", type="primary", use_container_width=True):
+if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 적용)", type="primary", width='stretch'): # DeprecationWarning 수정: use_container_width=True -> width='stretch'
     
     # 1. 데이터 로드
     market_df = load_market_data(start_date, end_date)
@@ -449,11 +448,12 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
     if 'Date' in news_grouped.index.name and news_grouped.index.tz is not None:
         news_grouped.index = news_grouped.index.tz_localize(None)
     
-    if not news_grouped.empty:                                          
+    if not news_grouped.empty: 
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
     # 2-4. 결측치 처리 (병합 완료 후)
-    df_merge = df_merge.fillna(method='ffill').fillna(0)     
+    # FutureWarning: DataFrame.fillna with 'method' is deprecated 경고 해결: .ffill() 사용
+    df_merge = df_merge.ffill().fillna(0)     
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
@@ -516,8 +516,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
     st.info(f"✅ Rolling Importance로 **선택된 피처 수: {len(features)}개**.")
     if df_importance_summary is not None:
         st.markdown("**Top 15 피처 (빈도수 > 평균 중요도 순)**")
-        st.dataframe(df_importance_summary.set_index('Feature')[['Frequency', 'Mean_Importance']].style.format({'Mean_Importance': '{:.4f}'}), use_container_width=True)
-
+        st.dataframe(df_importance_summary.set_index('Feature')[['Frequency', 'Mean_Importance']].style.format({'Mean_Importance': '{:.4f}'}), width='stretch') # DeprecationWarning 수정
 
     # 6. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
@@ -545,7 +544,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
             
         avg_r2 = np.mean(r2_scores_lgbm)
         st.info(f"✅ TimeSeriesSplit 평균 R² (LGBM 기준): **{avg_r2:.4f}**")
-        st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
+        st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), width='stretch') # DeprecationWarning 수정
     st.markdown("---")
 
     voting_model, lgbm_model = train_voting_model(
@@ -639,9 +638,9 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
         st.markdown("테스트 데이터셋에서 **전역적 중요도** 분석")
         try:
             r = permutation_importance(lgbm_model, X_test_df, y_test,
-                                       n_repeats=10,
-                                       random_state=42,
-                                       n_jobs=-1)
+                                             n_repeats=10,
+                                             random_state=42,
+                                             n_jobs=-1)
             
             perm_df = pd.DataFrame({
                 'Feature': X_test_df.columns[r.importances_mean.argsort()[::-1]],
@@ -687,8 +686,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
     }).sort_values('Importance', ascending=False).head(15)
 
     fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
-                     title='LightGBM 모델 상위 15개 팩터 중요도',
-                     color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
+                      title='LightGBM 모델 상위 15개 팩터 중요도',
+                      color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
     fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
     st.plotly_chart(fig_imp, use_container_width=True)
 
