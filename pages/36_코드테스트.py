@@ -407,7 +407,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
             load_start_date = start_date - timedelta(days=50)
             # 인덱스를 DatetimeIndex로 변환
             all_news['Date'] = pd.to_datetime(all_news['Date'])
-            filtered_news = all_news[(all_news['Date'] >= pd.to_datetime(load_start_date)) & (all_news['Date'] <= pd.to_datetime(end_date))]
+            # filtered_news = all_news[(all_news['Date'] >= pd.to_datetime(load_start_date)) & (all_news['Date'] <= pd.to_datetime(end_date))]
+            filtered_news = all_news[
+                (all_news['Date'] >= pd.to_datetime(load_start_date).tz_localize('UTC+09:00')) & 
+                (all_news['Date'] <= pd.to_datetime(end_date).tz_localize('UTC+09:00'))
+            ]
             
             if not filtered_news.empty:
                 filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
