@@ -424,14 +424,13 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
 
 
     # 2. 데이터 병합
-    df_merge = market_df
-    if not fg_df.empty: df_merge = pd.merge(df_merge, fg_df, left_index=True, right_index=True, how='left')
-    for name, df_fred in fred_data.items(): df_merge = pd.merge(df_merge, df_fred, left_index=True, right_index=True, how='left')
-    if not news_grouped.empty:
+    if 'Date' in news_grouped.index.name and news_grouped.index.tz is not None:
+        news_grouped.index = news_grouped.index.tz_localize(None)
+    
+    if not news_grouped.empty:                                          
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
-    df_merge = df_merge.fillna(method='ffill').fillna(0)
-    
+    df_merge = df_merge.fillna(method='ffill').fillna(0)     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
