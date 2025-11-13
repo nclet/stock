@@ -38,7 +38,7 @@ st.markdown("""
 # ------------------------
 # 0. 매크로 데이터 수집 함수 (DatetimeIndex 유지 및 Naive Index 통일)
 # ------------------------
-@st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
+@st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 P/E) 로드 중...")
 def get_fred_data():
     """FRED에서 여러 경제 지표를 병렬로 가져옵니다. (DatetimeIndex 유지)"""
     fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
@@ -47,9 +47,9 @@ def get_fred_data():
         return {}
 
     TICKERS = {
-        "DGS10": "10Y", "DGS2": "2Y", 
+        "DGS10": "10Y", "DGS2": "2Y",  
         "BAMLC0A4CBBB": "BBB_OAS", "M2SL": "M2", "GDPC1": "GDP",
-        "SP500PE": "SP500_EPS"
+        "SP500PE": "SP500_PER" # SP500PE는 P/E Ratio (주가수익률)입니다.
     }
     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
     
@@ -65,13 +65,13 @@ def get_fred_data():
             df = pd.DataFrame(data)
             
             # DatetimeIndex로 변환하며 Timezone 제거 (Naive)
-            df['date'] = pd.to_datetime(df['date']).dt.normalize().dt.tz_localize(None) 
+            # Series에 대해 .dt를 사용하는 것은 올바릅니다.
+            df['date'] = pd.to_datetime(df['date']).dt.normalize().dt.tz_localize(None, errors='ignore')
             
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
             df = df.dropna(subset=['value'])
             
             # 1일 지연 피처를 위해 shift(1) 적용 (FRED 데이터는 주로 관측일 다음날 사용)
-            # D' (day)를 사용하지 않고 숫자 shift를 사용하여 Indexing 오류 방지
             df = df[['date', 'value']].rename(columns={'value': TICKERS[ticker]}).set_index('date')
             return ticker, df.shift(1).ffill() 
         except Exception as e:
@@ -105,7 +105,7 @@ def get_fear_greed_index(limit=1095):
         df["value"] = df["value"].astype(float)
         
         # DatetimeIndex 유지, Naive Index로 변환
-        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="s").dt.normalize().dt.tz_localize(None) 
+        df["timestamp"] = pd.to_datetime(df["timestamp"].astype(int), unit="s").dt.normalize().dt.tz_localize(None, errors='ignore') 
         
         df = df.rename(columns={"value": "FGI", "timestamp": "Date"})
         df = df[["Date", "FGI"]].sort_values("Date").set_index('Date')
@@ -139,8 +139,9 @@ def load_market_data(start_date, end_date):
             df = fdr.DataReader(ticker, start=load_start_date, end=end_date)
             df = df[['Close']].rename(columns={'Close': name})
             
+            # [CRITICAL FIX]: DatetimeIndex에 .dt를 사용할 수 없습니다. Index 자체의 메서드를 사용합니다.
             # 명시적으로 Naive DatetimeIndex로 변환
-            df.index = pd.to_datetime(df.index).dt.normalize().dt.tz_localize(None) 
+            df.index = df.index.tz_localize(None, errors='ignore').normalize() 
             
             all_data.append(df)
             time.sleep(0.05)
@@ -259,10 +260,10 @@ def create_features(df_merge):
 
     lags = [1, 3, 5, 10] 
     
-    # 팩터 목록을 명확히 정의
+    # 팩터 목록을 명확히 정의 (SP500_EPS -> SP500_PER 로 변경)
     lag_factors = ['Daily_Return', 'VIX', 'FGI', 'Sentiment_Score', 
                    'YIELD_CURVE', 'BBB_OAS', 'WTI', 'GOLD', 'COPPER',
-                   'DXY', 'NASDAQ_SP500_Ratio', 'SP500_EPS']
+                   'DXY', 'NASDAQ_SP500_Ratio', 'SP500_PER']
     
     for factor in lag_factors:
         if factor in df.columns:
@@ -277,8 +278,8 @@ def create_features(df_merge):
     # 타겟 변수가 NaN이 되는 마지막 10일 제거 및 피처 결측치 포함 행 제거
     df = df.dropna()
     
-    # 최종 사용할 피처 목록 정의
-    features = [col for col in df.columns if 'Lag' in col or 'Change' in col or 'Ratio' in col or 'MOM' in col or col in ['GDP', 'M2', 'SP500_EPS', 'DXY', 'YIELD_CURVE', 'BBB_OAS', 'FGI', 'VIX', 'Sentiment_Score']]
+    # 최종 사용할 피처 목록 정의 (SP500_EPS -> SP500_PER 로 변경)
+    features = [col for col in df.columns if 'Lag' in col or 'Change' in col or 'Ratio' in col or 'MOM' in col or col in ['GDP', 'M2', 'SP500_PER', 'DXY', 'YIELD_CURVE', 'BBB_OAS', 'FGI', 'VIX', 'Sentiment_Score']]
     features = list(set(features)) # 중복 제거
     
     return df, features
@@ -424,7 +425,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
                 news_grouped = pd.DataFrame(columns=['Sentiment_Score'])
             else:
                 # 필터링 및 분석
-                all_news['Date'] = pd.to_datetime(all_news['Date']).dt.normalize().dt.tz_localize(None)
+                all_news['Date'] = pd.to_datetime(all_news['Date']).dt.normalize().dt.tz_localize(None, errors='ignore')
                 load_start_date = start_date - timedelta(days=50)
 
                 filtered_news = all_news[
@@ -648,9 +649,9 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
         try:
             # Permutation Importance는 LGBM 모델을 사용
             r = permutation_importance(lgbm_model, X_test_df, y_test,
-                                       n_repeats=10,
-                                       random_state=42,
-                                       n_jobs=-1)
+                                         n_repeats=10,
+                                         random_state=42,
+                                         n_jobs=-1)
             
             perm_df = pd.DataFrame({
                 'Feature': X_test_df.columns[r.importances_mean.argsort()[::-1]],
@@ -696,8 +697,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (피처 안정화 
     }).sort_values('Importance', ascending=False).head(15)
 
     fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
-                      title='LightGBM 모델 상위 15개 팩터 중요도',
-                      color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
+                     title='LightGBM 모델 상위 15개 팩터 중요도',
+                     color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
     fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
     st.plotly_chart(fig_imp, use_container_width=True)
 
