@@ -31,3 +31,4 @@ ta==0.10.1
 PyTrends
 shap
 catboost
+crypto
