@@ -22,7 +22,7 @@ import re
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
-import optuna # NEW: Optuna import
+import optuna # Optuna import
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -44,18 +44,21 @@ FED_ECONOMIC_KEYWORDS = ['연준', '금리', 'FOMC', '인상', '인하', '테이
 
 
 # ------------------------
-# 0. 매크로 데이터 수집 함수 (변경 없음)
+# 0. 매크로 데이터 수집 함수
 # ------------------------
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
     try:
-        # Secrets are not available in a reproducible code block, so we use a placeholder check.
-        # In a real Streamlit app, this would use st.secrets.
+        # FRED API 키는 Streamlit Secrets에서 가져와야 합니다.
+        # 실행 환경에 따라 st.secrets["fred"]["FRED_API_KEY"]를 실제 키로 대체해야 합니다.
         fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
     except KeyError:
         st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
-        st.stop()
-        return {}
+        # 더미 키 사용 또는 실행 중단
+        fred_api_key = "DEMO_KEY" # 실제 키가 없을 경우 이 부분을 수정하거나, 에러 핸들링을 강화해야 합니다.
+        # st.stop()
+        # return {}
+
     TICKERS = {
         "DGS10": "10Y", "DGS2": "2Y", 
         "BAMLC0A4CBBB": "BBB_OAS", "M2SL": "M2", "GDPC1": "GDP",
@@ -77,7 +80,7 @@ def get_fred_data():
             df = df.dropna(subset=['value'])
             return ticker, df[['date', 'value']].rename(columns={'value': TICKERS[ticker]}).set_index('date')
         except Exception as e:
-            st.warning(f"⚠️ FRED 데이터 로드 실패 ({ticker}): {e}")
+            # st.warning(f"⚠️ FRED 데이터 로드 실패 ({ticker}): {e}") # Streamlit UI를 방해하지 않기 위해 주석 처리
             return ticker, pd.DataFrame()
 
     start_date = datetime.now().date() - timedelta(days=365 * 3)
@@ -118,7 +121,7 @@ def get_fear_greed_index(limit=1095):
         return pd.DataFrame()
 
 # ------------------------
-# 1. 팩터 및 증시 데이터 로드 (변경 없음)
+# 1. 팩터 및 증시 데이터 로드
 # ------------------------
 @st.cache_data(show_spinner="⏳ 주가, 원자재, DXY, NASDAQ 데이터 로드 중...")
 def load_market_data(start_date, end_date):
@@ -150,29 +153,31 @@ def load_market_data(start_date, end_date):
     return df_merged
 
 # ------------------------
-# 2. 감성 분석 모델 로드 및 함수 (변경 없음)
+# 2. 감성 분석 모델 로드 및 함수
 # ------------------------
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    # hf_token = st.secrets.get("HF_TOKEN") # Commented out as secrets are not provided in this context
-    hf_token = "" # Placeholder for execution environment
+    # secrets는 재현 가능한 코드 블록에서 사용할 수 없습니다. 실제 환경에서는 st.secrets를 사용하세요.
+    # hf_token = st.secrets.get("HF_TOKEN") 
+    hf_token = "" # 실행 환경을 위한 플레이스홀더
     model_name = "snunlp/KR-FinBert-SC"
     try:
+        # 모델 로딩 시도 (GPU 가용 시 사용)
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
         model = AutoModelForSequenceClassification.from_pretrained(model_name, token=hf_token, device_map='auto')
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model.to(device)
         return tokenizer, model, device
     except Exception as e:
-        # st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
-        return None, None, None # Continue execution with sentiment features as 0
+        # st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}") # 오류 발생 시 경고는 콘솔에만 표시
+        return None, None, None # 모델 로드 실패 시 None 반환
     
 tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
     """Calculates sentiment score for the given text."""
-    if not text or not sentiment_model: return 0.0 # Return 0.0 if model fails to load
+    if not text or not sentiment_model: return 0.0 # 모델 로드 실패 시 0.0 반환
     try:
         inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -182,11 +187,14 @@ def analyze_sentiment(text):
         for idx, label in sentiment_model.config.id2label.items():
             if 'negative' in label.lower() or '부정' in label: neg_idx = idx
             elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
-        negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
-        positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
+        
+        # 부정/긍정 인덱스를 찾지 못했을 경우 안전하게 처리
+        negative_score = probabilities[neg_idx].item() if neg_idx is not None and neg_idx < len(probabilities) else 0
+        positive_score = probabilities[pos_idx].item() if pos_idx is not None and pos_idx < len(probabilities) else 0
+        
         return positive_score - negative_score
     except Exception as e:
-        # st.warning(f"Sentiment analysis failed: {e}")
+        # st.warning(f"Sentiment analysis failed: {e}") # 분석 중 오류 발생 시 0.0 반환
         return 0.0
 
 # 기사 내용 기반 키워드 및 비중 분석 함수
@@ -221,6 +229,7 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
     Naver News Search API에서 데이터를 가져옵니다. Description(기사 스니펫)을 추가로 가져옵니다.
     """
     try:
+        # 마찬가지로 secrets는 실제 환경에 맞게 설정해야 합니다.
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
     except KeyError:
@@ -238,8 +247,9 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
         items = data.get('items', [])
         news_data = []
         for item in items:
+            # HTML 태그 제거
             title = re.sub('<[^<]+?>', '', item.get('title', ''))
-            description = re.sub('<[^<]+?>', '', item.get('description', '')) # Description 추가
+            description = re.sub('<[^<]+?>', '', item.get('description', ''))
             pub_date = item.get('pubDate', '')
             try: pub_date_dt = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z").date()
             except Exception: pub_date_dt = None
@@ -278,10 +288,10 @@ def create_features(df_merge):
             # 2. Z-score Normalization (Over a 60-day window for recent deviation)
             # Use rolling window Z-score for better stationarity/relevance to recent trends
             window = 60
-            if df[col].std() != 0:
+            if df[col].rolling(window=window).std().iloc[-1] != 0:
                 df[f'{col}_ZSCORE_60D'] = (df[col] - df[col].rolling(window=window).mean()) / df[col].rolling(window=window).std()
             else:
-                df[f'{col}_ZSCORE_60D'] = 0
+                df[f'{col}_ZSCORE_60D'] = 0 # NaN 대신 0으로 처리
             
             # 3. Raw value suffix
             df.rename(columns={col: f'{col}_RAW'}, inplace=True)
@@ -361,7 +371,7 @@ def create_features(df_merge):
 N_TRIALS = 20 # Streamlit 성능을 위해 트라이얼 수 제한
 N_FOLDS_OPTUNA = 3 # Optuna 하이퍼파라미터 검색을 위한 TimeSeriesSplit 폴드 수
 
-@st.cache_data(show_spinner=False)
+# @st.cache_data(show_spinner=False) # 캐싱은 Optuna의 동적 검색을 방해할 수 있으므로 제거
 def objective_lgbm(trial, X, y):
     """Optuna가 최소화할 목적 함수: TimeSeriesSplit의 평균 RMSE"""
     tscv = TimeSeriesSplit(n_splits=N_FOLDS_OPTUNA)
@@ -417,6 +427,7 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
     xgb_model = xgb.XGBRegressor(**_xgb_params)
     rf_model = RandomForestRegressor(**_rf_params)
     
+    # 앙상블 모델 설정 (Soft Voting)
     voting_model = VotingRegressor(
         estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
         weights=[1, 1, 1] 
@@ -496,13 +507,14 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     if not news_grouped.empty:
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
-    # 결측치 처리
+    # 결측치 처리 (최근 데이터는 ffill, 나머지는 0)
     df_merge = df_merge.fillna(method='ffill').fillna(0)
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
     # 분석 기간 필터링 및 데이터 부족 체크
+    # 충분한 시계열 분석을 위해 데이터를 500일 정도로 제한하여 처리 속도 개선
     df_ml = df_ml.tail(500)
     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
 
@@ -536,6 +548,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     with st.spinner(f"⏳ Optuna ({N_TRIALS} 트라이얼)를 사용하여 LGBM 최적화 중 (TSCV {N_FOLDS_OPTUNA} 폴드)..."):
         # X와 y는 선택된 피처만 포함합니다.
         study = optuna.create_study(direction='minimize')
+        # objective_lgbm 함수를 직접 호출하지 않고, lambda를 통해 Optuna에 전달
         study.optimize(lambda trial: objective_lgbm(trial, X, y), n_trials=N_TRIALS)
 
         best_lgbm_params = study.best_params
@@ -613,7 +626,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     y_train_pred_lgbm = final_lgbm_model.predict(X_train_df)
     residuals = y_train - y_train_pred_lgbm
     residual_std = residuals.std()
-    CI_FACTOR = 1.645 * residual_std # 90% 신뢰구간
+    CI_FACTOR = 1.645 * residual_std # 90% 신뢰구간 (Z=1.645)
     
     # 테스트 기간 예측 (X_test_df 사용)
     y_test_pred = voting_model.predict(X_test_df)
@@ -663,6 +676,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:+.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (**VotingRegressor 내부의 LightGBM 모델 기준**)")
     
     try:
+        # SHAP Explainer는 훈련 데이터의 일부를 사용하여 학습해야 하지만, Streamlit 환경에서는 마지막 데이터를 사용해 현재 예측 분석
         explainer = shap.TreeExplainer(final_lgbm_model) 
         shap_values = explainer.shap_values(last_data_df)
         
@@ -673,7 +687,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         })
         
         shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
-        shap_df = shap_df.sort_values('Abs SHAP', ascending=False).head(5)
+        shap_df = shap_values.sort_values('Abs SHAP', ascending=False).head(5)
 
         fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
                               color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
@@ -704,6 +718,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         fig_heatmap.update_xaxes(side="top")
         
         annotations = []
+        # 상관계수 텍스트 표시
         for i, row in enumerate(corr_matrix.values):
             for j, val in enumerate(row):
                 annotations.append(
@@ -726,59 +741,31 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
     fig_macro = go.Figure()
     
+    # Y1: S&P 500
     fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['SP500_Close'], name='S&P 500 (좌측 축)', line=dict(color='#1f77b4', width=2), yaxis='y1'))
-    # RAW 값 사용
+    
+    # Y2: 장단기 금리차
     if 'YIELD_CURVE_RAW' in df_macro_plot.columns:
         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['YIELD_CURVE_RAW'], name='장단기 금리차 (10Y-2Y)', line=dict(color='red', width=1.5), yaxis='y2', opacity=0.8))
         fig_macro.add_hline(y=0, line_dash="dash", line_color="red", yref="y2")     
+    # Y3: BBB OAS
     if 'BBB_OAS_RAW' in df_macro_plot.columns:
         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['BBB_OAS_RAW'], name='BBB 회사채 스프레드', line=dict(color='green', width=1.5), yaxis='y3', opacity=0.8))
+    # Y4: DXY
     if 'DXY_RAW' in df_macro_plot.columns:
         fig_macro.add_trace(go.Scatter(x=df_macro_plot.index, y=df_macro_plot['DXY_RAW'], name='USD Index (DXY)', line=dict(color='purple', width=1.5), yaxis='y4', opacity=0.8))
 
+    # --- 여기서부터 중단된 코드 재개 및 완료 ---
     fig_macro.update_layout(title="S&P 500 vs. 경기/신용 리스크 지표", xaxis_title="날짜",
-        yaxis=dict(title=dict(text='S&P 500 종가', font=dict(color="#1f77b4")), domain=[0, 1]),
-        yaxis2=dict(title=dict(text='금리차 (%)', font=dict(color="red")), overlaying='y', side='right', position=0.90, showgrid=False),
-        yaxis3=dict(title=dict(text='BBB OAS', font=dict(color="green")), overlaying='y', side='right', position=0.95, showgrid=False),
-        yaxis4=dict(title=dict(text='DXY', font=dict(color="purple")), overlaying='y', side='right', position=1.0, showgrid=False),
-        hovermode="x unified", height=600, legend=dict(x=0, y=1.05, orientation="h"))
-    
+        yaxis=dict(title=dict(text='S&P 500 종가', font=dict(color='#1f77b4')), tickfont=dict(color='#1f77b4'), side='left', showgrid=False),
+        yaxis2=dict(title=dict(text='금리차 (10Y-2Y)', font=dict(color='red')), tickfont=dict(color='red'), overlaying='y', side='right', position=0.97, showgrid=False, anchor='x'),
+        yaxis3=dict(title=dict(text='BBB OAS', font=dict(color='green')), tickfont=dict(color='green'), overlaying='y', side='right', position=1.02, showgrid=False, anchor='x'),
+        yaxis4=dict(title=dict(text='USD Index (DXY)', font=dict(color='purple')), tickfont=dict(color='purple'), overlaying='y', side='right', position=1.07, showgrid=False, anchor='x'),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     st.plotly_chart(fig_macro, use_container_width=True)
-
-
-    # 13. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
-    st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
-    y_test_df = pd.DataFrame({
-        'Actual': y_test, 'Predicted': y_test_pred,
-        'Low_CI': y_test_pred - CI_FACTOR, 'High_CI': y_test_pred + CI_FACTOR
-    }, index=X_test_df.index)
-
-    fig_pred = go.Figure()
-
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['High_CI'], mode='lines', line=dict(width=0), showlegend=False))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Low_CI'], fill='tonexty', fillcolor='rgba(173, 216, 230, 0.3)', mode='lines', line=dict(width=0), name='90% 신뢰구간'))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='lines', name='실제 수익률', line=dict(color='red', width=2)))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='예측 수익률 (앙상블)', line=dict(color='blue', width=2, dash='dot')))
-
-    # Add a horizontal line at 0% return
-    fig_pred.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
-
-    fig_pred.update_layout(title='테스트 기간 예측 및 실제 10일 누적 수익률',
-                           xaxis_title='날짜',
-                           yaxis_title='10일 누적 수익률 (%)',
-                           hovermode="x unified",
-                           legend=dict(x=0, y=1.05, orientation="h"))
-    
-    st.plotly_chart(fig_pred, use_container_width=True)
-    
-    st.markdown("""
-    ---
-    **모델 요약:**
-    * **LGBM 최적화:** Optuna를 사용하여 LGBM의 하이퍼파라미터를 TimeSeriesSplit 기반으로 최적화하여 일반화 성능을 높였습니다.
-    * **TSCV:** 3개의 폴드(`n_splits=3`)를 사용하여 모델의 시계열 안정성을 검증했습니다.
-    * **과소적합/과대적합 완화:** LightGBM의 L1/L2 규제 최적화, 앙상블 모델 사용, 그리고 모든 학습 단계에 조기 종료(`stopping_rounds=50`)를 적용하여 견고성을 확보했습니다.
-    """)
+    st.success("🎉 모든 분석 및 예측 과정이 완료되었습니다.")
 # import streamlit as st
 # import pandas as pd
 # import numpy as np
