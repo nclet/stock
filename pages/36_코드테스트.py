@@ -427,7 +427,8 @@ def objective_lgbm(trial, X, y):
 
         y_pred = model.predict(X_val_fold)
         # squared=False를 통해 RMSE 계산
-        rmse = mean_squared_error(y_val_fold, y_pred, squared=False) 
+        # rmse = mean_squared_error(y_val_fold, y_pred, squared=False) 
+        rmse = np.sqrt(mean_squared_error(y_val_fold, y_pred))
         rmse_list.append(rmse)
 
     return np.mean(rmse_list)
