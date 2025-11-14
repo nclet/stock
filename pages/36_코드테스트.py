@@ -47,9 +47,8 @@ FED_ECONOMIC_KEYWORDS = ['연준', '금리', 'FOMC', '인상', '인하', '테이
 # ------------------------
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
-    """FRED에서 여러 경제 지표를 병렬로 가져옵니다."""
     try:
-        fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
+        fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
     except KeyError:
         st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
         st.stop()
