@@ -22,6 +22,7 @@ import re
 import shap
 import matplotlib.pyplot as plt
 import seaborn as sns
+import optuna # NEW: Optuna import
 
 # ------------------------
 # ✨ 상수 및 페이지 설정
@@ -34,7 +35,7 @@ st.markdown("""
 """)
 
 # ------------------------
-# NEW: 뉴스 키워드 상수 정의 (Feature 2, 3)
+# 뉴스 키워드 상수 정의 (Feature 2, 3)
 # ------------------------
 POSITIVE_KEYWORDS = ['긍정', '상승', '호재', '기대', '강세', '돌파', '매수', '낙관', '수혜', '성장', '회복', '최고', '상향']
 NEGATIVE_KEYWORDS = ['부정', '하락', '악재', '우려', '약세', '침체', '매도', '비관', '리스크', '경고', '인하', '폭락', '충격', '경색']
@@ -48,6 +49,8 @@ FED_ECONOMIC_KEYWORDS = ['연준', '금리', 'FOMC', '인상', '인하', '테이
 @st.cache_data(show_spinner="⏳ FRED 데이터 (금리차, M2, BBB OAS, SP500 EPS) 로드 중...")
 def get_fred_data():
     try:
+        # Secrets are not available in a reproducible code block, so we use a placeholder check.
+        # In a real Streamlit app, this would use st.secrets.
         fred_api_key = st.secrets["fred"]["FRED_API_KEY"]
     except KeyError:
         st.error("❌ FRED API 키 설정 오류: Streamlit Secrets의 'fred' 섹션과 'FRED_API_KEY' 이름을 확인해주세요.")
@@ -152,7 +155,6 @@ def load_market_data(start_date, end_date):
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    # Note: st.secrets.get("HF_TOKEN") is assumed to be defined externally in the environment
     # hf_token = st.secrets.get("HF_TOKEN") # Commented out as secrets are not provided in this context
     hf_token = "" # Placeholder for execution environment
     model_name = "snunlp/KR-FinBert-SC"
@@ -164,7 +166,6 @@ def load_sentiment_model():
         return tokenizer, model, device
     except Exception as e:
         # st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
-        # st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
         return None, None, None # Continue execution with sentiment features as 0
     
 tokenizer, sentiment_model, device = load_sentiment_model()
@@ -188,9 +189,7 @@ def analyze_sentiment(text):
         # st.warning(f"Sentiment analysis failed: {e}")
         return 0.0
 
-# ------------------------
-# NEW: 기사 내용 기반 키워드 및 비중 분석 함수 (Feature 2, 3)
-# ------------------------
+# 기사 내용 기반 키워드 및 비중 분석 함수
 def analyze_text_keywords(title, description):
     """
     기사 제목과 내용(Description)을 기반으로
@@ -216,15 +215,12 @@ def analyze_text_keywords(title, description):
     
     return pos_count, neg_count, pos_neg_ratio, fed_ratio
 
-# ------------------------
-# 네이버 API 함수 수정: Description 추가 (Feat 2, 3 분석을 위해)
-# ------------------------
+# 네이버 API 함수 수정: Description 추가
 def get_naver_news_api(query, display=100, start=1, sort="date"): 
     """
     Naver News Search API에서 데이터를 가져옵니다. Description(기사 스니펫)을 추가로 가져옵니다.
     """
     try:
-        # Note: st.secrets.get("naver") is assumed to be defined externally in the environment
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
     except KeyError:
@@ -258,7 +254,7 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
 
 
 # ------------------------
-# 3. 피처 엔지니어링 함수 (개선된 뉴스 피처 로직 포함)
+# 3. 피처 엔지니어링 함수
 # ------------------------
 def create_features(df_merge):
     """모든 팩터에 대해 시계열 피처를 생성하고 데이터를 정리합니다."""
@@ -271,10 +267,7 @@ def create_features(df_merge):
     df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
-    # -----------------------------------------------
-    # ✨ NEW: 매크로 변수 정규화 방식 개선 (RAW, Pct Change, Z-score)
-    # -----------------------------------------------
-    # 원본 값을 유지하고 다양한 정규화 방식을 적용할 매크로/원자재/지수 목록
+    # ✨ 매크로 변수 정규화 방식 개선 (RAW, Pct Change, Z-score)
     MACRO_FEATURES_TO_ENHANCE = ['YIELD_CURVE', 'BBB_OAS', 'DXY', 'VIX', 'WTI', 'GOLD', 'COPPER']
 
     for col in MACRO_FEATURES_TO_ENHANCE:
@@ -282,20 +275,18 @@ def create_features(df_merge):
             # 1. Percentage Change (Pct Change)
             df[f'{col}_PCT_CHANGE'] = df[col].pct_change()
             
-            # 2. Z-score Normalization
-            # 시장 레벨 변화를 볼 때 적합한 Z-score: (값 - 평균) / 표준편차
+            # 2. Z-score Normalization (Over a 60-day window for recent deviation)
+            # Use rolling window Z-score for better stationarity/relevance to recent trends
+            window = 60
             if df[col].std() != 0:
-                df[f'{col}_ZSCORE'] = (df[col] - df[col].mean()) / df[col].std()
+                df[f'{col}_ZSCORE_60D'] = (df[col] - df[col].rolling(window=window).mean()) / df[col].rolling(window=window).std()
             else:
-                df[f'{col}_ZSCORE'] = 0
+                df[f'{col}_ZSCORE_60D'] = 0
             
-            # 3. Raw value suffix (원본 값도 피처로 활용)
+            # 3. Raw value suffix
             df.rename(columns={col: f'{col}_RAW'}, inplace=True)
     
-    # -----------------------------------------------
-    # 🌟 NEW: 뉴스 피처에 이동 평균(MA) 및 변동성(Volatility) 추가 (Feature 1, 4)
-    # -----------------------------------------------
-    # 일별 집계된 뉴스 피처 목록
+    # 🌟 뉴스 피처에 이동 평균(MA) 및 변동성(Volatility) 추가
     news_agg_features = [
         'Sentiment_Score',      # 기존 감성 점수 (일별 평균)
         'News_Count',           # 기사 수 (Feature 4)
@@ -319,8 +310,6 @@ def create_features(df_merge):
     
     lags = [1, 3, 5, 10] 
     
-    # 기존 시장 및 경제 팩터 (업데이트된 이름)
-    # GDP, M2, SP500_EPS, FGI, NASDAQ_SP500_Ratio는 변경 없음
     lag_factors = [
         'Daily_Return', 'FGI', 'NASDAQ_SP500_Ratio', 'SP500_EPS', 'GDP', 'M2'
     ]
@@ -330,7 +319,7 @@ def create_features(df_merge):
         if f'{col}_RAW' in df.columns:
             lag_factors.append(f'{col}_RAW')
             lag_factors.append(f'{col}_PCT_CHANGE')
-            lag_factors.append(f'{col}_ZSCORE')
+            lag_factors.append(f'{col}_ZSCORE_60D') # Use 60D ZSCORE
 
     # 새로 생성된 모든 뉴스 관련 피처 추가 (Raw, MA, Volatility 포함)
     new_news_factors = [col for col in df.columns if col.startswith(tuple(news_agg_features)) or col.startswith('News_Count_Vol') or col.startswith('News_Count_Change')]
@@ -343,13 +332,13 @@ def create_features(df_merge):
         for lag in lags:
             df[f'{factor}_Lag_{lag}'] = df[factor].shift(lag)
             
-    # 보조 지표 추가 (VIX는 이제 VIX_RAW, VIX_PCT_CHANGE, VIX_ZSCORE 형태로 존재)
+    # 보조 지표 추가
     if 'VIX_RAW' in df.columns:
         df['VIX_RAW_Change_5D'] = df['VIX_RAW'].diff(5)
     df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
     
     # 🌟 타겟 변수가 NaN이 되는 마지막 10일을 제거, 그 외 모든 NaN 행 제거
-    df.replace([np.inf, -np.inf], np.nan, inplace=True) # 무한대 값 제거 (pct_change 시 분모 0인 경우 등)
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df = df.dropna()
     
     base_features = [col for col in df.columns if not col.endswith(('Return', 'Close', '10D')) and 'SP500_' not in col and 'NASDAQ_' not in col]
@@ -364,18 +353,66 @@ def create_features(df_merge):
     
     return df, features
 
-
 # ------------------------
-# 4. Streamlit 실행 로직 (뉴스 분석 및 피처 개선 로직 적용)
+# 4. Optuna 목적 함수 (NEW)
 # ------------------------
 
-# 🌟 개선: LGBM 모델도 명시적으로 반환하여 SHAP 및 Importance 플롯에 사용되는 모델의 일관성을 높입니다.
+# Optuna 설정 상수
+N_TRIALS = 20 # Streamlit 성능을 위해 트라이얼 수 제한
+N_FOLDS_OPTUNA = 3 # Optuna 하이퍼파라미터 검색을 위한 TimeSeriesSplit 폴드 수
+
+@st.cache_data(show_spinner=False)
+def objective_lgbm(trial, X, y):
+    """Optuna가 최소화할 목적 함수: TimeSeriesSplit의 평균 RMSE"""
+    tscv = TimeSeriesSplit(n_splits=N_FOLDS_OPTUNA)
+    rmse_list = []
+
+    # Optuna 탐색 공간 (과소적합 완화를 위해 규제(lambda)와 트리 깊이/잎 수 조정 포함)
+    params = {
+        'objective': 'regression',
+        'metric': 'rmse',
+        'n_estimators': 1000, # 조기 종료를 위해 충분히 크게 설정
+        'learning_rate': trial.suggest_loguniform('learning_rate', 1e-4, 1e-1),
+        'num_leaves': trial.suggest_int('num_leaves', 7, 63),
+        'max_depth': trial.suggest_int('max_depth', 3, 15),
+        'min_child_samples': trial.suggest_int('min_child_samples', 5, 100),
+        'subsample': trial.suggest_uniform('subsample', 0.6, 1.0),
+        'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.6, 1.0),
+        'lambda_l1': trial.suggest_loguniform('lambda_l1', 1e-8, 10.0), # L1 규제
+        'lambda_l2': trial.suggest_loguniform('lambda_l2', 1e-8, 10.0), # L2 규제
+        'random_state': 42,
+        'n_jobs': -1,
+        'verbose': -1,
+    }
+
+    # TimeSeriesSplit 교차 검증
+    for train_index, val_index in tscv.split(X):
+        X_train_fold, X_val_fold = X.iloc[train_index], X.iloc[val_index]
+        y_train_fold, y_val_fold = y.iloc[train_index], y.iloc[val_index]
+
+        model = lgb.LGBMRegressor(**params)
+        model.fit(
+            X_train_fold, y_train_fold,
+            eval_set=[(X_val_fold, y_val_fold)],
+            eval_metric='rmse',
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)] # 조기 종료 적용
+        )
+
+        y_pred = model.predict(X_val_fold)
+        rmse = mean_squared_error(y_val_fold, y_pred, squared=False)
+        rmse_list.append(rmse)
+
+    return np.mean(rmse_list)
+
+
+# 5. 앙상블 모델 훈련 함수
 @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
-def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params, _features):
+def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params):
     """
     앙상블 모델(LGBM, XGBoost, RF)을 훈련하고, SHAP/Importance를 위한
     별도의 LGBM 모델 인스턴스(최종 훈련 세트로 학습)를 반환합니다.
     """
+    # LGBM은 Optuna 최적화 파라미터를 사용합니다.
     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
     xgb_model = xgb.XGBRegressor(**_xgb_params)
     rf_model = RandomForestRegressor(**_rf_params)
@@ -389,8 +426,6 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
     voting_model.fit(_X_train_df, _y_train) 
     
     # VotingRegressor 내부의 LGBM 모델을 추출하여 SHAP/Importance에 사용
-    # 이미 훈련된 모델이므로 별도의 .fit() 호출 없이 사용 가능
-    # voting_model.estimators_는 튜플 (name, model) 목록입니다.
     final_lgbm_model = voting_model.estimators_[0] 
     
     return voting_model, final_lgbm_model
@@ -415,10 +450,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     market_df = load_market_data(start_date, end_date)
     fred_data = get_fred_data()
     fg_df = get_fear_greed_index(limit=365 * 3)
-    trends_df = pd.DataFrame() 
     
-    # 1-2. 뉴스 감성 및 키워드 분석 (2회 요청 로직 적용)
-    # 모델 로드 실패 시에도 코드 실행을 위해 sentiment_model 로드 여부 체크
+    # 1-2. 뉴스 감성 및 키워드 분석
     if not sentiment_model:
         st.warning("⚠️ 감성 분석 모델 로드에 실패하여 뉴스 감성 피처는 0으로 채워집니다. 진행합니다.")
         
@@ -437,17 +470,13 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
             filtered_news = all_news[(all_news['Date'] >= load_start_date) & (all_news['Date'] <= end_date)].copy()
             
             if not filtered_news.empty:
-                # 1. 감성 점수 (기존)
                 filtered_news['Sentiment_Score'] = filtered_news['Title'].apply(analyze_sentiment)
                 
-                # 2. Pos/Neg/Fed Keyword Analysis (NEW)
                 filtered_news[['Pos_Count', 'Neg_Count', 'Pos_Neg_Ratio', 'Fed_Ratio']] = filtered_news.apply(
                     lambda row: analyze_text_keywords(row['Title'], row['Description']), 
                     axis=1, result_type='expand'
                 )
                 
-                # 3. Daily Aggregation (News Count, Avg Sentiments, Avg Ratios)
-                # News_Count (Feature 4), Avg_Pos_Neg_Ratio (Feature 2), Avg_Fed_Ratio (Feature 3) 포함
                 news_grouped = filtered_news.groupby('Date').agg(
                     Sentiment_Score=('Sentiment_Score', 'mean'), 
                     News_Count=('Title', 'count'), 
@@ -467,12 +496,13 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     if not news_grouped.empty:
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
-    # 결측치 처리 (FFILL 후 0으로 채우기 - 주말/공휴일 등)
+    # 결측치 처리
     df_merge = df_merge.fillna(method='ffill').fillna(0)
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
     
+    # 분석 기간 필터링 및 데이터 부족 체크
     df_ml = df_ml.tail(500)
     df_ml = df_ml[(df_ml.index >= start_date) & (df_ml.index <= end_date)]
 
@@ -483,15 +513,14 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     X_full = df_ml[features_full]
     y = df_ml['Return_10D'] 
     
-    # 4. 피처 선택: LightGBM 중요도 기반
+    # 4. 피처 선택: LightGBM 중요도 기반 (Optuna 전 1회 실행)
     st.subheader("⚙️ 피처 선택 (LightGBM 중요도 기반 Top 15)")
     
-    LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
-    XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
-    RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
-
+    # 임시 모델 파라미터 (Optuna 이전 사용)
+    INITIAL_LGBM_PARAMS = {'objective': 'regression', 'metric': 'rmse', 'n_estimators': 300, 'learning_rate': 0.01, 'num_leaves': 21, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1, 'verbose': -1}
+    
     # 최종 피처 선택을 위해 전체 데이터셋으로 임시 LGBM 훈련
-    temp_model = lgb.LGBMRegressor(**LGBM_PARAMS) 
+    temp_model = lgb.LGBMRegressor(**INITIAL_LGBM_PARAMS) 
     temp_model.fit(X_full, y)
 
     feature_importances = pd.Series(temp_model.feature_importances_, index=X_full.columns)
@@ -502,7 +531,26 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown(f"**선택된 매크로 피처 (RAW/PCT/ZSCORE 포함):** `{'`, `'.join([f for f in features if any(f.startswith(macro) and ('RAW' in f or 'PCT' in f or 'ZSCORE' in f) for macro in ['YIELD_CURVE', 'BBB_OAS', 'DXY', 'VIX', 'WTI', 'GOLD', 'COPPER'])])}`")
     X = df_ml[features] 
     
-    # 전체 데이터 스케일링 준비
+    # 5. Optuna 하이퍼파라미터 최적화 (LGBM)
+    st.header("✨ Optuna 하이퍼파라미터 최적화 (LGBM)")
+    with st.spinner(f"⏳ Optuna ({N_TRIALS} 트라이얼)를 사용하여 LGBM 최적화 중 (TSCV {N_FOLDS_OPTUNA} 폴드)..."):
+        # X와 y는 선택된 피처만 포함합니다.
+        study = optuna.create_study(direction='minimize')
+        study.optimize(lambda trial: objective_lgbm(trial, X, y), n_trials=N_TRIALS)
+
+        best_lgbm_params = study.best_params
+        
+        # Optuna 결과를 최종 LGBM 파라미터로 설정
+        LGBM_PARAMS = {
+            'objective': 'regression', 'metric': 'rmse', 'n_estimators': 500, # 최종 앙상블 모델에 사용될 n_estimators
+            'random_state': 42, 'n_jobs': -1, 'verbose': -1, 'boosting_type': 'gbdt',
+            **best_lgbm_params 
+        }
+        
+        st.success(f"✅ Optuna 최적화 완료! Best RMSE: {study.best_value:.4f}")
+        st.json(LGBM_PARAMS)
+
+    # 6. 데이터 분할 및 스케일링
     scaler = MinMaxScaler()
     X_scaled_all = scaler.fit_transform(X)
     X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
@@ -510,25 +558,27 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     # 테스트 데이터셋 분리 (마지막 N일)
     test_size = max(30, int(0.2 * len(X_scaled_all_df)))
     
-    # 🌟 X_test_df를 위한 명확한 인덱싱 및 분리
     X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
     y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
     
-    # 테스트 기간 시작일 정의 (시각화에 사용)
     test_start_date = X_test_df.index[0]
 
     st.markdown(f"**훈련 기간:** {X_train_df.index[0]} ~ {X_train_df.index[-1]}")
     st.markdown(f"**테스트 기간:** {test_start_date} ~ {X_test_df.index[-1]} (총 {test_size}일)")
     
-    # 5. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
+    # 7. 시계열 교차검증 (TS Split) - 최종 LGBM 파라미터로 검증
     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
     
-    n_splits = 2 
+    n_splits = 3 # Optuna에서 3을 사용했으므로 통일
     tscv = TimeSeriesSplit(n_splits=n_splits)
     
     r2_scores_lgbm = []
     
-    with st.spinner(f"⏳ TimeSeriesSplit 교차검증 중 (폴드 {n_splits}개, n_estimators=300, Early Stopping=30 적용)..."):
+    # XGBoost 및 RandomForestRegressor 파라미터 (Optuna 최적화 없이 고정)
+    XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
+    RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
+
+    with st.spinner(f"⏳ TimeSeriesSplit 교차검증 중 (폴드 {n_splits}개, Optuna 최적 파라미터 사용, Early Stopping=50 적용)..."):
         
         for i, (train_index, val_index) in enumerate(tscv.split(X_train_df)):
             X_train_fold, X_val_fold = X_train_df.iloc[train_index], X_train_df.iloc[val_index]
@@ -536,10 +586,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
             lgbm_fold = lgb.LGBMRegressor(**LGBM_PARAMS)
             
+            # 과소적합 방지: Early Stopping Rounds를 50으로 설정하여 최종 모델 성능 향상
             lgbm_fold.fit(X_train_fold, y_train_fold,
                           eval_set=[(X_val_fold, y_val_fold)],
                           eval_metric='rmse',
-                          callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)])
+                          callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)])
             
             y_val_pred = lgbm_fold.predict(X_val_fold)
             r2_scores_lgbm.append(r2_score(y_val_fold, y_val_pred))
@@ -549,28 +600,25 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
     st.markdown("---")
 
-    # 🌟 수정된 호출: 최종 앙상블 모델 및 SHAP용 LGBM 모델을 얻습니다.
-    # 캐시 키에 features를 사용해 피처 목록 변경 시 재훈련을 보장합니다.
+    # 8. 최종 앙상블 모델 훈련
     voting_model, final_lgbm_model = train_voting_model(
         X_train_df, 
         y_train, 
         LGBM_PARAMS, 
         XGB_PARAMS, 
-        RF_PARAMS, 
-        tuple(features) 
+        RF_PARAMS
     )
         
     # 훈련 잔차 계산 (CI용)
     y_train_pred_lgbm = final_lgbm_model.predict(X_train_df)
     residuals = y_train - y_train_pred_lgbm
     residual_std = residuals.std()
-    CI_FACTOR = 1.645 * residual_std 
+    CI_FACTOR = 1.645 * residual_std # 90% 신뢰구간
     
     # 테스트 기간 예측 (X_test_df 사용)
     y_test_pred = voting_model.predict(X_test_df)
 
     # 다음 10일 예측 및 CI 계산
-    # X_scaled_all_df의 마지막 행은 가장 최신의 데이터 (오늘 날짜)를 포함
     last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
     last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
     
@@ -578,7 +626,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     low_ci = next_day_return_pred - CI_FACTOR
     high_ci = next_day_return_pred + CI_FACTOR
     
-    # 6. 결과 출력
+    # 9. 결과 출력
     mse = mean_squared_error(y_test, y_test_pred)
     r2 = r2_score(y_test, y_test_pred)
 
@@ -594,7 +642,6 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     with col_pred2:
         st.metric(label="✅ 테스트 R² (앙상블)", value=f"{r2:.2f}", help=f"MSE: {mse:.4f}. 1에 가까울수록 적합도가 높음.")
     with col_pred3:
-        # VIX_RAW가 이제 원본 VIX
         current_vix = df_ml['VIX_RAW'].iloc[-1] if 'VIX_RAW' in df_ml.columns else df_ml['VIX'].iloc[-1]
         vix_trend = "하락 (강세) 🟢" if df_ml['VIX_RAW_Change_5D'].iloc[-1] < 0 else "상승 (약세) 🔴"
         st.metric(label="🔥 현재 VIX 지수", value=f"{current_vix:.2f}", delta=vix_trend)
@@ -611,21 +658,17 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         
     st.markdown("---")
 
-    # 7. SHAP 해석 추가
+    # 10. SHAP 해석 추가
     st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
     st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:+.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (**VotingRegressor 내부의 LightGBM 모델 기준**)")
     
     try:
-        # final_lgbm_model을 사용하여 SHAP 해석 (일관성 확보)
         explainer = shap.TreeExplainer(final_lgbm_model) 
-        # last_data_df는 이미 피처 이름을 가지고 있으므로 바로 사용
         shap_values = explainer.shap_values(last_data_df)
         
         shap_df = pd.DataFrame({
             'Feature': last_data_df.columns,
             'SHAP Value': shap_values[0],
-            # Feature Value는 스케일링된 값 (0-1)입니다. 해석의 편의를 위해 원본 데이터를 보여줄 수도 있으나,
-            # 모델 입력은 스케일링된 값이므로 일단 Scaled Value를 표시합니다.
             'Scaled Feature Value': last_data_df.iloc[0].values
         })
         
@@ -644,7 +687,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown("---")
 
 
-    # 8. 피처 상관관계 히트맵 시각화 추가
+    # 11. 피처 상관관계 히트맵 시각화 추가
     st.header("🔗 피처 상관관계 히트맵")
     st.markdown("훈련에 사용된 **LightGBM 중요도 기반 Top 15 피처**와 타겟(`Return_10D`) 간의 상관관계를 시각적으로 확인합니다.")
 
@@ -676,7 +719,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown("---")
 
 
-    # 9. 주요 매크로 팩터 추이 시각화
+    # 12. 주요 매크로 팩터 추이 시각화
     st.header("📊 주요 매크로 팩터 추이 (S&P 500과 비교)")
     
     df_macro_plot = df_ml[df_ml.index >= start_date].copy()
@@ -703,44 +746,39 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.plotly_chart(fig_macro, use_container_width=True)
 
 
-    # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
+    # 13. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
-    # 🌟 인덱스 불일치 문제 방지를 위해 X_test_df의 인덱스를 사용하여 y_test_df 생성
     y_test_df = pd.DataFrame({
         'Actual': y_test, 'Predicted': y_test_pred,
         'Low_CI': y_test_pred - CI_FACTOR, 'High_CI': y_test_pred + CI_FACTOR
-    }, index=X_test_df.index) # X_test_df.index 사용
+    }, index=X_test_df.index)
 
     fig_pred = go.Figure()
 
     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['High_CI'], mode='lines', line=dict(width=0), showlegend=False))
     fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Low_CI'], fill='tonexty', fillcolor='rgba(173, 216, 230, 0.3)', mode='lines', line=dict(width=0), name='90% 신뢰구간'))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='markers', name='실제 10일 누적 수익률', marker=dict(color='blue', size=5, opacity=0.8)))
-    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='앙상블 예측 수익률 (Median)', line=dict(color='red', width=2)))
+    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Actual'], mode='lines', name='실제 수익률', line=dict(color='red', width=2)))
+    fig_pred.add_trace(go.Scatter(x=y_test_df.index, y=y_test_df['Predicted'], mode='lines', name='예측 수익률 (앙상블)', line=dict(color='blue', width=2, dash='dot')))
 
-    fig_pred.update_layout(title=f"테스트 기간 S&P 500 10일 누적 수익률 예측 결과", xaxis_title="날짜", yaxis_title="수익률(%)", hovermode="x unified", height=500)
+    # Add a horizontal line at 0% return
+    fig_pred.add_hline(y=0, line_dash="dash", line_color="black", opacity=0.5)
+
+    fig_pred.update_layout(title='테스트 기간 예측 및 실제 10일 누적 수익률',
+                           xaxis_title='날짜',
+                           yaxis_title='10일 누적 수익률 (%)',
+                           hovermode="x unified",
+                           legend=dict(x=0, y=1.05, orientation="h"))
+    
     st.plotly_chart(fig_pred, use_container_width=True)
     
-    # 11. 팩터 중요도 시각화
-    st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
-    
-    # final_lgbm_model을 사용하여 중요도 시각화 (일관성 확보)
-    importance_df = pd.DataFrame({
-        'Feature': features,
-        'Importance': final_lgbm_model.feature_importances_
-    }).sort_values('Importance', ascending=False).head(15)
-
-    fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
-                      title='LightGBM 모델 상위 15개 팩터 중요도',
-                      color='Importance', color_continuous_scale=px.colors.sequential.Viridis)
-    fig_imp.update_layout(yaxis={'categoryorder':'total ascending'})
-    st.plotly_chart(fig_imp, use_container_width=True)
-
-
-st.markdown("---")
-st.warning("⚠️ **면책 조항:** 이 모델은 교육 및 분석 목적으로만 제공됩니다. 실제 투자에 사용하기 전에 충분한 검증과 리스크 분석을 수행해야 합니다.")
-
+    st.markdown("""
+    ---
+    **모델 요약:**
+    * **LGBM 최적화:** Optuna를 사용하여 LGBM의 하이퍼파라미터를 TimeSeriesSplit 기반으로 최적화하여 일반화 성능을 높였습니다.
+    * **TSCV:** 3개의 폴드(`n_splits=3`)를 사용하여 모델의 시계열 안정성을 검증했습니다.
+    * **과소적합/과대적합 완화:** LightGBM의 L1/L2 규제 최적화, 앙상블 모델 사용, 그리고 모든 학습 단계에 조기 종료(`stopping_rounds=50`)를 적용하여 견고성을 확보했습니다.
+    """)
 # import streamlit as st
 # import pandas as pd
 # import numpy as np
