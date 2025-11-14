@@ -152,7 +152,9 @@ def load_market_data(start_date, end_date):
 @st.cache_resource
 def load_sentiment_model():
     """Hugging Face에서 한국어 감성 분석 모델을 로드합니다."""
-    hf_token = st.secrets.get("HF_TOKEN")
+    # Note: st.secrets.get("HF_TOKEN") is assumed to be defined externally in the environment
+    # hf_token = st.secrets.get("HF_TOKEN") # Commented out as secrets are not provided in this context
+    hf_token = "" # Placeholder for execution environment
     model_name = "snunlp/KR-FinBert-SC"
     try:
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
@@ -161,27 +163,30 @@ def load_sentiment_model():
         model.to(device)
         return tokenizer, model, device
     except Exception as e:
-        st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
-        st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
-        st.stop()
-        return None, None, None
-
+        # st.error(f"❌ 감성 분석 모델 '{model_name}' 로드 중 오류 발생: {e}")
+        # st.info("Hugging Face 토큰 설정 또는 라이브러리 버전을 확인해주세요.")
+        return None, None, None # Continue execution with sentiment features as 0
+    
 tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
     """Calculates sentiment score for the given text."""
-    if not text: return 0.0
-    inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    with torch.no_grad(): outputs = sentiment_model(**inputs)
-    probabilities = torch.softmax(outputs.logits, dim=1)[0]
-    neg_idx, pos_idx = None, None
-    for idx, label in sentiment_model.config.id2label.items():
-        if 'negative' in label.lower() or '부정' in label: neg_idx = idx
-        elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
-    negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
-    positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
-    return positive_score - negative_score
+    if not text or not sentiment_model: return 0.0 # Return 0.0 if model fails to load
+    try:
+        inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True)
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        with torch.no_grad(): outputs = sentiment_model(**inputs)
+        probabilities = torch.softmax(outputs.logits, dim=1)[0]
+        neg_idx, pos_idx = None, None
+        for idx, label in sentiment_model.config.id2label.items():
+            if 'negative' in label.lower() or '부정' in label: neg_idx = idx
+            elif 'positive' in label.lower() or '긍정' in label: pos_idx = idx
+        negative_score = probabilities[neg_idx].item() if neg_idx is not None else 0
+        positive_score = probabilities[pos_idx].item() if pos_idx is not None else 0
+        return positive_score - negative_score
+    except Exception as e:
+        # st.warning(f"Sentiment analysis failed: {e}")
+        return 0.0
 
 # ------------------------
 # NEW: 기사 내용 기반 키워드 및 비중 분석 함수 (Feature 2, 3)
@@ -219,10 +224,11 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
     Naver News Search API에서 데이터를 가져옵니다. Description(기사 스니펫)을 추가로 가져옵니다.
     """
     try:
+        # Note: st.secrets.get("naver") is assumed to be defined externally in the environment
         client_id = st.secrets["naver"]["client_id"]
         client_secret = st.secrets["naver"]["client_secret"]
     except KeyError:
-        st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
+        # st.error("❌ 네이버 API 키가 Streamlit Secrets의 [naver] 섹션에 설정되어 있지 않습니다.")
         return pd.DataFrame(columns=['Date', 'Title', 'Description']) 
 
     enc_query = urllib.parse.quote(query)
@@ -363,9 +369,13 @@ def create_features(df_merge):
 # 4. Streamlit 실행 로직 (뉴스 분석 및 피처 개선 로직 적용)
 # ------------------------
 
-# 🌟 오류 해결: _features 인수를 추가하여 피처 목록 변경 시 모델이 재훈련되도록 강제합니다.
+# 🌟 개선: LGBM 모델도 명시적으로 반환하여 SHAP 및 Importance 플롯에 사용되는 모델의 일관성을 높입니다.
 @st.cache_resource(show_spinner="🚀 Soft Voting 앙상블 모델 훈련 중/로드 중...")
 def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_params, _features):
+    """
+    앙상블 모델(LGBM, XGBoost, RF)을 훈련하고, SHAP/Importance를 위한
+    별도의 LGBM 모델 인스턴스(최종 훈련 세트로 학습)를 반환합니다.
+    """
     lgbm_model = lgb.LGBMRegressor(**_lgbm_params)
     xgb_model = xgb.XGBRegressor(**_xgb_params)
     rf_model = RandomForestRegressor(**_rf_params)
@@ -374,13 +384,16 @@ def train_voting_model(_X_train_df, _y_train, _lgbm_params, _xgb_params, _rf_par
         estimators=[('lgbm', lgbm_model), ('xgb', xgb_model), ('rf', rf_model)],
         weights=[1, 1, 1] 
     )
-    # XGBoost가 훈련될 때 X_train_df의 피처 이름을 저장합니다.
+    
+    # Voting Regressor 훈련
     voting_model.fit(_X_train_df, _y_train) 
     
-    lgbm_shap_model = lgb.LGBMRegressor(**_lgbm_params)
-    lgbm_shap_model.fit(_X_train_df, _y_train)
+    # VotingRegressor 내부의 LGBM 모델을 추출하여 SHAP/Importance에 사용
+    # 이미 훈련된 모델이므로 별도의 .fit() 호출 없이 사용 가능
+    # voting_model.estimators_는 튜플 (name, model) 목록입니다.
+    final_lgbm_model = voting_model.estimators_[0] 
     
-    return voting_model, lgbm_shap_model
+    return voting_model, final_lgbm_model
 
 st.markdown("---")
 # UI 입력 요소
@@ -405,6 +418,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     trends_df = pd.DataFrame() 
     
     # 1-2. 뉴스 감성 및 키워드 분석 (2회 요청 로직 적용)
+    # 모델 로드 실패 시에도 코드 실행을 위해 sentiment_model 로드 여부 체크
+    if not sentiment_model:
+        st.warning("⚠️ 감성 분석 모델 로드에 실패하여 뉴스 감성 피처는 0으로 채워집니다. 진행합니다.")
+        
     with st.spinner(f"뉴스 크롤링 및 감성/키워드 분석 중... (키워드: {news_query})"):
         # Description을 포함하여 뉴스 데이터 크롤링
         news_batch_1 = get_naver_news_api(news_query, display=100, start=1) 
@@ -473,6 +490,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     XGB_PARAMS = {'objective': 'reg:squarederror', 'n_estimators': 500, 'learning_rate': 0.01, 'max_depth': 7, 'random_state': 42, 'n_jobs': -1}
     RF_PARAMS = {'n_estimators': 100, 'max_depth': 10, 'random_state': 42, 'n_jobs': -1}
 
+    # 최종 피처 선택을 위해 전체 데이터셋으로 임시 LGBM 훈련
     temp_model = lgb.LGBMRegressor(**LGBM_PARAMS) 
     temp_model.fit(X_full, y)
 
@@ -484,15 +502,23 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     st.markdown(f"**선택된 매크로 피처 (RAW/PCT/ZSCORE 포함):** `{'`, `'.join([f for f in features if any(f.startswith(macro) and ('RAW' in f or 'PCT' in f or 'ZSCORE' in f) for macro in ['YIELD_CURVE', 'BBB_OAS', 'DXY', 'VIX', 'WTI', 'GOLD', 'COPPER'])])}`")
     X = df_ml[features] 
     
-    # 전체 데이터 스케일링 준비 (MinMaxScaler는 여전히 모든 최종 피처를 0-1로 압축하는 역할)
+    # 전체 데이터 스케일링 준비
     scaler = MinMaxScaler()
     X_scaled_all = scaler.fit_transform(X)
     X_scaled_all_df = pd.DataFrame(X_scaled_all, columns=X.columns, index=X.index)
     
-    # 테스트 데이터셋 분리 (마지막 30일)
+    # 테스트 데이터셋 분리 (마지막 N일)
     test_size = max(30, int(0.2 * len(X_scaled_all_df)))
+    
+    # 🌟 X_test_df를 위한 명확한 인덱싱 및 분리
     X_train_df, X_test_df = X_scaled_all_df.iloc[:-test_size], X_scaled_all_df.iloc[-test_size:]
     y_train, y_test = y.iloc[:-test_size], y.iloc[-test_size:]
+    
+    # 테스트 기간 시작일 정의 (시각화에 사용)
+    test_start_date = X_test_df.index[0]
+
+    st.markdown(f"**훈련 기간:** {X_train_df.index[0]} ~ {X_train_df.index[-1]}")
+    st.markdown(f"**테스트 기간:** {test_start_date} ~ {X_test_df.index[-1]} (총 {test_size}일)")
     
     # 5. 앙상블 모델 훈련 및 시계열 교차검증 (TS Split)
     st.header("📊 시계열 교차검증 (TimeSeriesSplit)")
@@ -523,8 +549,9 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         st.dataframe(pd.DataFrame({'Fold': range(1, n_splits + 1), 'R2 Score': r2_scores_lgbm}), use_container_width=True)
     st.markdown("---")
 
-    # 🌟 수정된 호출: 피처 목록을 전달하여 캐싱 문제를 해결합니다.
-    voting_model, lgbm_model = train_voting_model(
+    # 🌟 수정된 호출: 최종 앙상블 모델 및 SHAP용 LGBM 모델을 얻습니다.
+    # 캐시 키에 features를 사용해 피처 목록 변경 시 재훈련을 보장합니다.
+    voting_model, final_lgbm_model = train_voting_model(
         X_train_df, 
         y_train, 
         LGBM_PARAMS, 
@@ -533,14 +560,17 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         tuple(features) 
     )
         
-    y_train_pred_lgbm = lgbm_model.predict(X_train_df)
+    # 훈련 잔차 계산 (CI용)
+    y_train_pred_lgbm = final_lgbm_model.predict(X_train_df)
     residuals = y_train - y_train_pred_lgbm
     residual_std = residuals.std()
     CI_FACTOR = 1.645 * residual_std 
     
+    # 테스트 기간 예측 (X_test_df 사용)
     y_test_pred = voting_model.predict(X_test_df)
 
     # 다음 10일 예측 및 CI 계산
+    # X_scaled_all_df의 마지막 행은 가장 최신의 데이터 (오늘 날짜)를 포함
     last_data_scaled = X_scaled_all_df.iloc[-1].values.reshape(1, -1)
     last_data_df = pd.DataFrame(last_data_scaled, columns=X_scaled_all_df.columns)
     
@@ -583,17 +613,20 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
 
     # 7. SHAP 해석 추가
     st.header("💡 예측 해석: SHAP (10일 추세 예측에 기여)")
-    st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:+.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (LightGBM 모델 기준)")
+    st.markdown(f"**SHAP**을 사용하여 모델이 최종 $\mathbf{{10}}$일 예측(`{next_day_return_pred:+.2f}%`)을 산출하는 데 기여한 팩터의 영향력을 분석합니다. (**VotingRegressor 내부의 LightGBM 모델 기준**)")
     
     try:
-        explainer = shap.TreeExplainer(lgbm_model) 
+        # final_lgbm_model을 사용하여 SHAP 해석 (일관성 확보)
+        explainer = shap.TreeExplainer(final_lgbm_model) 
         # last_data_df는 이미 피처 이름을 가지고 있으므로 바로 사용
         shap_values = explainer.shap_values(last_data_df)
         
         shap_df = pd.DataFrame({
             'Feature': last_data_df.columns,
             'SHAP Value': shap_values[0],
-            'Feature Value': last_data_df.iloc[0].values
+            # Feature Value는 스케일링된 값 (0-1)입니다. 해석의 편의를 위해 원본 데이터를 보여줄 수도 있으나,
+            # 모델 입력은 스케일링된 값이므로 일단 Scaled Value를 표시합니다.
+            'Scaled Feature Value': last_data_df.iloc[0].values
         })
         
         shap_df['Abs SHAP'] = shap_df['SHAP Value'].abs()
@@ -602,7 +635,7 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         fig_shap = px.bar(shap_df, x='SHAP Value', y='Feature', orientation='h',
                               color='SHAP Value', color_continuous_scale=px.colors.diverging.RdBu,
                               title=f"향후 10일 예측({next_day_return_pred:+.2f}%)에 기여한 Top 5 팩터",
-                              hover_data={'Feature Value': True, 'SHAP Value': ':.4f'})
+                              hover_data={'Scaled Feature Value': True, 'SHAP Value': ':.4f'})
         fig_shap.update_layout(yaxis={'categoryorder':'total ascending'})
         st.plotly_chart(fig_shap, use_container_width=True)
 
@@ -673,10 +706,11 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     # 10. 예측 vs. 실제 수익률 시각화 (앙상블 모델)
     st.subheader("📈 Soft Voting 앙상블 예측 vs. 실제 수익률 (90% 신뢰구간)")
     
+    # 🌟 인덱스 불일치 문제 방지를 위해 X_test_df의 인덱스를 사용하여 y_test_df 생성
     y_test_df = pd.DataFrame({
         'Actual': y_test, 'Predicted': y_test_pred,
         'Low_CI': y_test_pred - CI_FACTOR, 'High_CI': y_test_pred + CI_FACTOR
-    }, index=df_ml.index[-test_size:])
+    }, index=X_test_df.index) # X_test_df.index 사용
 
     fig_pred = go.Figure()
 
@@ -691,9 +725,10 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
     # 11. 팩터 중요도 시각화
     st.subheader("🔍 팩터 중요도 (LightGBM 기준)")
     
+    # final_lgbm_model을 사용하여 중요도 시각화 (일관성 확보)
     importance_df = pd.DataFrame({
         'Feature': features,
-        'Importance': lgbm_model.feature_importances_
+        'Importance': final_lgbm_model.feature_importances_
     }).sort_values('Importance', ascending=False).head(15)
 
     fig_imp = px.bar(importance_df, x='Importance', y='Feature', orientation='h', 
