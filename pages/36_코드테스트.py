@@ -384,7 +384,7 @@ def create_features(df_merge):
 # ------------------------
 
 # Optuna 설정 상수
-N_TRIALS = 20 # Streamlit 성능을 위해 트라이얼 수 제한
+N_TRIALS = 5 # Streamlit 성능을 위해 트라이얼 수 제한
 N_FOLDS_OPTUNA = 3 # Optuna 하이퍼파라미터 검색을 위한 TimeSeriesSplit 폴드 수
 
 # @st.cache_data(show_spinner=False) # 캐싱은 Optuna의 동적 검색을 방해할 수 있으므로 제거
