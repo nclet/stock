@@ -538,7 +538,8 @@ if st.button("🚀 데이터 로드, 분석 및 예측 시작 (10일 추세 예�
         df_merge = pd.merge(df_merge, news_grouped, left_index=True, right_index=True, how='left')
     
     # 결측치 처리 (최근 데이터는 ffill, 나머지는 0)
-    df_merge = df_merge.fillna(method='ffill').fillna(0)
+    # df_merge = df_merge.fillna(method='ffill').fillna(0)
+    df_merge = df_merge.ffill().fillna(0)
     
     # 3. 피처 엔지니어링 및 데이터 준비
     df_ml, features_full = create_features(df_merge)
