@@ -14,7 +14,8 @@ import requests
 from json.decoder import JSONDecodeError
 
 # --- 상수 정의 ---
-TARGET_PERIOD = 10 # 예측할 미래 영업일 수
+TARGET_PERIOD = 10 # 예측할 미래 영업일 수 (모델의 타겟 변수 룩어헤드 기간)
+QUANTILE_ALPHA = 0.05 # 95% 신뢰구간을 위한 퀀타일 (0.025 및 0.975)
 
 # 시장 매핑
 MARKET_MAPPING = {
@@ -23,17 +24,20 @@ MARKET_MAPPING = {
     "COIN": "코인 (Upbit)"
 }
 
-# --- LightGBM 모델 하이퍼파라미터 (안정화 설정 유지) ---
+# --- LightGBM 모델 하이퍼파라미터 (훈련 시간 단축 설정 적용) ---
 LGBM_PARAMS = {
     'objective': 'regression',
     'metric': 'rmse',
-    'n_estimators': 2000,
-    'learning_rate': 0.008,
+    # [최적화 설정] 반복 횟수 대폭 감소
+    'n_estimators': 500, 
+    # [최적화 설정] 학습률 증가
+    'learning_rate': 0.015, 
     'feature_fraction': 0.8, 
     'bagging_fraction': 0.8, 
     'bagging_freq': 1,
-    'num_leaves': 31,
-    'max_depth': 8,
+    # [최적화 설정] 복잡도 감소
+    'num_leaves': 21, 
+    'max_depth': 6,
     'lambda_l1': 0.3,
     'lambda_l2': 0.3,
     'min_child_samples': 10,
@@ -47,7 +51,6 @@ LGBM_PARAMS = {
 # --------------------------
 def sanitize_columns(columns):
     """LightGBM이 인식할 수 있도록 컬럼명을 정리하고 통일합니다."""
-    # LightGBM이 특수문자(':', ',', '[', ']', '<', '>')를 싫어하므로 제거/변환합니다.
     return [
         str(col).replace('[', '').replace(']', '').replace('<', '').replace('>', '').replace(':', '_').replace(' ', '_').replace(',', '').replace('-', '_')
         for col in columns
@@ -69,14 +72,15 @@ def calculate_rsi(series, window=14):
     avg_gain = gain.ewm(com=window - 1, adjust=False).mean()
     avg_loss = loss.ewm(com=window - 1, adjust=False).mean()
     rs = avg_gain / avg_loss
+    # 0으로 나누는 오류 방지 및 무한대 처리
     rsi = 100 - (100 / (1 + rs.replace([np.inf, -np.inf], np.nan).fillna(1e-10))) 
     return rsi
 
 # --------------------------
-# 1. 멀티 마켓 종목 목록 로딩 함수 (기존과 동일)
+# 1. 멀티 마켓 종목 목록 로딩 함수
 # --------------------------
 @st.cache_data(ttl=60*60*24)
-def get_stock_listing(market_name):
+def get_stock_listing(market_name, clear_cache=False): # clear_cache 인자 추가
     if market_name == 'KRX':
         market_code = 'KRX'
     elif market_name == 'NASDAQ':
@@ -101,7 +105,7 @@ def get_stock_listing(market_name):
         return pd.DataFrame()
         
 @st.cache_data(ttl=60*60*24)
-def get_coin_listing():
+def get_coin_listing(clear_cache=False): # clear_cache 인자 추가
     try:
         url = "https://api.upbit.com/v1/market/all"
         response = requests.get(url, params={'isDetails': 'false'})
@@ -120,7 +124,7 @@ def get_coin_listing():
         return pd.DataFrame()
 
 # --------------------------
-# 2. 피처 엔지니어링 함수 (기존과 동일)
+# 2. 피처 엔지니어링 함수
 # --------------------------
 def create_features(df, is_for_training=True):
     df = df.copy()
@@ -160,20 +164,22 @@ def create_features(df, is_for_training=True):
     df['RSI'] = calculate_rsi(df['Close'])
 
     if is_for_training:
-        # 7. 타겟 변수 (미래 1일 후의 로그 수익률)
-        df['Target'] = np.log(df['Close'].shift(-1) / df['Close'])
+        # 7. 타겟 변수: 미래 TARGET_PERIOD일 후의 로그 수익률로 변경됨
+        # 모델은 현재 시점(t)의 데이터로 TARGET_PERIOD일 후(t+TARGET_PERIOD)의 가격 변화를 예측합니다.
+        df['Target'] = np.log(df['Close'].shift(-TARGET_PERIOD) / df['Close'])
 
     df = df.dropna()
     
     return df
 
 # --------------------------
-# 3. 데이터 로드 함수 (기존과 동일)
+# 3. 데이터 로드 함수
 # --------------------------
 @st.cache_data(ttl=60*60*4) 
-def load_data(ticker, market, train_days):
+def load_data(ticker, market, train_days, clear_cache=False): # clear_cache 인자 추가
     end_date = datetime.date.today()
-    start_date = end_date - datetime.timedelta(days=train_days + 150) 
+    # TARGET_PERIOD만큼의 추가 데이터가 필요하므로 여유분 추가
+    start_date = end_date - datetime.timedelta(days=train_days + 150 + TARGET_PERIOD) 
     
     data = None
     
@@ -220,15 +226,14 @@ def load_data(ticker, market, train_days):
         return None
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (컬럼 일반화 로직 통일 및 Type 안정화)
+# 4. 모델 훈련 및 예측 함수
 # --------------------------
-def train_and_validate_model(data_features, scaler_type):
+def train_and_validate_model(data_features, scaler_type, n_splits):
     
     X = data_features.drop('Target', axis=1)
     y = data_features['Target'] 
 
-    # [수정] LightGBM이 인식할 수 있도록 컬럼명 정리 및 통일
-    X.columns = sanitize_columns(X.columns) # **여기서 컬럼 이름이 일반화됩니다.**
+    X.columns = sanitize_columns(X.columns)
     
     if scaler_type == "RobustScaler":
         scaler = RobustScaler()
@@ -237,11 +242,13 @@ def train_and_validate_model(data_features, scaler_type):
         
     st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
     
+    # 스케일링
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=n_splits)
     rmse_scores = []
+    residual_data = pd.DataFrame()
     
     st.markdown("##### 🚀 모델 훈련 및 시계열 검증 진행 중...")
     progress_bar = st.progress(0)
@@ -252,98 +259,134 @@ def train_and_validate_model(data_features, scaler_type):
         y_train, y_val = y.iloc[train_index], y.iloc[val_index]
 
         model = lgb.LGBMRegressor(**LGBM_PARAMS)
+        # 훈련 시 Numpy 배열로 명시적 변환
         model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
+            X_train.values, y_train.values,
+            eval_set=[(X_val.values, y_val.values)],
             eval_metric='rmse',
             callbacks=[lgb.early_stopping(stopping_rounds=80, verbose=-1)]
         )
         
-        val_predictions = model.predict(X_val)
+        # 예측 시에도 Numpy 배열로 명시적 변환
+        val_predictions = model.predict(X_val.values)
         rmse = np.sqrt(mean_squared_error(y_val, val_predictions)) 
         rmse_scores.append(rmse)
         
-        progress_bar.progress((fold + 1) / 3)
-        st.caption(f"Fold {fold+1} 검증 완료. **로그 수익률 RMSE**: {rmse:.6f}")
+        # 잔차(Residual) 계산
+        residuals = y_val - val_predictions
+        
+        # 실제 수익률 RMSE 계산 (지수 함수를 사용해 역변환)
+        # 현재 y는 TARGET_PERIOD 기간 동안의 로그 수익률입니다.
+        actual_return_rmse = np.sqrt(np.mean((np.expm1(y_val) - np.expm1(val_predictions))**2)) * 100
+        
+        fold_residual_df = pd.DataFrame({
+            'Residual': residuals,
+            'Fold': f'Fold {fold+1}',
+            'Target': y_val
+        })
+        residual_data = pd.concat([residual_data, fold_residual_df])
+        
+        progress_bar.progress((fold + 1) / n_splits)
+        st.caption(f"Fold {fold+1} 검증 완료. **{TARGET_PERIOD}일 로그 수익률 RMSE**: {rmse:.6f} (**{TARGET_PERIOD}일 실제 수익률 RMSE**: {actual_return_rmse:.4f}%)")
         final_model = model
 
     avg_rmse = np.mean(rmse_scores)
-    st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
+    st.success(f"✅ 모델 훈련 완료. 평균 검증 **{TARGET_PERIOD}일 로그 수익률 RMSE**: {avg_rmse:.6f}")
     
-    # X.columns는 이미 일반화된 컬럼 이름을 가집니다. (시각화에 사용)
-    return final_model, scaler, X.columns, avg_rmse 
+    return final_model, scaler, X.columns, avg_rmse, residual_data, X, y 
+    # X, y를 함께 반환하여 퀀타일 모델 훈련에 사용합니다.
 
-def predict_future(model, scaler, last_data, feature_columns, market_key):
-    
-    # [수정] current_date는 Timestamp 타입으로 유지됩니다.
-    current_date = last_data.index[-1] 
+def predict_future(models, scaler, raw_data_last_chunk, feature_columns, market_key):
+    """
+    TARGET_PERIOD일 총 로그 수익률을 예측하는 모델을 사용하여
+    단일 예측 후 기하 평균 보간을 통해 기간별 가격 경로를 생성합니다.
+    """
+    last_data = raw_data_last_chunk # 예측에 필요한 과거 데이터 (피처 생성을 위해)
     last_actual_close = last_data['Close'].iloc[-1]
+    last_date = last_data.index[-1]
     
-    future_predictions_log_returns = []
-    future_prices = [last_actual_close] 
+    # 1. 마지막 시점의 특징 데이터 X_future 준비
+    # Walk-Forward가 아니므로, 마지막 시점의 데이터만 사용하여 특징을 생성합니다.
+    temp_df_features = create_features(last_data, is_for_training=False)
+    temp_df_features.columns = sanitize_columns(temp_df_features.columns)
+
+    X_future_data = temp_df_features.iloc[-1].to_frame().T
+    X_future = X_future_data[feature_columns].fillna(0)
+    
+    # 예측 입력 데이터는 Numpy 배열로 변환
+    X_future_scaled = scaler.transform(X_future)
+    
+    # 2. 퀀타일 예측 (95% CI) - 이 값은 TARGET_PERIOD 기간 동안의 총 로그 수익률을 의미함
+    log_return_median = models['median'].predict(X_future_scaled)[0]
+    log_return_low = models['low'].predict(X_future_scaled)[0]
+    log_return_high = models['high'].predict(X_future_scaled)[0]
+
+    # 3. 예측된 총 로그 수익률을 기반으로 최종 가격 (TARGET_PERIOD일 후) 계산
+    final_price_median = last_actual_close * np.exp(log_return_median)
+    final_price_low = last_actual_close * np.exp(log_return_low)
+    final_price_high = last_actual_close * np.exp(log_return_high)
+
+    # 4. 미래 날짜 목록 생성 (TARGET_PERIOD 수만큼 영업일/달력일 생성)
     future_dates = []
-
-    day_counter = 1 
+    current_date = last_date
+    day_counter = 1
     
-    while len(future_predictions_log_returns) < TARGET_PERIOD:
+    while len(future_dates) < TARGET_PERIOD:
+        next_date = current_date + datetime.timedelta(days=day_counter)
         
-        # next_date는 Timestamp 타입으로 계산됩니다.
-        next_date = current_date + datetime.timedelta(days=day_counter) 
-        
-        if market_key in ['KRX', 'NASDAQ']:
-            if next_date.weekday() in [5, 6]:
-                day_counter += 1 
-                continue
+        # 주식 시장의 경우 주말 제외
+        if market_key in ['KRX', 'NASDAQ'] and next_date.weekday() in [5, 6]:
+            day_counter += 1
+            continue
             
-        current_prediction_base_price = future_prices[-1] 
-        
-        # 가상의 다음 날 데이터 생성 (인덱스: Timestamp)
-        new_row = pd.DataFrame(index=[next_date])
-        new_row['Close'] = current_prediction_base_price
-        for col in ['Open', 'High', 'Low', 'Adj Close']:
-              new_row[col] = new_row['Close'].iloc[0]
-        new_row['Volume'] = last_data['Volume'].iloc[-1] 
-              
-        temp_df = last_data.iloc[-60:].copy() 
-        temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price 
-        temp_df = pd.concat([temp_df, new_row])
-        
-        # 피처 생성
-        temp_df_features = create_features(temp_df, is_for_training=False)
-        
-        # [수정] 예측 데이터의 컬럼도 훈련 시와 동일하게 일반화합니다.
-        temp_df_features.columns = sanitize_columns(temp_df_features.columns)
-
-        # 예측 입력 데이터 준비
-        X_future_data = temp_df_features.iloc[-1].to_frame().T
-        
-        # 훈련된 피처 컬럼(feature_columns)을 사용하여 데이터 추출 (이름과 순서 일치)
-        # feature_columns는 이미 일반화된 이름입니다.
-        X_future = X_future_data[feature_columns].fillna(0)
-        
-        X_future_scaled = scaler.transform(X_future)
-        next_log_return = model.predict(X_future_scaled)[0] 
-        
-        next_price = current_prediction_base_price * np.exp(next_log_return)
-        
-        future_predictions_log_returns.append(next_log_return)
-        future_prices.append(next_price) 
         future_dates.append(next_date)
+        current_date = next_date # 다음 날짜 계산을 위해 업데이트
+        day_counter = 1 # 다음 날은 항상 1일 후부터 시작
+    
+    # 5. 가격 경로 보간 (Geometric Interpolation)
+    def interpolate_path(final_price, start_price, period_count):
+        if final_price <= 0 or start_price <= 0: return [0.0] * period_count
         
-        # 다음 예측을 위해 'current_date' 업데이트 및 카운터 리셋
-        last_data = pd.concat([last_data, new_row])
-        current_date = next_date
-        day_counter = 1 
+        return_factor_N = final_price / start_price
+        # N일간의 기하 평균 수익률 인자 (r = (P_final / P_start)^(1/N))
+        # N은 TARGET_PERIOD가 아니라 생성된 영업일/달력일 수입니다.
+        gmr_factor_daily = return_factor_N ** (1 / period_count)
+        
+        prices = []
+        current_price = start_price
+        for _ in range(period_count):
+            current_price *= gmr_factor_daily
+            prices.append(current_price)
+        return prices
+    
+    N_days = len(future_dates)
+    future_predictions = interpolate_path(final_price_median, last_actual_close, N_days)
+    future_low = interpolate_path(final_price_low, last_actual_close, N_days)
+    future_high = interpolate_path(final_price_high, last_actual_close, N_days)
 
-    return pd.Series(future_prices[1:], index=future_dates)
+    return pd.DataFrame({
+        'Predicted': future_predictions,
+        'Low_CI': future_low,
+        'High_CI': future_high
+    }, index=future_dates)
 
+# --------------------------
+# 5. 시각화 및 분석 함수 (기존과 동일)
+# --------------------------
 def display_feature_importance(model, feature_columns):
     
     importances = model.feature_importances_
-    # feature_columns는 train_and_validate_model에서 sanitize된 리스트이므로 바로 사용합니다.
+    
+    # 중요도 정규화 (0~100 스케일)
+    total_importance = importances.sum()
+    if total_importance > 0:
+        normalized_importances = (importances / total_importance) * 100
+    else:
+        normalized_importances = importances 
+
     feature_importance_df = pd.DataFrame({
         'Feature': feature_columns,
-        'Importance': importances
+        'Importance': normalized_importances
     }).sort_values(by='Importance', ascending=False).head(20)
 
     fig = px.bar(
@@ -351,23 +394,77 @@ def display_feature_importance(model, feature_columns):
         x='Importance', 
         y='Feature', 
         orientation='h',
-        title='모델 특징 중요도 (Feature Importance)',
-        labels={'Importance': '중요도', 'Feature': '특징 이름'}
+        title='모델 특징 중요도 (0-100% 스케일 보정)',
+        labels={'Importance': '상대적 중요도 (%)', 'Feature': '특징 이름'},
+        height=500
     )
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     st.plotly_chart(fig, use_container_width=True)
 
+def display_residual_analysis(residual_data):
+    st.markdown(f"##### 🔬 잔차(Residual) 분석 ({TARGET_PERIOD}일 로그 수익률 기반)")
+    st.caption(f"잔차는 **실제 {TARGET_PERIOD}일 로그 수익률 - 예측 {TARGET_PERIOD}일 로그 수익률**이며, 잔차의 분포는 모델의 학습 신뢰도를 나타냅니다.")
+
+    # 잔차 히스토그램
+    fig_hist = px.histogram(
+        residual_data, 
+        x='Residual', 
+        color='Fold', 
+        marginal='box',
+        nbins=50,
+        title=f'검증 잔차 분포 ({TARGET_PERIOD}일 로그 수익률)',
+        labels={'Residual': '잔차 (로그 수익률)'},
+        height=400
+    )
+    fig_hist.update_layout(xaxis_title="잔차 (Log Return)")
+    st.plotly_chart(fig_hist, use_container_width=True)
+
+    # 잔차 시계열 (Residual Time Series)
+    fig_ts = go.Figure()
+    for fold in residual_data['Fold'].unique():
+        fold_data = residual_data[residual_data['Fold'] == fold]
+        fig_ts.add_trace(go.Scatter(
+            x=fold_data.index, 
+            y=fold_data['Residual'], 
+            mode='markers', 
+            name=fold,
+            marker=dict(size=4)
+        ))
+    
+    fig_ts.update_layout(
+        title=f'검증 잔차 시계열 분포 ({TARGET_PERIOD}일 로그 수익률)',
+        yaxis_title='잔차 (Log Return)',
+        xaxis_title='날짜',
+        hovermode="x unified",
+        height=400
+    )
+    st.plotly_chart(fig_ts, use_container_width=True)
+
+
 # --------------------------
-# 5. Streamlit 메인 앱 (동일)
+# 6. Streamlit 메인 앱
 # --------------------------
-st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (최종 안정화)")
+st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (훈련 시간 최적화)")
 
 def app():
-    st.title("🏆 LightGBM 예측 시스템: 최종 안정화 버전")
-    st.markdown("**로그 수익률 타겟**, **수동 계산 MACD/RSI**, **휴장일 제외 Walk-Forward**로 안정성을 높였습니다.")
+    st.title(f"🏆 LightGBM 예측 시스템: {TARGET_PERIOD}일 타겟 예측 버전")
+    st.markdown(f"모델은 현재 시점으로부터 **미래 {TARGET_PERIOD} 영업일/달력일 후의 가격 변화**를 직접 예측합니다. 기간 내의 가격 경로는 예측된 최종 가격을 기반으로 보간됩니다.")
     st.markdown("---")
 
-    col1, col2, col3, col4 = st.columns([1, 2, 1, 1]) 
+    # --- 사이드바: 캐시 관리 기능 추가 ---
+    with st.sidebar:
+        st.markdown("## ⚙️ 설정 및 유지보수")
+        if st.button("🔴 Streamlit 캐시 지우고 새로고침", help="데이터 로딩 오류 발생 시 클릭하세요.", type="primary"):
+            st.cache_data.clear()
+            st.rerun()
+        st.caption("캐시를 지우면 모든 데이터를 새로 불러옵니다.")
+        st.markdown("---")
+    # ------------------------------------
+
+    col1, col2, col3, col4, col5 = st.columns([1, 2, 1, 1, 1]) 
+    
+    # clear_cache 변수를 False로 초기화 (기본적으로 캐시 사용)
+    clear_cache = False 
     
     with col1:
         selected_market_name = st.selectbox(
@@ -397,25 +494,41 @@ def app():
             help="특징(X)에만 적용됩니다."
         )
         
+    with col5:
+        default_n_splits = 5
+        selected_n_splits = st.number_input(
+            "✂️ TimeSeriesSplit 분할 수 (k)",
+            min_value=3,
+            max_value=10,
+            value=default_n_splits, 
+            step=1,
+            key='n_splits_input',
+            help="검증 데이터셋 개수."
+        )
+
     with col2:
         stock_list_df = pd.DataFrame()
         default_ticker = ""
 
         if market_key == 'KRX':
-            stock_list_df = get_stock_listing('KRX')
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_stock_listing('KRX', clear_cache=clear_cache) 
             default_ticker = '005930'
             
         elif market_key == 'NASDAQ':
-            stock_list_df = get_stock_listing('NASDAQ')
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_stock_listing('NASDAQ', clear_cache=clear_cache) 
             default_ticker = 'AAPL'
             
         elif market_key == 'COIN':
-            stock_list_df = get_coin_listing()
+            # clear_cache 인자를 함수에 전달
+            stock_list_df = get_coin_listing(clear_cache=clear_cache)
             default_ticker = 'KRW-BTC'
         
         if not stock_list_df.empty:
             options = stock_list_df['label'].tolist()
             try:
+                # 사용자가 선택한 종목이 목록에 없다면 디폴트 인덱스 사용
                 default_index = options.index(stock_list_df[stock_list_df['Code'] == default_ticker]['label'].iloc[0])
             except:
                 default_index = 0
@@ -430,7 +543,7 @@ def app():
             selected_ticker = stock_list_df[stock_list_df['label'] == selected_label]['Code'].iloc[0].upper().strip()
             
         else:
-            st.warning("선택한 시장의 종목 목록을 불러올 수 없습니다.")
+            st.warning("선택한 시장의 종목 목록을 불러올 수 없습니다. 캐시를 지우거나 나중에 다시 시도하세요.")
             selected_ticker = ""
     
     st.markdown("---")
@@ -448,7 +561,8 @@ def app():
         
         with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 피처 생성 중..."):
             
-            raw_data = load_data(selected_ticker, current_market, selected_train_days) 
+            # clear_cache 인자를 load_data 함수에 전달
+            raw_data = load_data(selected_ticker, current_market, selected_train_days, clear_cache=clear_cache) 
             if raw_data is None:
                 return
 
@@ -463,21 +577,57 @@ def app():
             
             st.subheader(f"📊 분석 결과: {selected_label}")
             
-            model, scaler, feature_columns, avg_rmse = train_and_validate_model(train_data, selected_scaler)
+            # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
+            st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
+            model_median, scaler, feature_columns, avg_rmse, residual_data, X_raw, y_raw = train_and_validate_model(
+                train_data, selected_scaler, selected_n_splits
+            )
             
+            # 2. 신뢰구간 (CI) 모델 훈련
+            models = {'median': model_median}
+            
+            # LGBM_PARAMS의 복사본을 만들고 'objective' 키를 제거 (퀀타일 훈련 시 충돌 방지)
+            LGBM_QUANTILE_PARAMS = LGBM_PARAMS.copy()
+            if 'objective' in LGBM_QUANTILE_PARAMS:
+                del LGBM_QUANTILE_PARAMS['objective']
+
+            # X와 y를 Numpy 배열로 명시적 변환
+            X_train_scaled = scaler.transform(X_raw).astype('float32')
+            y_train_values = y_raw.values
+            
+            st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
+            with st.spinner("⏳ 95% 신뢰구간 하한선(Low CI) 모델 훈련 중..."):
+                lgbm_low = lgb.LGBMRegressor(objective='quantile', alpha=QUANTILE_ALPHA/2, **LGBM_QUANTILE_PARAMS).fit(
+                    X_train_scaled, y_train_values
+                )
+                models['low'] = lgbm_low
+            
+            with st.spinner("⏳ 95% 신뢰구간 상한선(High CI) 모델 훈련 중..."):
+                lgbm_high = lgb.LGBMRegressor(objective='quantile', alpha=1-(QUANTILE_ALPHA/2), **LGBM_QUANTILE_PARAMS).fit(
+                    X_train_scaled, y_train_values
+                )
+                models['high'] = lgbm_high
+            st.success("✅ 퀀타일 회귀 모델 훈련 완료.")
+
             st.markdown("---")
-            st.subheader("💡 훈련 모델 진단: 특징 중요도 분석")
-            st.markdown(f"모델의 평균 검증 오차(로그 수익률 RMSE): **{avg_rmse:.6f}**")
-            st.markdown("수동으로 계산된 **MACD, RSI** 지표와 **로그 수익률 지연 피처**의 기여도를 확인해 보세요.")
-            display_feature_importance(model, feature_columns)
+            st.subheader("💡 훈련 모델 진단")
             
-            with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward, 영업일 기준)..."):
+            # 잔차 분석 시각화
+            display_residual_analysis(residual_data)
+            
+            # 특징 중요도 시각화
+            st.markdown("---")
+            display_feature_importance(model_median, feature_columns) 
+
+            # 예측 실행
+            with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (단일 예측 후 경로 보간, 95% CI)..."):
                 
                 last_actual_close = raw_data['Close'].iloc[-1]
+                # 피처 생성을 위해 마지막 100일 데이터 사용 (MACD/RSI/MA 등 최대 60일의 윈도우를 커버하기 위해)
                 last_data_for_prediction = raw_data.iloc[-100:].copy() 
                 
-                future_predictions_series = predict_future(
-                    model, 
+                future_predictions_df = predict_future(
+                    models, 
                     scaler, 
                     last_data_for_prediction, 
                     feature_columns,
@@ -485,26 +635,53 @@ def app():
                 )
                 
                 st.markdown("---")
-                st.subheader(f"📈 {selected_label} 가격 예측 시각화 (예측 영업일 기준)")
+                st.subheader(f"📈 {selected_label} 가격 예측 시각화 (95% 신뢰구간)")
                 
                 past_prices = raw_data['Close'].iloc[-90:]
                 
                 predicted_df = pd.DataFrame({
                     'Actual': past_prices,
-                    'Predicted': np.nan 
+                    'Predicted': np.nan,
+                    'Low_CI': np.nan,
+                    'High_CI': np.nan
                 })
                 
-                future_df = future_predictions_series.to_frame(name='Predicted')
-                future_df['Actual'] = np.nan
+                final_df = pd.concat([predicted_df, future_predictions_df]).sort_index()
                 
-                final_df = pd.concat([predicted_df, future_df]).sort_index()
-                
+                # Plotly 시각화 (신뢰구간 포함)
                 fig = go.Figure()
+                
+                # 신뢰구간 음영 추가
+                fig.add_trace(go.Scatter(
+                    x=final_df.index, 
+                    y=final_df['High_CI'], 
+                    fill=None, 
+                    mode='lines', 
+                    line=dict(width=0), 
+                    showlegend=False
+                ))
+                fig.add_trace(go.Scatter(
+                    x=final_df.index, 
+                    y=final_df['Low_CI'], 
+                    fill='tonexty', 
+                    mode='lines', 
+                    line=dict(width=0), 
+                    fillcolor='rgba(255, 0, 0, 0.1)', 
+                    name='95% 신뢰구간'
+                ))
+                
+                # 예측선 (중앙값)
+                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines', name='예측 종가 (Median)', line=dict(color='red', dash='dot')))
+                
+                # 실제 가격
                 fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
-                fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines+markers', name='예측 종가', line=dict(color='red', dash='dot'), marker=dict(size=4)))
+
+                # 예측 시작점에 수직선 추가
+                prediction_start_date = future_predictions_df.index[0] - datetime.timedelta(days=1)
+                fig.add_vline(x=prediction_start_date, line_width=1, line_dash="dash", line_color="gray", annotation_text="예측 시작", annotation_position="top right")
 
                 fig.update_layout(
-                    title=f'{selected_label} 실제 가격 vs. 예측 가격',
+                    title=f'{selected_label} 실제 가격 vs. 예측 가격 및 95% 신뢰구간',
                     yaxis_title='가격',
                     xaxis_title='날짜',
                     hovermode="x unified"
@@ -514,8 +691,29 @@ def app():
                 currency = "원" if current_market in ['KRX', 'COIN'] else "$"
                 st.caption(f"마지막 실제 종가: {currency}{last_actual_close:,.2f}")
 
-                st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 종가")
-                st.dataframe(future_predictions_series.to_frame(name='예측 종가').style.format(f'{currency}{{:.2f}}'))
+                st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 결과")
+                
+                # 로그 수익률을 실제 수익률(%)로 변환하여 표시
+                predictions_display = future_predictions_df.copy()
+                
+                # 수익률 계산: P_t+1 / P_t - 1
+                # 첫날의 수익률은 마지막 실제 종가를 기준으로 계산
+                return_pct_list = []
+                prev_price = last_actual_close
+                for current_price in predictions_display['Predicted']:
+                    return_pct_list.append((current_price / prev_price) - 1)
+                    prev_price = current_price
+                    
+                predictions_display['일일 예측 수익률 (%)'] = np.array(return_pct_list) * 100
+                
+                predictions_display.rename(columns={'Predicted': '예측 종가 (Median)', 'Low_CI': '95% CI 하한', 'High_CI': '95% CI 상한'}, inplace=True)
+                
+                st.dataframe(predictions_display[['예측 종가 (Median)', '95% CI 하한', '95% CI 상한', '일일 예측 수익률 (%)']].style.format({
+                    '예측 종가 (Median)': f'{currency}{{:.2f}}',
+                    '95% CI 하한': f'{currency}{{:.2f}}',
+                    '95% CI 상한': f'{currency}{{:.2f}}',
+                    '일일 예측 수익률 (%)': '{:.2f}%'
+                }))
 
 
 if __name__ == "__main__":
