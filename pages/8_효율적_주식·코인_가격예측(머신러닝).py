@@ -677,9 +677,16 @@ def app():
                 fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
 
                 # 예측 시작점에 수직선 추가
-                prediction_start_date = future_predictions_df.index[0] - datetime.timedelta(days=1)
-                fig.add_vline(x=prediction_start_date, line_width=1, line_dash="dash", line_color="gray", annotation_text="예측 시작", annotation_position="top right")
-
+                prediction_start_date = future_predictions_df.index[0].strftime('%Y-%m-%d')
+                fig.add_vline(
+                    x=prediction_start_date, 
+                    line_width=1, 
+                    line_dash="dash", 
+                    line_color="gray", 
+                    annotation_text="예측 시작", 
+                    annotation_position="top right"
+                )
+                
                 fig.update_layout(
                     title=f'{selected_label} 실제 가격 vs. 예측 가격 및 95% 신뢰구간',
                     yaxis_title='가격',
