@@ -287,11 +287,11 @@ def train_and_validate_model(data_features, scaler_type, n_splits):
         residual_data = pd.concat([residual_data, fold_residual_df])
         
         progress_bar.progress((fold + 1) / n_splits)
-        st.caption(f"Fold {fold+1} 검증 완료. **{TARGET_PERIOD}일 로그 수익률 RMSE**: {rmse:.6f} (**{TARGET_PERIOD}일 실제 수익률 RMSE**: {actual_return_rmse:.4f}%)")
+        st.caption(f"Fold {fold+1} 검증 완료. **{TARGET_PERIOD}일 로그 수익률 RMSE**: {rmse:.2f} (**{TARGET_PERIOD}일 실제 수익률 RMSE**: {actual_return_rmse:.4f}%)")
         final_model = model
 
     avg_rmse = np.mean(rmse_scores)
-    st.success(f"✅ 모델 훈련 완료. 평균 검증 **{TARGET_PERIOD}일 로그 수익률 RMSE**: {avg_rmse:.6f}")
+    st.success(f"✅ 모델 훈련 완료. 평균 검증 **{TARGET_PERIOD}일 로그 수익률 RMSE**: {avg_rmse:.2f}")
     
     return final_model, scaler, X.columns, avg_rmse, residual_data, X, y 
     # X, y를 함께 반환하여 퀀타일 모델 훈련에 사용합니다.
