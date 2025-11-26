@@ -479,9 +479,9 @@ def app():
         selected_train_days = st.number_input(
             "📅 훈련기간(단위:일)",
             min_value=120,
-            max_value=3650,
-            value=730, 
-            step=30,
+            max_value=1000,
+            value=365, 
+            step=5,
             key='train_days_input',
             help="모델 훈련에 사용할 과거 데이터 기간 설정."
         )
