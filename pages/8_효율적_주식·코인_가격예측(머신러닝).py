@@ -677,7 +677,9 @@ def app():
                 fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
 
                 # 예측 시작점에 수직선 추가
-                prediction_start_date = future_predictions_df.index[0].strftime('%Y-%m-%d')
+                prediction_start_timestamp = future_predictions_df.index[0]
+                prediction_start_date = prediction_start_timestamp.strftime('%Y-%m-%d')
+                # prediction_start_date = future_predictions_df.index[0].strftime('%Y-%m-%d')
                 fig.add_vline(
                     x=prediction_start_date, 
                     line_width=1, 
