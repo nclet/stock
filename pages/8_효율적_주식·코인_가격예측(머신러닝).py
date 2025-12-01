@@ -634,9 +634,24 @@ def app():
             LGBM_QUANTILE_PARAMS = LGBM_PARAMS.copy()
             if 'objective' in LGBM_QUANTILE_PARAMS:
                 del LGBM_QUANTILE_PARAMS['objective']
-
+            FEATURE_COLUMNS = [
+                'Adj_Close', 'Close', 'Day', 'DayOfWeek', 'DayOfYear', 
+                'Open', 'High', 'Low', 'Volume', # 예시: 여기에 나머지 컬럼들을 추가하세요.
+                'MA_10', 'RSI', 'Momentum', # 만약 기술적 지표를 사용했다면
+            ]
             # X_raw (필터링된 특징)를 스케일링하여 퀀타일 회귀 훈련에 사용
-            X_train_scaled = scaler.transform(X_raw).astype('float32')
+            try:
+                # **[핵심 수정 부분]** X_raw DataFrame에서 FEATURE_COLUMNS에 있는 컬럼만 명시적으로 선택
+                # 이렇게 하면 fit 때와 transform 때의 컬럼 목록이 일치하도록 보장됩니다.
+                X_raw_filtered = X_raw[FEATURE_COLUMNS]
+            
+            except KeyError as e:
+                # 필요한 컬럼이 X_raw에 없다면 오류 메시지를 표시하고 종료
+                st.error(f"데이터 프레임에 필요한 특징 컬럼이 누락되었습니다: {e}. 'FEATURE_COLUMNS' 정의를 확인하세요.")
+                return
+            
+            # 수정된 라인 639: 필터링된 데이터 프레임을 사용합니다.
+            X_train_scaled = scaler.transform(X_raw_filtered).astype('float32')
             y_train_values = y_raw.values
             
             st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
