@@ -38,6 +38,20 @@ NEGATIVE_KEYWORDS = ['부정', '하락', '악재', '우려', '약세', '침체',
 FED_ECONOMIC_KEYWORDS = ['연준', '금리', 'FOMC', '인상', '인하', '테이퍼링', '수급', '유동성', '물가', '인플레이션', '경기둔화']
 
 # ------------------------
+# ⚙️ 기본 설정 상수 (누락된 부분 복구)
+# ------------------------
+TARGET_PERIOD = 10 # 예측할 미래 영업일 수
+QUANTILE_ALPHA = 0.05 # 95% 신뢰구간을 위한 퀀타일 (0.025 및 0.975)
+TOP_N_FEATURES_DEFAULT = 20 # 기본적으로 사용할 상위 특징 개수
+
+# 시장 매핑
+MARKET_MAPPING = {
+    "KRX": "한국 주식 (KRX)",
+    "NASDAQ": "미국 증시 (NASDAQ)",
+    "COIN": "코인 (Upbit)"
+}
+
+# ------------------------
 # LightGBM 파라미터
 # ------------------------
 LGBM_PARAMS = {
@@ -192,7 +206,8 @@ def get_coin_listing(clear_cache=False):
 @st.cache_data(ttl=60*60*4)
 def load_data(ticker, market, train_days, clear_cache=False):
     end_date = datetime.now().date() # datetime.date.today() 대신 수정
-    start_date = end_date - timedelta(days=train_days + 150)
+    # TARGET_PERIOD 사용 (상수 복구됨)
+    start_date = end_date - timedelta(days=train_days + 150 + TARGET_PERIOD)
     data = None
     try:
         if market in ['KRX', 'NASDAQ']:
@@ -335,7 +350,8 @@ def create_features(df_merge):
     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
     
-    df['Return_10D'] = df['SP500_Close'].pct_change(periods=10).shift(-10) * 100
+    # TARGET_PERIOD 사용 (상수 복구됨)
+    df['Return_10D'] = df['SP500_Close'].pct_change(periods=TARGET_PERIOD).shift(-TARGET_PERIOD) * 100
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
     MACRO_FEATURES_TO_ENHANCE = ['YIELD_CURVE', 'BBB_OAS', 'DXY', 'VIX', 'WTI', 'GOLD', 'COPPER']
@@ -392,7 +408,7 @@ def create_features(df_merge):
     return df, features
 
 # --------------------------
-# 4. 모델 훈련 및 예측 함수 (수정됨)
+# 4. 모델 훈련 및 예측 함수
 # --------------------------
 def train_and_validate_model(data_features, scaler_type, n_splits, top_n_features):
     
@@ -408,8 +424,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
         
     st.info(f"선택된 스케일러: **{scaler_type}**를 사용하여 **특징(X)** 데이터를 전처리합니다.")
     
-    # **[핵심 수정 1]** 먼저 피처 선택(Feature Selection)을 수행합니다.
-    # 전체 데이터를 사용하여 임시 모델을 학습하고 중요도를 계산합니다.
+    # 1. Feature Selection
     temp_model = lgb.LGBMRegressor(**LGBM_PARAMS)
     temp_model.fit(X, y)
     
@@ -418,11 +433,10 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
     
     st.info(f"선택된 상위 {len(selected_features)}개 특징({top_n_features}개 설정)만 사용하여 최종 모델 및 예측을 진행합니다.")
     
-    # **[핵심 수정 2]** 선택된 피처로 데이터셋을 필터링합니다.
+    # 2. Filter features
     X_filtered = X[selected_features]
     
-    # **[핵심 수정 3]** 필터링된 데이터셋(X_filtered)에 대해 스케일러를 fit_transform 합니다.
-    # 이제 scaler는 selected_features에 대한 정보만 기억합니다.
+    # 3. Scale filtered features
     X_scaled = scaler.fit_transform(X_filtered)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X_filtered.columns)
     
@@ -467,7 +481,6 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
     avg_rmse = np.mean(rmse_scores)
     st.success(f"✅ 모델 훈련 완료. 평균 검증 **로그 수익률 RMSE**: {avg_rmse:.6f}")
     
-    # 반환 값: 최종 모델, 학습된 스케일러, 선택된 피처 목록, RMSE, 잔차, 필터링된 원본 데이터(X), 타겟(y)
     return final_model, scaler, selected_features, avg_rmse, residual_data, X_filtered, y
 
 def predict_future(models, scaler, last_data, feature_columns, market_key):
@@ -507,10 +520,10 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         temp_df_features.columns = sanitize_columns(temp_df_features.columns)
 
         X_future_data = temp_df_features.iloc[-1].to_frame().T
-        # **[핵심]** 여기서 feature_columns(선택된 피처들)만 딱 골라서 사용합니다.
+        # [핵심] 선택된 feature_columns만 사용
         X_future = X_future_data[feature_columns].fillna(0)
         
-        # **[핵심]** 이제 scaler는 feature_columns에 대해서만 학습되었으므로 오류가 나지 않습니다.
+        # [핵심] scaler는 feature_columns에 대해서만 학습됨
         X_future_scaled = scaler.transform(X_future)
         
         log_return_median = models['median'].predict(X_future_scaled)[0]
