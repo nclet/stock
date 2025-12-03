@@ -163,9 +163,19 @@ def create_features(df, is_for_training=True):
     df['MACD'], df['MACD_Signal'] = calculate_macd(df['Close'])
     df['MACD_Diff'] = df['MACD'] - df['MACD_Signal']
     df['RSI'] = calculate_rsi(df['Close'])
+    
+    # 7. 볼린저 밴드 비율 추가 (선택적)
+    # window = 20, num_std = 2
+    window_bb = 20
+    std_bb = df['Close'].rolling(window=window_bb).std()
+    ma_bb = df['Close'].rolling(window=window_bb).mean()
+    upper_band = ma_bb + (std_bb * 2)
+    lower_band = ma_bb - (std_bb * 2)
+    df['BB_Ratio'] = (df['Close'] - lower_band) / (upper_band - lower_band)
+
 
     if is_for_training:
-        # 7. 타겟 변수 (미래 1일 후의 로그 수익률)
+        # 8. 타겟 변수 (미래 1일 후의 로그 수익률)
         df['Target'] = np.log(df['Close'].shift(-1) / df['Close'])
 
     df = df.dropna()
@@ -232,6 +242,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
     X = data_features.drop('Target', axis=1)
     y = data_features['Target']
 
+    # LightGBM에 전달하기 전에 컬럼명을 정리 및 일반화합니다.
     X.columns = sanitize_columns(X.columns)
     
     if scaler_type == "RobustScaler":
@@ -245,7 +256,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, index=X.index, columns=X.columns)
     
-    # [개선 사항 2] TimeSeriesSplit 분할 수 변경: 5 -> 3 (n_splits 사용)
+    # TimeSeriesSplit 분할 수 설정
     tscv = TimeSeriesSplit(n_splits=n_splits)
     rmse_scores = []
     residual_data = pd.DataFrame()
@@ -294,7 +305,7 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
     
     # --- [개선 사항 1] Feature Selection: 중요도 기반 상위 N개 특징 선택 ---
     selected_features = X.columns.tolist()
-    X_filtered = X
+    X_filtered = X # 기본값: 필터링되지 않은 원본 X (컬럼명 일반화됨)
     
     if final_model is not None:
         importance_df = pd.DataFrame({
@@ -309,11 +320,6 @@ def train_and_validate_model(data_features, scaler_type, n_splits, top_n_feature
         # X_raw (퀀타일 훈련에 사용될 비-스케일링 데이터) 필터링
         X_filtered = X[selected_features]
         
-        # 특징 중요도 시각화를 위해 최종 모델의 특징 중요도 업데이트
-        # Importance 계산 시, 선택되지 않은 특징은 0으로 처리하거나,
-        # 여기서는 중요도 시각화 함수에서 상위 N개만 보여주므로 별도 처리는 생략하고,
-        # 반환 시 feature_columns을 selected_features로 변경합니다.
-
     return final_model, scaler, selected_features, avg_rmse, residual_data, X_filtered, y
 
 def predict_future(models, scaler, last_data, feature_columns, market_key):
@@ -337,6 +343,7 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
                 day_counter += 1
                 continue
             
+        # 직전 가격(실제 또는 예측된 가격)을 예측의 기준 가격으로 설정
         current_prediction_base_price = future_predictions[-1] if future_predictions else last_actual_close
         
         # 가상의 다음 날 데이터 생성 (인덱스: Timestamp)
@@ -346,17 +353,22 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
               new_row[col] = new_row['Close'].iloc[0]
         new_row['Volume'] = last_data['Volume'].iloc[-1]
         
+        # 피처 생성을 위해 충분한 과거 데이터 확보
+        # temp_df의 마지막 Close 값을 예측된 가격으로 업데이트할 필요 없이,
+        # 그냥 과거 데이터와 새로운 가상 행을 결합하여 피처를 계산합니다.
+        # create_features에서 MACD, RSI 등이 계산될 때 'Close' 컬럼을 사용합니다.
         temp_df = last_data.iloc[-60:].copy()
-        # 예측된 가격을 Close로 사용하여 다음 피처를 계산하기 위해 마지막 행의 Close 값을 업데이트
-        temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price
         temp_df = pd.concat([temp_df, new_row])
         
-        # 피처 생성 및 일반화
+        # 피처 생성 및 일반화 (Target은 생성하지 않음)
         temp_df_features = create_features(temp_df, is_for_training=False)
         temp_df_features.columns = sanitize_columns(temp_df_features.columns)
 
+        # 예측할 다음 시점 데이터 (마지막 행)
         X_future_data = temp_df_features.iloc[-1].to_frame().T
         # [개선 사항 반영] 선택된 feature_columns만 사용
+        # X_future_data에는 모든 피처가 있지만, 모델 훈련에 사용된 피처만 선택해야 합니다.
+        # fillna(0)은 결측값 처리를 위해 추가 (예: 초기 지연 피처)
         X_future = X_future_data[feature_columns].fillna(0)
         
         # 예측 입력 데이터는 Numpy 배열로 변환
@@ -377,8 +389,12 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         future_high.append(next_price_high)
         future_dates.append(next_date)
         
-        # 다음 예측을 위해 'current_date' 업데이트 및 카운터 리셋
-        last_data = pd.concat([last_data, new_row])
+        # 다음 예측을 위해 'current_date' 업데이트 및 last_data에 새로운 예측 추가
+        # 다음 Walk-Forward 예측 시, 이 예측된 가격을 기반으로 피처를 다시 생성합니다.
+        new_row_for_history = new_row.copy()
+        new_row_for_history['Close'] = next_price_median # 예측된 중앙값 가격으로 Close 업데이트
+        last_data = pd.concat([last_data, new_row_for_history])
+        
         current_date = next_date
         day_counter = 1
 
@@ -392,8 +408,6 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
 # 5. 시각화 및 분석 함수
 # --------------------------
 def display_feature_importance(model, feature_columns):
-    
-    # [Feature Selection 반영] feature_columns는 이미 상위 N개만 포함하고 있음
     
     importances = model.feature_importances_
     
@@ -634,24 +648,12 @@ def app():
             LGBM_QUANTILE_PARAMS = LGBM_PARAMS.copy()
             if 'objective' in LGBM_QUANTILE_PARAMS:
                 del LGBM_QUANTILE_PARAMS['objective']
-            FEATURE_COLUMNS = [
-                'Adj_Close', 'Close', 'Day', 'DayOfWeek', 'DayOfYear', 
-                'Open', 'High', 'Low', 'Volume', # 예시: 여기에 나머지 컬럼들을 추가하세요.
-                'MA_10', 'RSI', 'Momentum', # 만약 기술적 지표를 사용했다면
-            ]
-            # X_raw (필터링된 특징)를 스케일링하여 퀀타일 회귀 훈련에 사용
-            try:
-                # **[핵심 수정 부분]** X_raw DataFrame에서 FEATURE_COLUMNS에 있는 컬럼만 명시적으로 선택
-                # 이렇게 하면 fit 때와 transform 때의 컬럼 목록이 일치하도록 보장됩니다.
-                X_raw_filtered = X_raw[FEATURE_COLUMNS]
             
-            except KeyError as e:
-                # 필요한 컬럼이 X_raw에 없다면 오류 메시지를 표시하고 종료
-                st.error(f"데이터 프레임에 필요한 특징 컬럼이 누락되었습니다: {e}. 'FEATURE_COLUMNS' 정의를 확인하세요.")
-                return
+            # **[오류 수정 부분]**
+            # train_and_validate_model에서 반환된 X_raw는 이미 상위 특징(feature_columns)만 포함하고 있습니다.
+            # 하드코딩된 FEATURE_COLUMNS 정의와 불필요한 필터링 코드를 제거하고 X_raw를 직접 사용합니다.
             
-            # 수정된 라인 639: 필터링된 데이터 프레임을 사용합니다.
-            X_train_scaled = scaler.transform(X_raw_filtered).astype('float32')
+            X_train_scaled = scaler.transform(X_raw).astype('float32')
             y_train_values = y_raw.values
             
             st.markdown("#### 🥈 신뢰구간 모델 훈련 (Quantile Regression)")
