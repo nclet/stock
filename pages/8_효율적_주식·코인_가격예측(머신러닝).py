@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import datetime
+from datetime import datetime, timedelta # 🌟 [수정] datetime 모듈 대신 클래스와 timedelta 직접 임포트
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
@@ -205,8 +205,7 @@ def get_coin_listing(clear_cache=False):
 
 @st.cache_data(ttl=60*60*4)
 def load_data(ticker, market, train_days, clear_cache=False):
-    end_date = datetime.now().date() # datetime.date.today() 대신 수정
-    # TARGET_PERIOD 사용 (상수 복구됨)
+    end_date = datetime.now().date() # 🌟 [수정] datetime 클래스 사용
     start_date = end_date - timedelta(days=train_days + 150 + TARGET_PERIOD)
     data = None
     try:
@@ -520,10 +519,12 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         temp_df_features.columns = sanitize_columns(temp_df_features.columns)
 
         X_future_data = temp_df_features.iloc[-1].to_frame().T
-        # [핵심] 선택된 feature_columns만 사용
-        X_future = X_future_data[feature_columns].fillna(0)
+        # 🌟 [수정] 선택된 feature_columns만 사용
+        # 만약 feature_columns에 있는 컬럼이 X_future_data에 없다면 0으로 채움
+        # 반대로 X_future_data에만 있는 컬럼은 무시됨 (X_future_data[feature_columns] 사용)
+        X_future = X_future_data.reindex(columns=feature_columns, fill_value=0)
         
-        # [핵심] scaler는 feature_columns에 대해서만 학습됨
+        # 🌟 [수정] scaler는 feature_columns에 대해서만 학습됨
         X_future_scaled = scaler.transform(X_future)
         
         log_return_median = models['median'].predict(X_future_scaled)[0]
@@ -763,7 +764,7 @@ def app():
             
             # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
             st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
-            # [수정 완료] 모델 훈련, 특징 선택, 스케일러 학습이 이 함수 내에서 순차적으로 이루어짐
+            # [개선 사항 반영] top_n_features 전달
             model_median, scaler, feature_columns, avg_rmse, residual_data, X_raw, y_raw = train_and_validate_model(
                 train_data, selected_scaler, selected_n_splits, selected_top_n_features
             )
@@ -771,11 +772,12 @@ def app():
             # 2. 신뢰구간 (CI) 모델 훈련
             models = {'median': model_median}
             
+            # LGBM_PARAMS의 복사본을 만들고 'objective' 키를 제거 (퀀타일 훈련 시 충돌 방지)
             LGBM_QUANTILE_PARAMS = LGBM_PARAMS.copy()
             if 'objective' in LGBM_QUANTILE_PARAMS:
                 del LGBM_QUANTILE_PARAMS['objective']
             
-            # [오류 수정] X_raw는 이미 상위 특징만 포함하고 있으므로 바로 변환
+            # X_raw (상위 특징만 포함된 비-스케일링 데이터)를 스케일링하여 사용
             X_train_scaled = scaler.transform(X_raw).astype('float32')
             y_train_values = y_raw.values
             
@@ -796,9 +798,12 @@ def app():
             st.markdown("---")
             st.subheader("💡 훈련 모델 진단")
             
+            # 잔차 분석 시각화
             display_residual_analysis(residual_data)
             
+            # 특징 중요도 시각화
             st.markdown("---")
+            # [개선 사항 반영] feature_columns은 이미 상위 N개만 포함함
             display_feature_importance(model_median, feature_columns)
 
             # 예측 실행
@@ -811,7 +816,7 @@ def app():
                     models,
                     scaler,
                     last_data_for_prediction,
-                    feature_columns, # 필터링된 특징 컬럼 사용 (scaler와 호환됨)
+                    feature_columns, # 필터링된 특징 컬럼 사용
                     current_market
                 )
                 
@@ -829,8 +834,10 @@ def app():
                 
                 final_df = pd.concat([predicted_df, future_predictions_df]).sort_index()
                 
+                # Plotly 시각화 (신뢰구간 포함)
                 fig = go.Figure()
                 
+                # 신뢰구간 음영 추가 (High CI, Low CI)
                 fig.add_trace(go.Scatter(
                     x=final_df.index,
                     y=final_df['High_CI'],
@@ -849,8 +856,10 @@ def app():
                     name='95% 신뢰구간'
                 ))
                 
+                # 예측선 (중앙값)
                 fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Predicted'], mode='lines', name='예측 종가 (Median)', line=dict(color='red', dash='dot')))
                 
+                # 실제 가격
                 fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Actual'], mode='lines', name='실제 종가', line=dict(color='blue')))
 
                 fig.update_layout(
@@ -866,9 +875,14 @@ def app():
 
                 st.markdown(f"##### 🗓️ 향후 {TARGET_PERIOD} 영업일 예측 결과")
                 
+                # 로그 수익률을 실제 수익률(%)로 변환하여 표시
                 predictions_display = future_predictions_df.copy()
                 
+                # 수익률 계산: P_t+1 / P_t - 1
+                # 인덱스 이동 후 fillna(0)을 사용하여 첫날 수익률을 계산하는 대신, 명시적으로 계산
                 return_pct = (predictions_display['Predicted'] / predictions_display['Predicted'].shift(1)) - 1
+                
+                # 첫날의 수익률은 마지막 실제 종가를 기준으로 계산
                 return_pct.iloc[0] = (predictions_display['Predicted'].iloc[0] / last_actual_close) - 1
                 
                 predictions_display['일일 예측 수익률 (%)'] = return_pct * 100
