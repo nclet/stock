@@ -347,13 +347,15 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
 def create_features(df_merge, is_for_training=True):
     df = df_merge.copy()
     
+    # 1. [수정] SP500_Close가 아니라 현재 데이터의 'Close'를 기준으로 타겟(수익률)을 생성해야 함
+    #    (삼성전자, 비트코인 등 모든 자산에 적용 가능해짐)
+    #    예측 모드(is_for_training=False)일 때는 미래 값이 없어 NaN이 뜨지만 정상입니다.
+    df['Return_10D'] = df['Close'].pct_change(periods=TARGET_PERIOD).shift(-TARGET_PERIOD) * 100
+    df['Daily_Return'] = df['Close'].pct_change() * 100
+
+    # 2. [안전 장치] 만약 외부 데이터가 병합되어 SP500_Close가 있다면 비율 계산 (없으면 건너뜀)
     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
-    
-    # TARGET_PERIOD 사용
-    # [주의] 예측 시점(is_for_training=False)에는 미래 데이터가 없으므로 NaN이 발생하지만 정상임
-    df['Return_10D'] = df['SP500_Close'].pct_change(periods=TARGET_PERIOD).shift(-TARGET_PERIOD) * 100
-    df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
     MACRO_FEATURES_TO_ENHANCE = ['YIELD_CURVE', 'BBB_OAS', 'DXY', 'VIX', 'WTI', 'GOLD', 'COPPER']
     for col in MACRO_FEATURES_TO_ENHANCE:
@@ -378,7 +380,9 @@ def create_features(df_merge, is_for_training=True):
         df['News_Count_Change_1D'] = df['News_Count'].diff(1)
 
     lags = [1, 3, 5, 10] 
+    # [수정] lag_factors에 기본적으로 포함될 중요 지표들
     lag_factors = ['Daily_Return', 'FGI', 'NASDAQ_SP500_Ratio', 'SP500_EPS', 'GDP', 'M2']
+    
     for col in MACRO_FEATURES_TO_ENHANCE:
         if f'{col}_RAW' in df.columns:
             lag_factors.append(f'{col}_RAW')
@@ -395,28 +399,26 @@ def create_features(df_merge, is_for_training=True):
             
     if 'VIX_RAW' in df.columns:
         df['VIX_RAW_Change_5D'] = df['VIX_RAW'].diff(5)
-    df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
+    
+    # 이평선 추가
+    df['SMA_20'] = df['Close'].rolling(window=20).mean()
     
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     
-    # [수정] 훈련 모드일 때만 타겟(Target)값이 없는 행을 제거해야 함
+    # [중요] 훈련용일 때만 타겟(Target) 없는 행 제거
     if is_for_training:
         df = df.dropna(subset=['Return_10D'])
     
-    # [수정] 타겟 이외의 피처(Lag 등)가 NaN인 앞부분 데이터 제거
-    # 예측 모드(False)일 때는 가장 마지막 행(예측 대상)을 살려야 하므로 dropna에 주의
+    # [중요] NaN 데이터 제거 (훈련용: 모두 제거, 예측용: 최근 데이터 보존)
     if is_for_training:
         df = df.dropna()
     else:
-        # 예측용일 때는 마지막 행이 중요하므로, 타겟(Return_10D)이 NaN이어도 유지
-        # 하지만 Lag 생성으로 인한 앞쪽 NaN은 제거
         df = df.iloc[max(lags)+10 : ] 
 
-    
-    base_features = [col for col in df.columns if not col.endswith(('Return', 'Close', '10D', '_2Y', '_10Y')) and 'SP500_' not in col and 'NASDAQ_' not in col]
-    features = [f for f in base_features if ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'NASDAQ_SP500_Ratio'])]
-    features.extend([f for f in base_features if any(f.startswith(macro) for macro in MACRO_FEATURES_TO_ENHANCE)])
-    features.extend([f for f in base_features if any(f.startswith(news_f) for news_f in news_agg_features) or f.startswith('News_Count_Vol') or f.startswith('News_Count_Change')])
+    # 특징 컬럼 선택 로직
+    base_features = [col for col in df.columns if col not in ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume', 'Return_10D', 'Target']]
+    # 필요 없는 컬럼들 필터링
+    features = [f for f in base_features if ('Lag' in f or 'Change' in f or 'SMA' in f or 'Ratio' in f or f.endswith('_RAW') or f.endswith('_PCT_CHANGE') or f.endswith('_ZSCORE_60D'))]
     features = list(set(features))
     
     return df, features
