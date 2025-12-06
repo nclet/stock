@@ -343,13 +343,15 @@ def get_naver_news_api(query, display=100, start=1, sort="date"):
 # ------------------------
 # 3. 피처 엔지니어링 함수
 # ------------------------
-def create_features(df_merge):
+# [수정] 파라미터 추가 및 내부 로직 개선
+def create_features(df_merge, is_for_training=True):
     df = df_merge.copy()
     
     if 'NASDAQ_Close' in df.columns and 'SP500_Close' in df.columns:
         df['NASDAQ_SP500_Ratio'] = df['NASDAQ_Close'] / df['SP500_Close']
     
-    # TARGET_PERIOD 사용 (상수 복구됨)
+    # TARGET_PERIOD 사용
+    # [주의] 예측 시점(is_for_training=False)에는 미래 데이터가 없으므로 NaN이 발생하지만 정상임
     df['Return_10D'] = df['SP500_Close'].pct_change(periods=TARGET_PERIOD).shift(-TARGET_PERIOD) * 100
     df['Daily_Return'] = df['SP500_Close'].pct_change() * 100
 
@@ -396,7 +398,20 @@ def create_features(df_merge):
     df['SP500_SMA_20'] = df['SP500_Close'].rolling(window=20).mean()
     
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df = df.dropna(subset=['Return_10D']).dropna()
+    
+    # [수정] 훈련 모드일 때만 타겟(Target)값이 없는 행을 제거해야 함
+    if is_for_training:
+        df = df.dropna(subset=['Return_10D'])
+    
+    # [수정] 타겟 이외의 피처(Lag 등)가 NaN인 앞부분 데이터 제거
+    # 예측 모드(False)일 때는 가장 마지막 행(예측 대상)을 살려야 하므로 dropna에 주의
+    if is_for_training:
+        df = df.dropna()
+    else:
+        # 예측용일 때는 마지막 행이 중요하므로, 타겟(Return_10D)이 NaN이어도 유지
+        # 하지만 Lag 생성으로 인한 앞쪽 NaN은 제거
+        df = df.iloc[max(lags)+10 : ] 
+
     
     base_features = [col for col in df.columns if not col.endswith(('Return', 'Close', '10D', '_2Y', '_10Y')) and 'SP500_' not in col and 'NASDAQ_' not in col]
     features = [f for f in base_features if ('Lag' in f or 'Change' in f or 'SMA' in f or f in ['GDP', 'M2', 'SP500_EPS', 'NASDAQ_SP500_Ratio'])]
@@ -405,7 +420,6 @@ def create_features(df_merge):
     features = list(set(features))
     
     return df, features
-
 # --------------------------
 # 4. 모델 훈련 및 예측 함수
 # --------------------------
@@ -515,7 +529,7 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
         temp_df.at[temp_df.index[-1], 'Close'] = current_prediction_base_price
         temp_df = pd.concat([temp_df, new_row])
         
-        temp_df_features = create_features(temp_df, is_for_training=False)
+        temp_df_features, _ = create_features(temp_df, is_for_training=False)
         temp_df_features.columns = sanitize_columns(temp_df_features.columns)
 
         X_future_data = temp_df_features.iloc[-1].to_frame().T
@@ -751,7 +765,8 @@ def app():
             if raw_data is None:
                 return
 
-            data_features = create_features(raw_data, is_for_training=True)
+            data_features, feature_list = create_features(raw_data, is_for_training=True)
+            
             
             min_data_needed = 60
             if len(data_features) < min_data_needed:
