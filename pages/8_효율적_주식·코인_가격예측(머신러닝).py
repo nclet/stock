@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta # 🌟 [수정] datetime 모듈 대신 클래스와 timedelta 직접 임포트
+from concurrent.futures import ThreadPoolExecutor
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
