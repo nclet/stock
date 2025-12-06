@@ -634,11 +634,19 @@ def display_residual_analysis(residual_data):
     )
     st.plotly_chart(fig_ts, use_container_width=True)
 
+# --------------------------
+# 6. Streamlit 메인 앱 (수정 완료)
+# --------------------------
+import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
+from datetime import datetime
+import lightgbm as lgb
+# 필요한 경우, 위 import 문을 파일 맨 앞에 추가해주세요.
 
-# --------------------------
-# 6. Streamlit 메인 앱
-# --------------------------
-st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (훈련 시간 최적화)")
+# st.set_page_config(layout="wide", page_title="LGBM 멀티 자산 예측 시스템 (훈련 시간 최적화)")
+# (이 부분은 파일 상단에 한 번만 정의되어 있어야 합니다.)
 
 def app():
     st.title("🏆 LightGBM 예측 시스템: 훈련 시간 최적화 버전")
@@ -761,14 +769,42 @@ def app():
     if run_button:
         current_market = market_key
         
-        with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 로드 및 피처 생성 중..."):
+        with st.spinner(f"⏳ '{selected_ticker}' ({current_market}) 데이터 및 거시경제 지표 로드 중..."):
             
+            # 1. 타겟 자산 데이터 로드
             raw_data = load_data(selected_ticker, current_market, selected_train_days, clear_cache=clear_cache)
             if raw_data is None:
                 return
 
-            data_features, feature_list = create_features(raw_data, is_for_training=True)
+            # 2. 💡 [수정] 거시 경제 지표 로드 및 병합 (필수) 💡
+            #    특징 생성 시 SP500, VIX 등의 지표를 활용하기 위해 데이터를 병합합니다.
+            end_date_for_load = datetime.now().date()
+            start_date_for_load = raw_data.index[0].date()
             
+            market_data = load_market_data(start_date_for_load, end_date_for_load)
+            fred_data = get_fred_data()
+            fgi_data = get_fear_greed_index()
+            
+            # 데이터 병합 (Left Join)
+            df_merged = raw_data.join(market_data, how='left').join(fgi_data, how='left')
+            
+            # FRED 데이터 병합
+            for col, series in fred_data.items():
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                df_merged = df_merged.join(series.rename(col), how='left')
+                
+            # 병합 후 결측값 처리 (이전 값으로 채우고, 남은 초기 NaN 제거)
+            df_merged = df_merged.ffill().dropna()
+            
+            # 데이터 로드 및 병합 완료
+
+            # 3. 피처 엔지니어링 수행
+            # ⚠️ raw_data 대신 병합된 df_merged를 사용합니다.
+            data_features, feature_list = create_features(df_merged, is_for_training=True)
+            
+            # 4. 모델 훈련을 위한 Target 컬럼 명시
+            data_features['Target'] = data_features['Return_10D']
             
             min_data_needed = 60
             if len(data_features) < min_data_needed:
@@ -781,7 +817,6 @@ def app():
             
             # 1. 중앙값 (Median) 예측 모델 훈련 및 검증
             st.markdown("#### 🥇 중앙값 (Median) 모델 훈련")
-            # [개선 사항 반영] top_n_features 전달
             model_median, scaler, feature_columns, avg_rmse, residual_data, X_raw, y_raw = train_and_validate_model(
                 train_data, selected_scaler, selected_n_splits, selected_top_n_features
             )
@@ -820,19 +855,19 @@ def app():
             
             # 특징 중요도 시각화
             st.markdown("---")
-            # [개선 사항 반영] feature_columns은 이미 상위 N개만 포함함
             display_feature_importance(model_median, feature_columns)
 
-            # 예측 실행
+            # 5. 예측 실행
             with st.spinner(f"🔮 미래 {TARGET_PERIOD}일 예측 중 (Walk-Forward, 95% CI)..."):
                 
-                last_actual_close = raw_data['Close'].iloc[-1]
-                last_data_for_prediction = raw_data.iloc[-100:].copy()
+                # ⚠️ [수정] 예측을 위한 데이터도 병합된 원본 데이터(df_merged)에서 가져옵니다.
+                last_actual_close = df_merged['Close'].iloc[-1]
+                last_data_for_prediction = df_merged.iloc[-100:].copy()
                 
                 future_predictions_df = predict_future(
                     models,
                     scaler,
-                    last_data_for_prediction,
+                    last_data_for_prediction, # 병합된 데이터 사용
                     feature_columns, # 필터링된 특징 컬럼 사용
                     current_market
                 )
@@ -840,7 +875,8 @@ def app():
                 st.markdown("---")
                 st.subheader(f"📈 {selected_label} 가격 예측 시각화 (95% 신뢰구간)")
                 
-                past_prices = raw_data['Close'].iloc[-90:]
+                # 시각화용 데이터 준비
+                past_prices = df_merged['Close'].iloc[-90:] # df_merged 사용
                 
                 predicted_df = pd.DataFrame({
                     'Actual': past_prices,
@@ -896,7 +932,6 @@ def app():
                 predictions_display = future_predictions_df.copy()
                 
                 # 수익률 계산: P_t+1 / P_t - 1
-                # 인덱스 이동 후 fillna(0)을 사용하여 첫날 수익률을 계산하는 대신, 명시적으로 계산
                 return_pct = (predictions_display['Predicted'] / predictions_display['Predicted'].shift(1)) - 1
                 
                 # 첫날의 수익률은 마지막 실제 종가를 기준으로 계산
