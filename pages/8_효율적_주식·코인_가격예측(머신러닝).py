@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta # 🌟 [수정] datetime 모듈 대신 클래스와 timedelta 직접 임포트
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import lightgbm as lgb
 from sklearn.model_selection import TimeSeriesSplit
@@ -513,7 +513,8 @@ def predict_future(models, scaler, last_data, feature_columns, market_key):
     
     while len(future_predictions) < TARGET_PERIOD:
         
-        next_date = current_date + datetime.timedelta(days=day_counter)
+        # next_date = current_date + datetime.timedelta(days=day_counter)
+        next_date = current_date + timedelta(days=day_counter)
         
         if market_key in ['KRX', 'NASDAQ']:
             if next_date.weekday() in [5, 6]:
