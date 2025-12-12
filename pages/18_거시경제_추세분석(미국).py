@@ -1,16 +1,20 @@
-# 미국 증시 거시경제 분석 Streamlit 앱
-
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from datetime import datetime, timedelta
 import os
 import requests
 import xmltodict
 import time # 시간 지연을 위해 추가
 import random # 무작위 시간 지연을 위해 추가
+
+# --- Plotly 및 datetime import 추가/수정 ---
+import plotly.express as px # 🌟 Plotly Express 추가
+from datetime import datetime, timedelta # 🌟 timedelta 명시적 import
+
+# Matplotlib 및 Seaborn은 Plotly 사용 시 필요 없으므로 제거하거나 주석 처리
+# import matplotlib.pyplot as plt 
+# import seaborn as sns 
+# ----------------------------------------
 
 # FinanceDataReader 라이브러리 추가 (S&P 500 데이터용)
 try:
@@ -24,14 +28,13 @@ except ImportError:
 
 
 # FRED API 키 로드 (secrets.toml에서)
-# ECOS 관련 코드는 모두 삭제되었습니다.
 try:
     FRED_API_KEY = st.secrets['fred']["FRED_API_KEY"]
     import pandas_datareader.data as web # pandas_datareader는 FRED용으로 유지
 except ImportError:
     st.error("""
     **필수 라이브러리가 설치되지 않았거나 API 키가 설정되지 않았습니다!**
-    `pip install pandas_datareader requests matplotlib seaborn` 명령어를 실행하고,
+    `pip install pandas_datareader requests plotly` 명령어를 실행하고,
     `.streamlit/secrets.toml` 파일에 FRED_API_KEY를 설정해주세요.
     """)
     st.stop()
@@ -39,6 +42,7 @@ except KeyError:
     st.error("""
     **FRED API 키가 Streamlit Secrets에 설정되지 않았습니다!**
     `.streamlit/secrets.toml` 파일에 아래 내용을 추가해주세요:
+    [fred]
     FRED_API_KEY = "YOUR_FRED_API_KEY"
     """)
     st.stop()
@@ -58,7 +62,6 @@ def get_fred_data(api_key):
     start_date = datetime(2010, 1, 1) # 충분한 과거 데이터
     end_date = datetime.now()
 
-    # 한국 관련 지표(KRW/USD ExcRate)는 제거하고 미국 지표만 남깁니다.
     fred_codes = {
         'US_CPI_YoY': 'CPIAUCSL', # 미국 CPI, 월별 (전년 동기 대비 변화율 계산)
         'US_FFR': 'FEDFUNDS', # 미국 기준금리, 월별
@@ -92,8 +95,6 @@ def get_fred_data(api_key):
     st.success("✅ FRED 데이터 수집 완료!")
     return df_fred
 
-# ECOS 데이터를 가져오는 함수는 완전히 제거되었습니다.
-
 @st.cache_data(ttl=3600 * 24 * 7) # 1주일 캐시 유지
 def get_stock_data():
     """S&P 500 ETF (SPY) 데이터를 FinanceDataReader로 가져옵니다. KOSPI 데이터는 제외됩니다."""
@@ -106,7 +107,6 @@ def get_stock_data():
     max_stock_retries = 5 # 주식 데이터는 재시도 설정
     initial_stock_delay = 2 # 초
 
-    # KOSPI 데이터 로드 코드는 제거되었습니다. S&P 500 ETF (SPY) 데이터만 로드합니다.
     for attempt in range(max_stock_retries):
         try:
             df_spy = fdr.DataReader('SPY', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
@@ -161,7 +161,7 @@ def preprocess_and_engineer_features(df_fred, df_stocks):
     
     if not df_fred.empty:
         df_merged = pd.merge(df_merged, df_fred, left_index=True, right_index=True, how='left')
-    # ECOS 데이터 병합 코드 제거
+    
     if not df_stocks.empty:
         df_merged = pd.merge(df_merged, df_stocks, left_index=True, right_index=True, how='left')
 
@@ -182,7 +182,7 @@ def preprocess_and_engineer_features(df_fred, df_stocks):
     else:
         df_merged['US_10Y_Treasury_Change'] = np.nan
 
-    # KOSPI 다음 달 수익률 코드 제거. 미국 주식 시장 (S&P 500) 다음 달 수익률만 남김
+    # 미국 주식 시장 (S&P 500) 다음 달 수익률만 남김
     if 'US_Stock_Close' in df_merged.columns:
         df_merged['US_Next_Month_Return'] = df_merged['US_Stock_Close'].pct_change(1).shift(-1) * 100
     else: df_merged['US_Next_Month_Return'] = np.nan
@@ -215,7 +215,7 @@ def define_market_regime(df):
     st.info("🔄 시장 국면 정의 중...")
     df_regime = df.copy()
 
-    # 한국 CPI가 제거되었으므로, 시장 국면은 오직 미국 CPI 추세에만 의존하여 분류합니다.
+    # 시장 국면은 오직 미국 CPI 추세에만 의존하여 분류합니다.
     if 'US_CPI_YoY_Change' in df_regime.columns:
         # 전년 동기 대비 CPI의 6개월 이동평균이 0보다 크면 인플레이션, 아니면 디스인플레이션으로 간주
         df_regime['Inflation_Trend'] = (df_regime['US_CPI_YoY_Change'].rolling(window=6).mean() > 0)
@@ -241,25 +241,17 @@ st.write("아래 버튼을 클릭하여 FRED 및 S&P 500 데이터를 수집하�
 
 if st.button("🚀 **데이터 수집 및 분석 시작!**", key="start_analysis_button"):
     with st.spinner("데이터를 수집하고 분석 중입니다. 잠시만 기다려 주세요..."):
-        # -----------------------------------------------------------
-        # 💡 [핵심 수정] FRED_API_KEY 변수를 인수로 명시적으로 전달 💡
+        # 1. 데이터 수집
+        # 💡 FRED_API_KEY 변수를 인수로 명시적으로 전달 (오류 방지)
         df_fred = get_fred_data(FRED_API_KEY) 
-        # -----------------------------------------------------------
-        
         df_stocks = get_stock_data() # SPY 데이터만 호출
 
-        # 데이터가 하나라도 비어있으면 경고 후 중단
-        if df_fred.empty or df_stocks.empty:
-            st.error("⚠️ 필수 데이터(FRED, S&P 500) 중 일부 또는 전부를 성공적으로 로드하지 못했습니다. 위의 경고 메시지(API 키, 인터넷 연결 등)를 확인하세요.")
-            st.stop()
-
-        # 데이터가 하나라도 비어있으면 경고 후 중단
-        # ECOS 데이터프레임이 없어졌으므로 체크 로직 수정
+        # 데이터 검증
         if df_fred.empty or df_stocks.empty:
             st.error("⚠️ 필수 데이터(FRED, S&P 500) 중 일부 또는 전부를 성공적으로 로드하지 못했습니다. 위의 경고 메시지(API 키, 인터넷 연결 등)를 확인하세요.")
             st.stop()
         
-        # 2. 데이터 전처리 및 팩터 생성 (ECOS 데이터프레임 제거)
+        # 2. 데이터 전처리 및 팩터 생성
         df_final, features, targets = preprocess_and_engineer_features(df_fred, df_stocks)
 
         if df_final.empty:
@@ -275,20 +267,24 @@ if st.button("🚀 **데이터 수집 및 분석 시작!**", key="start_analysis
         latest_regime = df_regime_classified['Market_Regime'].iloc[-1]
         st.markdown(f"### ➡️ 현재 시장 국면: **{latest_regime}**")
         
-        st.subheader("📈 **시장 국면별 주식 시장 월별 평균 수익률 분석**")
+        st.subheader("📈 **시장 국면별 S&P 500 월별 평균 수익률 분석 (Plotly)**")
         
-        # KOSPI 관련 플롯과 통계는 제거하고 S&P 500만 남김
+        # 🌟 Plotly 적용: 시장 국면별 수익률 막대 그래프
         if 'US_Next_Month_Return' in df_regime_classified.columns:
-            us_regime_performance = df_regime_classified.groupby('Market_Regime')['US_Next_Month_Return'].agg(['count', 'mean', 'std']).sort_values('mean', ascending=False)
+            us_regime_performance = df_regime_classified.groupby('Market_Regime')['US_Next_Month_Return'].agg(['count', 'mean', 'std']).sort_values('mean', ascending=False).reset_index()
             
-            fig_us_regime, ax_us_regime = plt.subplots(figsize=(10, 6))
-            sns.barplot(x=us_regime_performance.index, y=us_regime_performance['mean'], ax=ax_us_regime, palette='plasma')
-            ax_us_regime.set_title("S&P 500 Monthly returns by market phase (%)")
-            ax_us_regime.set_xlabel("market phase")
-            ax_us_regime.set_ylabel("Average Monthly Return (%)")
-            ax_us_regime.tick_params(axis='x', rotation=45)
-            plt.tight_layout()
-            st.pyplot(fig_us_regime)
+            fig_us_regime = px.bar(
+                us_regime_performance,
+                x='Market_Regime', 
+                y='mean', 
+                color='Market_Regime', 
+                title="S&P 500 Monthly returns by market phase (%)",
+                labels={'mean': 'Average Monthly Return (%)', 'Market_Regime': 'Market Phase'},
+                template='plotly_white'
+            )
+            
+            st.plotly_chart(fig_us_regime, use_container_width=True) # Plotly 차트 표시
+            
             st.write("---")
             st.write("**S&P 500 국면별 수익률 통계:**")
             st.dataframe(us_regime_performance)
@@ -297,48 +293,60 @@ if st.button("🚀 **데이터 수집 및 분석 시작!**", key="start_analysis
 
 
         st.markdown("---")
-        st.subheader("📊 **주요 거시경제 지표 추세 (최근 5년)**")
+        st.subheader("📊 **주요 거시경제 지표 추세 (최근 5년) (Plotly)**")
         
         plot_df = df_regime_classified.last('5Y')
         
         cols = st.columns(3)
-        # 한국 관련 지표를 제거하고 미국 지표만 반복
         us_features_to_plot = ['US_CPI_YoY', 'US_CPI_YoY_Change', 'US_FFR', 'US_FFR_Change', 'US_10Y_Treasury', 'US_10Y_Treasury_Change']
         
+        # 🌟 Plotly 적용: 거시경제 지표 시계열 그래프
         for i, feature in enumerate(us_features_to_plot):
             with cols[i % 3]:
                 if feature in plot_df.columns:
-                    fig, ax = plt.subplots(figsize=(8, 4))
-                    ax.plot(plot_df.index, plot_df[feature])
-                    ax.set_title(feature)
-                    ax.grid(True)
-                    plt.tight_layout()
-                    st.pyplot(fig)
+                    fig = px.line(
+                        plot_df, 
+                        x=plot_df.index, 
+                        y=feature, 
+                        title=feature,
+                        template='plotly_white'
+                    )
+                    fig.update_layout(xaxis_title="Date", yaxis_title="Value", showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True) # Plotly 차트 표시
                 else:
                     st.write(f"⚠️ **'{feature}'** 지표 데이터가 존재하지 않아 시각화할 수 없습니다.")
         
         st.markdown("---")
-        st.subheader("Correlation Heatmap: Macroeconomic Factors vs. S&P 500 Returns")
+        st.subheader("Correlation Heatmap: Macroeconomic Factors vs. S&P 500 Returns (Plotly)")
         st.write("거시경제 지표 변화와 S&P 500의 다음 달 수익률 간의 상관관계를 시각화합니다.")
 
         corr_df = df_final[features + targets].corr()
-        
-        fig_corr, ax_corr = plt.subplots(figsize=(12, 8))
-        # KOSPI 관련 데이터가 제거되었으므로, 미국 지표와 S&P 500 수익률 간의 상관관계만 표시
-        sns.heatmap(corr_df.loc[features, targets], annot=True, cmap='coolwarm', fmt=".2f", ax=ax_corr)
-        ax_corr.set_title("Relationship between macroeconomic indices and S&P 500 returns")
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-        plt.tight_layout()
-        st.pyplot(fig_corr)
+        heatmap_data = corr_df.loc[features, targets]
+
+        # 🌟 Plotly 적용: 상관관계 히트맵
+        fig_corr = px.imshow(
+            heatmap_data, 
+            text_auto=True, 
+            aspect="auto", 
+            color_continuous_scale='RdBu_r', 
+            title="Relationship between macroeconomic indices and S&P 500 returns"
+        )
+
+        fig_corr.update_xaxes(side="bottom")
+        fig_corr.update_layout(
+            xaxis={'title': 'S&P 500 Returns', 'tickangle': 45},
+            yaxis={'title': 'Macroeconomic Factors'}
+        )
+
+        st.plotly_chart(fig_corr, use_container_width=True) # Plotly 차트 표시
 
         st.markdown("---")
         st.subheader("🔮 **시장 추세 분석 결론 및 제안**")
         st.write(f"현재 거시경제 지표를 분석한 결과, 시장은 **'{latest_regime}'** 국면에 있는 것으로 보입니다.")
         
         # S&P 500 예상 수익률만 계산
-        if 'US_Next_Month_Return' in df_regime_classified.columns and latest_regime in us_regime_performance.index:
-            us_expected_return = us_regime_performance.loc[latest_regime, 'mean']
+        if 'US_Next_Month_Return' in df_regime_classified.columns and latest_regime in us_regime_performance['Market_Regime'].values:
+            us_expected_return = us_regime_performance[us_regime_performance['Market_Regime'] == latest_regime]['mean'].iloc[0]
             st.write(f"과거 데이터에 기반할 때, 현재 **'{latest_regime}'** 국면에서 S&P 500의 월 평균 수익률은 **{us_expected_return:.2f}%**였습니다.")
             if us_expected_return > 0:
                 st.success("✅ 현재 국면은 S&P 500에 긍정적인 경향을 보입니다.")
