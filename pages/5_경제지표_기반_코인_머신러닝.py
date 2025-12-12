@@ -30,19 +30,19 @@ st.write("에포크와 데이터 기간이 커지면 분석 속도가 늦어질 
 # ------------------------
 # ✨ FRED API 설정
 # ------------------------
-# try:
-#     FRED_API_KEY = st.secrets["FRED_API_KEY"]
-#     fred = Fred(api_key=FRED_API_KEY)
-# except KeyError:
-#     st.warning("🚨 FRED API 키('FRED_API_KEY')가 Streamlit Secrets에 설정되어 있지 않습니다. 거시 경제 지표는 로드되지 않습니다.")
-#     fred = None # FRED API 키가 없으면 fred 객체를 None으로 설정
 try:
-    fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
-    if not fred_api_key:          
-        st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
-        return {}
-except Exception:
-    return {}
+    FRED_API_KEY = st.secrets["FRED_API_KEY"]
+    fred = Fred(api_key=FRED_API_KEY)
+except KeyError:
+    st.warning("🚨 FRED API 키('FRED_API_KEY')가 Streamlit Secrets에 설정되어 있지 않습니다. 거시 경제 지표는 로드되지 않습니다.")
+    fred = None # FRED API 키가 없으면 fred 객체를 None으로 설정
+# try:
+#     fred_api_key = st.secrets.get("fred", {}).get("FRED_API_KEY")
+#     if not fred_api_key:          
+#         st.warning("⚠️ FRED API 키가 설정되지 않아 데이터를 로드할 수 없습니다.")
+#         return {}
+# except Exception:
+#     return {}
 # --- 재시도 데코레이터 설정 (FRED API용) ---
 @retry(
     wait=wait_exponential(multiplier=1, min=1, max=10),
