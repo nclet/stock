@@ -241,10 +241,17 @@ st.write("아래 버튼을 클릭하여 FRED 및 S&P 500 데이터를 수집하�
 
 if st.button("🚀 **데이터 수집 및 분석 시작!**", key="start_analysis_button"):
     with st.spinner("데이터를 수집하고 분석 중입니다. 잠시만 기다려 주세요..."):
-        # 1. 데이터 수집
-        df_fred = get_fred_data(FRED_API_KEY)
-        # ECOS 데이터 호출 제거
+        # -----------------------------------------------------------
+        # 💡 [핵심 수정] FRED_API_KEY 변수를 인수로 명시적으로 전달 💡
+        df_fred = get_fred_data(FRED_API_KEY) 
+        # -----------------------------------------------------------
+        
         df_stocks = get_stock_data() # SPY 데이터만 호출
+
+        # 데이터가 하나라도 비어있으면 경고 후 중단
+        if df_fred.empty or df_stocks.empty:
+            st.error("⚠️ 필수 데이터(FRED, S&P 500) 중 일부 또는 전부를 성공적으로 로드하지 못했습니다. 위의 경고 메시지(API 키, 인터넷 연결 등)를 확인하세요.")
+            st.stop()
 
         # 데이터가 하나라도 비어있으면 경고 후 중단
         # ECOS 데이터프레임이 없어졌으므로 체크 로직 수정
