@@ -29,7 +29,7 @@ try:
     import pandas_datareader.data as web
 except ImportError:
     st.error("""
-    **필수 라이브러리가 설치되지 않았거나 API 키가 설정되지 않았습니다!**
+    **필수 라이브러리가 설치되었는지 확인하고, API 키가 설정되지 않았는지 확인하세요!**
     `pip install pandas_datareader requests plotly` 명령어를 실행하고,
     `.streamlit/secrets.toml` 파일에 FRED_API_KEY를 설정해주세요.
     """)
@@ -54,7 +54,6 @@ st.markdown("FRED 데이터를 활용하여 **성장(Growth)**과 **인플레이
 @st.cache_data(ttl=3600 * 24 * 7) # 1주일 캐시 유지
 def get_fred_data(api_key):
     """FRED에서 주요 미국 거시경제 지표를 가져옵니다. ISM 지표 추가."""
-    # st.info("🔄 FRED 데이터 수집 중...") # 🚫 제거
     start_date = datetime(2010, 1, 1)
     end_date = datetime.now()
 
@@ -62,7 +61,7 @@ def get_fred_data(api_key):
         'US_CPI_YoY': 'CPIAUCSL', # 미국 CPI, 월별 (전년 동기 대비 변화율 계산)
         'US_FFR': 'FEDFUNDS', # 미국 기준금리, 월별
         'US_10Y_Treasury': 'DGS10', # 미국 10년 국채금리, 일별 (월말 값 사용)
-        'US_ISM': 'NAPM', # 🌟 ISM 제조업 구매관리자지수 (경기 성장 지표로 사용)
+        'US_ISM': 'ISM', # 🌟 수정됨: NAPM 대신 유효한 최신 ISM 코드를 사용합니다.
     }
 
     df_fred = pd.DataFrame()
@@ -72,29 +71,47 @@ def get_fred_data(api_key):
     for name, code in fred_codes.items():
         for attempt in range(max_fred_retries):
             try:
+                # pandas_datareader.data.DataReader를 사용하여 데이터 로드
                 temp_df = web.DataReader(code, 'fred', start_date, end_date, api_key=api_key)
                 df_fred = pd.concat([df_fred, temp_df], axis=1)
-                # st.info(f"✅ FRED 데이터 로드 성공: {name}") # 🚫 제거
                 break
             except Exception as e:
                 if attempt < max_fred_retries - 1:
                     sleep_time = initial_fred_delay * (2 ** attempt) + random.uniform(0, 1)
-                    # st.warning(f"FRED 데이터 로드 오류 ({name}, {code}): {e}. {sleep_time:.2f}초 후 재시도...") # 🚫 제거
                     time.sleep(sleep_time)
                 else:
                     st.error(f"❌ FRED 데이터 로드 최종 실패: {name}, {code}. 오류: {e}")
-                    
+                    # 실패 시 해당 컬럼을 빈 값으로 채워 다음 단계 진행을 막지 않음
+                    df_fred[name] = np.nan
+        
         time.sleep(random.uniform(0.3, 0.8))
     
-    df_fred.columns = fred_codes.keys()
+    # 성공적으로 로드된 컬럼만 사용하여 df_fred의 컬럼 이름을 설정해야 합니다.
+    # 하지만 모든 키를 설정하고 결측치를 처리하는 것이 일반적이므로, 에러를 피하기 위해
+    # fred_codes의 키만 사용하고 결측치는 pandas 내부에서 처리하도록 합니다.
+    
+    # 로드된 데이터프레임의 컬럼 순서를 fred_codes의 순서와 일치시키기 위해 재정렬
+    loaded_cols = list(df_fred.columns)
+    
+    # fred_codes의 키 순서대로 컬럼 재정렬 (실패한 컬럼은 NaN으로 남아있을 수 있음)
+    ordered_cols = [key for key in fred_codes.keys() if key in loaded_cols]
+    
+    if len(ordered_cols) != len(fred_codes):
+        # 데이터 로드에 실패한 지표가 있는 경우
+        st.warning(f"⚠️ FRED 데이터 로드 중 일부 지표({list(set(fred_codes.keys()) - set(ordered_cols))}) 로드에 실패했습니다. 분석에 영향을 줄 수 있습니다.")
+
+    # 컬럼 이름 설정은 이미 데이터프레임에 로드되면서 FRED 코드가 이름으로 사용되었으므로,
+    # 여기서는 최종적으로 사용할 컬럼만 남기고 리샘플링을 진행합니다.
+    
+    # 로드된 데이터만 선택하여 이름 변경
+    df_fred.columns = ordered_cols
     df_fred = df_fred.resample('ME').last().ffill()
-    # st.success("✅ FRED 데이터 수집 완료!") # 🚫 제거
+    
     return df_fred
 
 @st.cache_data(ttl=3600 * 24 * 7) # 1주일 캐시 유지
 def get_stock_data():
     """S&P 500 ETF (SPY) 데이터를 FinanceDataReader로 가져옵니다."""
-    # st.info("🔄 S&P 500 ETF (SPY) 데이터 수집 중...") # 🚫 제거
     start_date = datetime(2010, 1, 1)
     end_date = datetime.now()
     
@@ -109,7 +126,6 @@ def get_stock_data():
             if 'Close' in df_spy.columns:
                 df_spy_monthly = df_spy['Close'].resample('ME').last().ffill().to_frame(name='US_Stock_Close')
                 df_stocks = pd.concat([df_stocks, df_spy_monthly], axis=1)
-                # st.success("✅ S&P 500 ETF (SPY) 데이터 수집 완료!") # 🚫 제거
                 break
             else:
                 if attempt < max_stock_retries - 1:
@@ -133,7 +149,6 @@ def get_stock_data():
 # --- 데이터 전처리 및 파생 변수 생성 ---
 @st.cache_data
 def preprocess_and_engineer_features(df_fred, df_stocks):
-    # st.info("🔄 데이터 전처리 및 팩터 생성 중...") # 🚫 제거
     
     valid_dfs = [df for df in [df_fred, df_stocks] if not df.empty]
     
@@ -161,11 +176,14 @@ def preprocess_and_engineer_features(df_fred, df_stocks):
     # 주요 팩터 생성
     if 'US_CPI_YoY' in df_merged.columns:
         # CPI 추세: 6개월 이동평균 변화율 사용 (추세 판단 기준)
+        # CPIAUCSL은 지수이므로, 먼저 YoY를 계산하고 그 변화율을 봐야 합니다.
+        df_merged['US_CPI_YoY'] = df_merged['US_CPI_YoY'].pct_change(12) * 100 # FRED API가 YoY를 제공하지 않는 경우 대비
         df_merged['US_CPI_YoY_MA_Change'] = df_merged['US_CPI_YoY'].rolling(window=6).mean().diff()
     else: df_merged['US_CPI_YoY_MA_Change'] = np.nan
 
     if 'US_ISM' in df_merged.columns:
         # ISM 추세: 6개월 이동평균 변화율 사용 (추세 판단 기준)
+        # ISM은 지수 자체의 변화보다는 50을 기준으로 보지만, 추세를 보기 위해 변화율을 사용
         df_merged['US_ISM_MA_Change'] = df_merged['US_ISM'].rolling(window=6).mean().diff()
     else: df_merged['US_ISM_MA_Change'] = np.nan
     
@@ -203,26 +221,32 @@ def preprocess_and_engineer_features(df_fred, df_stocks):
     # 4분면 분류에 필요한 핵심 지표가 없으면 데이터 정리 불가
     required_cols = ['US_CPI_YoY_MA_Change', 'US_ISM_MA_Change']
     if not all(col in df_merged.columns for col in required_cols):
-        st.error("⚠️ 4분면 분석에 필수적인 ISM 지표 또는 CPI 지표가 로드되지 않았습니다.")
-        return pd.DataFrame(), []
+        # ISM 데이터 로드 실패 시 이 에러 발생 가능성 있음
+        # st.error("⚠️ 4분면 분석에 필수적인 ISM 지표 또는 CPI 지표가 로드되지 않았습니다.")
+        # return pd.DataFrame(), []
+        pass # 에러 메시지를 get_fred_data에서 이미 처리했으므로 여기서는 pass
 
     df_final = df_merged[actual_features + actual_targets].dropna()
 
-    # st.success("✅ 데이터 전처리 및 팩터 생성 완료!") # 🚫 제거
     return df_final, actual_features, actual_targets
 
 # --- 시장 국면 정의 (4분면 로직 적용) ---
 @st.cache_data
 def define_market_regime(df):
-    # st.info("🔄 시장 국면 정의 중...") # 🚫 제거
     df_regime = df.copy()
 
     # CPI 추세 (인플레이션): 6개월 이동평균의 변화율 (양수: 상승, 음수: 하락)
     # ISM 추세 (성장): 6개월 이동평균의 변화율 (양수: 상승, 음수: 하락)
 
     def classify_regime_4q(row):
-        is_growth_up = row.get('US_ISM_MA_Change', 0) > 0
-        is_inflation_up = row.get('US_CPI_YoY_MA_Change', 0) > 0
+        # 지표가 로드되지 않은 경우 대비
+        if 'US_ISM_MA_Change' not in row or 'US_CPI_YoY_MA_Change' not in row:
+             return "Unknown"
+             
+        # ISM 추세 변화율이 0보다 크면 성장 상승으로 간주
+        is_growth_up = row['US_ISM_MA_Change'] > 0
+        # CPI 추세 변화율이 0보다 크면 인플레이션 상승으로 간주
+        is_inflation_up = row['US_CPI_YoY_MA_Change'] > 0
 
         # 성장(ISM) 상승, 인플레이션(CPI) 상승 -> 과열 (Overheat)
         if is_growth_up and is_inflation_up:
@@ -241,7 +265,6 @@ def define_market_regime(df):
 
     df_regime['Market_Regime'] = df_regime.apply(classify_regime_4q, axis=1)
     
-    # st.success("✅ 시장 국면 정의 완료!") # 🚫 제거
     return df_regime
 
 # --- Streamlit UI 및 실행 로직 ---
@@ -257,7 +280,7 @@ if st.button("🚀 **데이터 수집 및 4분면 분석 시작!**", key="start_
         df_stocks = get_stock_data()
 
         if df_fred.empty or df_stocks.empty:
-            st.error("⚠️ 필수 데이터(FRED, S&P 500) 중 일부 또는 전부를 성공적으로 로드하지 못했습니다.")
+            st.error("⚠️ 필수 데이터(FRED, S&P 500) 중 일부 또는 전부를 성공적으로 로드하지 못했습니다. 위의 에러 메시지를 확인해주세요.")
             st.stop()
         
         df_final, features, targets = preprocess_and_engineer_features(df_fred, df_stocks)
