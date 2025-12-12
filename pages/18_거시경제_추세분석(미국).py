@@ -228,7 +228,7 @@ def define_market_regime(df):
         else:
             return "Disinflationary Period"
 
-    df_regime['Market_Regime'] = df_regime.apply(classify_regify_regime, axis=1)
+    df_regime['Market_Regime'] = df_regime.apply(classify_regime, axis=1)
     
     st.success("✅ 시장 국면 정의 완료!")
     return df_regime
