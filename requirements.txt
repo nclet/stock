@@ -32,3 +32,4 @@ PyTrends
 shap
 catboost
 crypto
+lgbm
