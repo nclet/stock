@@ -341,13 +341,16 @@ def train_model(df):
 # 5. 메인 앱 UI
 # ------------------------------------------------------------------------------
 def app():
-    # 사이드바 설정
-    st.sidebar.header("설정")
+    # 검색 설정 (메인 본문 상단으로 이동)
+    st.write("### 🔍 분석 설정")
     
-    region_name = st.sidebar.selectbox(
-        "분석 대상 지역 선택",
-        list(DISTRICT_CODES.keys())
-    )
+    col_input1, col_input2 = st.columns([3, 1])
+    
+    with col_input1:
+        region_name = st.selectbox(
+            "분석 대상 지역 선택",
+            list(DISTRICT_CODES.keys())
+        )
     
     # 지역 코드 및 법정동 명 추출
     region_code_full = DISTRICT_CODES[region_name]
@@ -362,7 +365,15 @@ def app():
     start_date_str = start_date.strftime("%Y%m")
     end_date_str = end_date.strftime("%Y%m")
     
-    if st.sidebar.button("분석 및 예측 시작"):
+    with col_input2:
+        # 버튼을 아래쪽으로 정렬하기 위해 빈 공간 추가할 수도 있음
+        st.write("") 
+        st.write("")
+        analyze_button = st.button("분석 및 예측 시작", type="primary")
+    
+    st.markdown("---")
+
+    if analyze_button:
         st.write(f"### 🏙️ {region_name} 아파트 실거래가 분석")
         
         col1, col2 = st.columns(2)
