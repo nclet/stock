@@ -35,44 +35,68 @@ RE_MACRO_KEYWORDS = ['한국은행', '기준금리', 'LTV', 'DSR', '재건축', 
 # ------------------------
 @st.cache_data(show_spinner="⏳ 국토교통부 실거래가 데이터 로드 중...")
 def get_molit_real_estate(lawd_cd, deal_ym):
-    """
-    lawd_cd: 지역코드 (예: 서울 강남구 11680)
-    deal_ym: 거래년월 (예: 202312)
-    """
-    url = "http://openapi.molit.go.kr:8081/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    # 수정된 엔드포인트: 포트 8081 제거 및 최신 주소 사용 가능성 확인
+    # 1안 (기존 주소에서 포트만 제거):
+    # url = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    
+    # 2안 (공공데이터포털 통합 엔드포인트 - 권장):
+    url = "http://apis.data.go.kr/1613000/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    
     api_key = st.secrets["MOLIT_KEY"]
     
     params = {
-        'serviceKey': urllib.parse.unquote(api_key),
+        'serviceKey': api_key, # st.secrets에 이미 인코딩된 키가 있다면 그대로 사용
         'LAWD_CD': lawd_cd,
         'DEAL_YMD': deal_ym
     }
     
     try:
-        response = requests.get(url, params=params)
-        root = ET.fromstring(response.content)
-        items = root.findall('.//item')
+        # timeout 설정을 추가하여 무한 대기를 방지합니다.
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status() # HTTP 에러 발생 시 예외 발생
         
+        root = ET.fromstring(response.content)
+        
+        # 결과 코드 확인 (정상: 00)
+        header = root.find('.//header')
+        result_code = header.find('resultCode').text
+        if result_code != '00':
+            st.error(f"API 응답 오류: {header.find('resultMsg').text}")
+            return pd.DataFrame()
+
+        items = root.findall('.//item')
         data = []
         for item in items:
-            data.append({
-                'Date': f"{item.find('년').text}-{item.find('월').text.zfill(2)}-{item.find('일').text.zfill(2)}",
-                'Price': int(item.find('거래금액').text.replace(',', '').strip()),
-                'Area': float(item.find('전용면적').text),
-                'Name': item.find('아파트').text
-            })
+            # 안전하게 데이터를 가져오기 위해 find().text 사용 시 None 체크
+            try:
+                price = item.find('거래금액').text.replace(',', '').strip()
+                area = item.find('전용면적').text
+                day = item.find('일').text.zfill(2)
+                month = item.find('월').text.zfill(2)
+                year = item.find('년').text
+                
+                data.append({
+                    'Date': f"{year}-{month}-{day}",
+                    'Price': int(price),
+                    'Area': float(area),
+                    'Name': item.find('아파트').text
+                })
+            except AttributeError:
+                continue
+                
         df = pd.DataFrame(data)
         if not df.empty:
             df['Date'] = pd.to_datetime(df['Date'])
-            # 단위 면적당 가격 계산
             df['Price_per_Area'] = df['Price'] / df['Area']
             return df
         return pd.DataFrame()
-    except Exception as e:
-        st.error(f"MOLIT API 호출 오류: {e}")
-        return pd.DataFrame()
 
-# ------------------------
+    except requests.exceptions.RequestException as e:
+        st.error(f"🌐 네트워크 연결 오류: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ 데이터 파싱 오류: {e}")
+        return pd.DataFrame()# ------------------------
 # 📰 3. 네이버 뉴스 수집 및 분석 (부동산 특화)
 # ------------------------
 # (기존 analyze_sentiment, get_naver_news_api 함수는 유지하되 쿼리만 부동산으로 변경)
