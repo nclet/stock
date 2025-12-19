@@ -175,7 +175,8 @@ region = st.selectbox(
 )
 
 run = st.button("📈 예측 실행")
-
+st.cache_data.clear()
+st.rerun()
 if run:
     with st.spinner("📡 데이터 수집 중..."):
         df_price = load_real_estate_data(region)
