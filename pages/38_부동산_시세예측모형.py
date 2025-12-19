@@ -42,6 +42,7 @@ def load_real_estate_data(region_code, start_year=2018):
                 "numOfRows": 1000,
                 "pageNo": 1
             }
+
             try:
                 r = requests.get(url, params=params, timeout=10)
                 if r.status_code != 200:
@@ -49,37 +50,36 @@ def load_real_estate_data(region_code, start_year=2018):
 
                 from xml.etree import ElementTree
                 root = ElementTree.fromstring(r.text)
+
                 for item in root.iter("item"):
-                    price = int(item.findtext("거래금액").replace(",", ""))
-                    year_ = int(item.findtext("년"))
-                    month_ = int(item.findtext("월"))
-                    rows.append({
-                        "year": int(item["년"]),
-                        "month": int(item["월"]),
-                        "day": int(item["일"]),
-                        "price": int(item["거래금액"].replace(",", ""))
-                    })
+                    try:
+                        price = int(item.findtext("거래금액").replace(",", "").strip())
+                        y = int(item.findtext("년"))
+                        m = int(item.findtext("월"))
+                        d = int(item.findtext("일"))
+
+                        rows.append({
+                            "date": datetime.date(y, m, d),
+                            "price": price
+                        })
+                    except:
+                        continue
+
             except:
                 continue
 
+    if not rows:
+        return pd.DataFrame(columns=["date", "price"])
+
     df = pd.DataFrame(rows)
 
-    # 날짜 컬럼 생성
-    df["date"] = pd.to_datetime(
-        df["year"].astype(str) + "-" +
-        df["month"].astype(str) + "-" +
-        df["day"].astype(str),
-        errors="coerce"
-    )
-    
-    df = df.dropna(subset=["date"])
-    
     df = (
         df.groupby("date", as_index=False)["price"]
         .mean()
         .sort_values("date")
     )
 
+    return df
 
 # ===============================
 # 2. 네이버 뉴스 감성 점수
