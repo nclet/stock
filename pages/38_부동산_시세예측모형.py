@@ -54,15 +54,32 @@ def load_real_estate_data(region_code, start_year=2018):
                     year_ = int(item.findtext("년"))
                     month_ = int(item.findtext("월"))
                     rows.append({
-                        "date": pd.to_datetime(f"{year_}-{month_:02d}-01"),
-                        "price": price
+                        "year": int(item["년"]),
+                        "month": int(item["월"]),
+                        "day": int(item["일"]),
+                        "price": int(item["거래금액"].replace(",", ""))
                     })
             except:
                 continue
 
     df = pd.DataFrame(rows)
-    df = df.groupby("date")["price"].mean().reset_index()
-    return df
+
+    # 날짜 컬럼 생성
+    df["date"] = pd.to_datetime(
+        df["year"].astype(str) + "-" +
+        df["month"].astype(str) + "-" +
+        df["day"].astype(str),
+        errors="coerce"
+    )
+    
+    df = df.dropna(subset=["date"])
+    
+    df = (
+        df.groupby("date", as_index=False)["price"]
+        .mean()
+        .sort_values("date")
+    )
+
 
 # ===============================
 # 2. 네이버 뉴스 감성 점수
