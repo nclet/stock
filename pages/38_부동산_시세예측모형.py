@@ -20,8 +20,8 @@ TARGET_MONTH = 3
 # API KEY
 # ===============================
 MOLIT_KEY = st.secrets["MOLIT_KEY"]
-NAVER_ID = st.secrets["NAVER_CLIENT_ID"]
-NAVER_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
+NAVER_ID = st.secrets["client_id"]
+NAVER_SECRET = st.secrets["client_secret"]
 
 # ===============================
 # 1. 국토교통부 실거래가
