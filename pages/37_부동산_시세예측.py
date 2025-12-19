@@ -7,7 +7,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import plotly.express as px
 import lightgbm as lgb
-from sklearn.metrics import r2_score
+from sklearn.preprocessing import StandardScaler
 import urllib.parse
 
 # ------------------------------------------------------------------------------
@@ -15,7 +15,7 @@ import urllib.parse
 # ------------------------------------------------------------------------------
 st.set_page_config(page_title="🏠 전국 아파트 실거래가 예측", layout="wide")
 
-# 주요 지역 법정동 코드 (국토부 API는 앞 5자리가 구 코드입니다)
+# 주요 지역 법정동 코드
 DISTRICT_CODES = {
     "서울 강남구": "11680",
     "서울 서초구": "11650",
@@ -30,28 +30,25 @@ DISTRICT_CODES = {
 }
 
 # ------------------------------------------------------------------------------
-# 2. 데이터 수집 함수 (공공데이터포털/국토교통부 API 전용)
+# 2. 데이터 수집 함수 (안전성 강화)
 # ------------------------------------------------------------------------------
 
-@st.cache_data(ttl=86400)
-def get_molit_apt_data(service_key, lawd_cd, months_back=24):
-    """
-    국토교통부 아파트매매 실거래 상세 자료 API 호출
-    """
+@st.cache_data(ttl=3600) # 오류 시 재시도를 위해 캐시 시간을 줄임
+def get_molit_apt_data(service_key, lawd_cd, months_back=12):
     if not service_key:
         return pd.DataFrame()
 
     url = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTradeDev"
-    
     all_data = []
     end_dt = datetime.now()
     
-    # 최근 n개월치 데이터 수집
+    progress_bar = st.progress(0)
+    
     for i in range(months_back):
         target_dt = end_dt - relativedelta(months=i)
         deal_ymd = target_dt.strftime("%Y%m")
         
-        # 국토부 API는 인증키를 unquote 해서 보내야 하는 경우가 많습니다.
+        # 국토부 API 특이사항: 인증키가 이미 인코딩된 경우 unquote가 필요함
         params = {
             'serviceKey': urllib.parse.unquote(service_key),
             'LAWD_CD': lawd_cd,
@@ -63,138 +60,145 @@ def get_molit_apt_data(service_key, lawd_cd, months_back=24):
             response = requests.get(url, params=params, timeout=15)
             if response.status_code == 200:
                 root = ET.fromstring(response.content)
-                # 결과 코드 확인
-                result_code = root.find('.//resultCode')
-                if result_code is not None and result_code.text != '00':
+                
+                # 에러 메시지 확인
+                header = root.find('header')
+                res_code = header.find('resultCode').text if header is not None else "Unknown"
+                res_msg = header.find('resultMsg').text if header is not None else "No Message"
+                
+                if res_code != '00':
+                    st.error(f"⚠️ API 에러 ({deal_ymd}): {res_msg}")
                     continue
-                    
-                for item in root.findall('.//item'):
+
+                items = root.findall('.//item')
+                for item in items:
                     try:
                         price = int(item.find('거래금액').text.replace(',', '').strip())
                         area = float(item.find('전용면적').text)
-                        year = item.find('년').text
-                        month = item.find('월').text
-                        day = item.find('일').text
                         
                         all_data.append({
-                            'Date': datetime(int(year), int(month), int(day)),
+                            'Date': datetime(int(item.find('년').text), 
+                                             int(item.find('월').text), 
+                                             int(item.find('일').text)),
                             'Dong': item.find('법정동').text.strip(),
                             'Name': item.find('아파트').text.strip(),
                             'Price': price,
                             'Area': area,
                             'Price_Per_Area': price / area
                         })
-                    except: continue
-        except: continue
+                    except Exception: continue
+        except Exception as e:
+            st.warning(f"연결 오류 ({deal_ymd}): {e}")
+        
+        progress_bar.progress((i + 1) / months_back)
     
+    progress_bar.empty()
     return pd.DataFrame(all_data)
 
 # ------------------------------------------------------------------------------
-# 3. 모델링 및 예측
+# 3. 모델링 함수 (에러 방지 로직 추가)
 # ------------------------------------------------------------------------------
-def run_analysis(df):
-    if df.empty or len(df) < 20:
-        return None
-    
+def run_ai_analysis(df):
+    # 데이터 부족 시 조기 종료 (최소 10개 이상의 월별 데이터 권장)
+    if df.empty:
+        return None, "데이터가 존재하지 않습니다."
+        
     df = df.sort_values('Date')
-    df.set_index('Date', inplace=True)
-    
-    # 월별 평당가 추이 집계
-    monthly = df.resample('MS').agg({
+    # 월별 평균 평당가 계산
+    monthly = df.groupby(df['Date'].dt.to_period('M')).agg({
         'Price_Per_Area': 'mean',
         'Name': 'count'
     }).rename(columns={'Name': 'Volume'})
+    monthly.index = monthly.index.to_timestamp()
     
-    monthly = monthly.dropna()
-    if len(monthly) < 6:
-        return None
-        
-    # 특성 생성 (Feature Engineering)
+    if len(monthly) < 5:
+        return None, f"분석 가능한 월별 데이터가 너무 적습니다. (현재 {len(monthly)}개월)"
+
+    # 특성 생성
     monthly['Lag_1'] = monthly['Price_Per_Area'].shift(1)
     monthly['MA_3'] = monthly['Price_Per_Area'].rolling(window=3).mean()
+    monthly['Volume_Lag'] = monthly['Volume'].shift(1)
     monthly['Target'] = monthly['Price_Per_Area'].shift(-1)
     
+    # 학습 데이터 구성 (결측치 제거)
     train_df = monthly.dropna()
-    features = ['Lag_1', 'MA_3', 'Volume']
-    
+    if train_df.empty:
+        return None, "학습용 특성을 생성하기에 데이터가 부족합니다."
+
+    features = ['Lag_1', 'MA_3', 'Volume_Lag']
     X = train_df[features]
     y = train_df['Target']
     
-    # LightGBM 모델링
-    model = lgb.LGBMRegressor(n_estimators=100, learning_rate=0.05, random_state=42)
-    model.fit(X, y)
+    # 스케일링 및 모델링
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X) # 문제의 구간: X가 비어있지 않음을 위에서 확인
     
-    # 다음 달 예측
-    last_features = monthly.iloc[[-1]][features]
-    prediction = model.predict(last_features)[0]
+    model = lgb.LGBMRegressor(n_estimators=100, random_state=42)
+    model.fit(X_scaled, y)
     
-    return monthly, prediction, features
+    # 다음 달 예측 데이터 준비
+    last_row = monthly.iloc[[-1]]
+    # 만약 마지막 행의 특성에 NaN이 있다면 (데이터가 너무 적을 때)
+    if last_row[features].isnull().values.any():
+        return None, "예측을 위한 최근 데이터가 불완전합니다."
+        
+    current_features_scaled = scaler.transform(last_row[features])
+    prediction = model.predict(current_features_scaled)[0]
+    
+    return (monthly, prediction), None
 
 # ------------------------------------------------------------------------------
-# 4. 메인 화면
+# 4. 메인 UI
 # ------------------------------------------------------------------------------
 def main():
-    st.title("🏠 전국 아파트 시세 AI 분석기 (국토부 API)")
-    st.markdown("공공데이터포털에서 발급받은 인증키를 사용하여 전국의 실거래가를 분석합니다.")
+    st.title("🏠 전국 아파트 AI 시세 예측")
     
-    # API 키 로드 상태 확인
     molit_key = st.secrets.get("MOLIT_KEY", "")
     
     with st.sidebar:
-        st.header("분석 설정")
+        st.header("설정")
+        region = st.selectbox("지역 선택", list(DISTRICT_CODES.keys()))
+        period = st.slider("조회 기간 (개월)", 6, 36, 12)
         if not molit_key:
-            st.error("🔑 MOLIT_KEY를 Secrets에 등록해주세요.")
-        else:
-            st.success("✅ API 키 로드 완료")
-            
-        region = st.selectbox("분석 지역 선택", list(DISTRICT_CODES.keys()))
-        period = st.slider("조회 기간 (개월)", 6, 36, 24)
+            st.error("🔑 Secrets에 'MOLIT_KEY'를 등록해주세요.")
 
-    if st.button("분석 실행", type="primary"):
+    if st.button("분석 시작", type="primary"):
         if not molit_key:
-            st.warning("인증키 없이는 분석을 시작할 수 없습니다.")
+            st.error("인증키가 설정되지 않았습니다.")
             return
 
-        with st.spinner(f"{region} 데이터를 가져오는 중입니다..."):
-            lawd_cd = DISTRICT_CODES[region]
-            df = get_molit_apt_data(molit_key, lawd_cd, period)
+        with st.spinner("국토교통부 실거래 데이터를 수집 중입니다..."):
+            raw_df = get_molit_apt_data(molit_key, DISTRICT_CODES[region], period)
             
-            if not df.empty:
-                st.write(f"### 📊 {region} 실거래 분석 리포트")
+            if not raw_df.empty:
+                st.success(f"✅ {len(raw_df):,}건의 실거래 데이터를 성공적으로 가져왔습니다.")
                 
-                # 시각화 1: 개별 거래 분포
-                fig_scatter = px.scatter(df, x='Date', y='Price_Per_Area', 
-                                         hover_name='Name', color='Dong',
-                                         title="최근 실거래 분포 (만원/㎡)",
-                                         labels={'Price_Per_Area': '평당가(만원)'})
-                st.plotly_chart(fig_scatter, use_container_width=True)
+                # 분석 실행
+                result, error_msg = run_ai_analysis(raw_df)
                 
-                # 분석 결과 실행
-                analysis_results = run_analysis(df)
-                
-                if analysis_results:
-                    monthly_df, pred, features = analysis_results
-                    
-                    st.divider()
-                    col1, col2 = st.columns([2, 1])
-                    
-                    with col1:
-                        st.write("#### 월별 평균가 및 예측 지표")
-                        fig_line = px.line(monthly_df, y='Price_Per_Area', markers=True)
-                        st.plotly_chart(fig_line, use_container_width=True)
-                        
-                    with col2:
-                        current_avg = monthly_df['Price_Per_Area'].iloc[-1]
-                        change = pred - current_avg
-                        st.metric("현재 평균 평당가", f"{current_avg:,.0f} 만원")
-                        st.metric("다음 달 예상 평당가", f"{pred:,.0f} 만원", f"{change:+.2f} 만원")
-                        
-                        st.info("💡 **AI 분석 의견**: 최근 거래 추세를 기반으로 다음 달 시세는 소폭 " + 
-                                ("상승" if change > 0 else "하락") + "할 것으로 예측됩니다.")
+                if error_msg:
+                    st.warning(f"⚠️ 분석 불가: {error_msg}")
+                    # 수집된 데이터라도 보여줌
+                    st.dataframe(raw_df.head())
                 else:
-                    st.warning("시계열 분석을 위한 데이터가 부족합니다.")
+                    monthly_df, pred = result
+                    
+                    # 시각화
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        fig = px.line(monthly_df, y='Price_Per_Area', markers=True, 
+                                     title=f"{region} 월별 평당가 추이 (만원/㎡)")
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col2:
+                        curr = monthly_df['Price_Per_Area'].iloc[-1]
+                        diff = pred - curr
+                        st.metric("현재 시세 (평당)", f"{curr:,.0f} 만원")
+                        st.metric("AI 예측 (다음 달)", f"{pred:,.0f} 만원", f"{diff:+.2f} 만원")
+                        
+                        st.info("실거래 기반 통계 모델이므로 실제 시장 상황과 다를 수 있습니다.")
             else:
-                st.error("데이터를 수집하지 못했습니다. 인증키를 확인하거나 공공데이터포털 서버 상태를 확인하세요.")
+                st.error("❌ 수집된 데이터가 없습니다. 인증키가 유효한지, 혹은 해당 기간에 거래가 있는지 확인하세요.")
 
 if __name__ == "__main__":
     main()
