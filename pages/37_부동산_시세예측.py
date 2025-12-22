@@ -2,125 +2,121 @@ import streamlit as st
 import pandas as pd
 import requests
 import plotly.express as px
-import sys
 
 # ------------------------------------------------------------------------------
-# 1. Configuration & Secret Management
+# 1. 설정 및 보안 (Streamlit Secrets)
 # ------------------------------------------------------------------------------
-st.set_page_config(page_title="부동산 통계 정보 분석", layout="wide")
+st.set_page_config(page_title="부동산 통계 분석", layout="wide")
 
-# Get API Key from Streamlit Secrets
-# 로컬 실행 시: .streamlit/secrets.toml 파일에 MOLIT_KEY = "your_key_here" 작성 필요
+# API 키 불러오기
 try:
     API_KEY = st.secrets["MOLIT_KEY"]
 except KeyError:
-    st.error("❌ 'MOLIT_KEY'를 찾을 수 없습니다. Streamlit Secrets 설정을 확인해주세요.")
-    st.info("로컬에서 실행 중이라면 `.streamlit/secrets.toml` 파일에 키를 설정해야 합니다.")
+    st.error("❌ Streamlit Secrets에 'MOLIT_KEY'가 설정되지 않았습니다.")
     st.stop()
 
-# Region mapping for R-ONE API
+# 지역 코드 매핑
 REGION_MAP = {
-    "전국": "00", "서울특별시": "11", "부산광역시": "26", "대구광역시": "27",
-    "인천광역시": "28", "광주광역시": "29", "대전광역시": "30", "울산광역시": "31",
-    "세종특별자치시": "36", "경기도": "41", "강원도": "42", "충청북도": "43",
-    "충청남도": "44", "전라북도": "45", "전라남도": "46", "경상북도": "47", "경상남도": "48"
+    "전국": "00", "서울특별시": "11", "경기도": "41", "인천광역시": "28",
+    "부산광역시": "26", "대구광역시": "27", "광주광역시": "29", "대전광역시": "30",
+    "울산광역시": "31", "세종특별자치시": "36"
 }
 
 # ------------------------------------------------------------------------------
-# 2. Data Fetching Logic
+# 2. 데이터 수집 함수 (에러 핸들링 강화)
 # ------------------------------------------------------------------------------
-def fetch_reb_data(api_key, region_code, start_month, end_month):
-    """
-    Fetches real estate statistics from R-ONE API.
-    Endpoint: Apartment Sales Price Index
-    """
+def fetch_property_data(region_code, start_month, end_month):
+    # R-ONE API 공식 엔드포인트 확인 필요 (아파트매매가격지수)
     url = "https://www.reb.or.kr/r-one/openapi/statistics/propertyPriceIndex"
     
     params = {
-        "key": api_key,
+        "key": API_KEY,
         "format": "json",
         "startmonth": start_month,
         "endmonth": end_month,
         "region": region_code,
-        "p_type": "01" # 01: 아파트
+        "p_type": "01"  # 01: 아파트
     }
     
     try:
-        response = requests.get(url, params=params, timeout=15)
-        if response.status_code == 200:
-            res_json = response.json()
-            # The structure of R-ONE API response often contains 'item' or 'body'
-            if "item" in res_json:
-                return pd.DataFrame(res_json["item"])
-            else:
-                return res_json # For debugging if structure differs
-        else:
-            st.error(f"API 호출 실패: 상태 코드 {response.status_code}")
-            return None
+        response = requests.get(url, params=params, timeout=10)
+        
+        # 1. HTTP 상태 코드 확인
+        if response.status_code != 200:
+            return {"error": f"HTTP 오류: {response.status_code}"}
+
+        # 2. 응답 내용이 비어있는지 확인
+        if not response.text.strip():
+            return {"error": "API가 빈 응답을 반환했습니다."}
+
+        # 3. JSON 파싱 시도
+        try:
+            data = response.json()
+        except Exception:
+            # JSON이 아니면 에러 메시지(HTML 등)일 가능성이 높음
+            return {"error": f"JSON 파싱 실패. 응답 내용: {response.text[:100]}..."}
+
+        return data
+
     except Exception as e:
-        st.error(f"오류 발생: {str(e)}")
-        return None
+        return {"error": f"네트워크 오류: {str(e)}"}
 
 # ------------------------------------------------------------------------------
-# 3. App UI & Execution
+# 3. 메인 UI
 # ------------------------------------------------------------------------------
 def main():
-    st.title("📊 부동산 통계 정보 시스템 데이터 분석")
-    st.markdown("Streamlit Secrets를 통해 인증키를 안전하게 불러와 사용합니다.")
-    
-    # Sidebar Filters
-    st.sidebar.header("🔍 조회 설정")
-    selected_region = st.sidebar.selectbox("지역 선택", list(REGION_MAP.keys()))
-    
-    col_s, col_e = st.sidebar.columns(2)
-    start_year = col_s.number_input("시작 연도", 2018, 2025, 2022)
-    end_year = col_e.number_input("종료 연도", 2018, 2025, 2024)
-    
-    start_month_str = f"{start_year}01"
-    end_month_str = f"{end_year}12"
-    
-    if st.sidebar.button("데이터 불러오기", type="primary"):
-        with st.spinner(f"{selected_region} 데이터 수집 중..."):
-            df = fetch_reb_data(API_KEY, REGION_MAP[selected_region], start_month_str, end_month_str)
+    st.title("🏠 아파트 매매가격지수 분석")
+    st.info("국토교통부(한국부동산원) Open API 데이터를 사용합니다.")
+
+    with st.sidebar:
+        st.header("설정")
+        region_name = st.selectbox("지역", list(REGION_MAP.keys()))
+        s_year = st.number_input("시작 연도", 2020, 2025, 2023)
+        e_year = st.number_input("종료 연도", 2020, 2025, 2024)
+        
+        btn = st.button("데이터 조회", type="primary")
+
+    if btn:
+        start_m = f"{s_year}01"
+        end_m = f"{e_year}12"
+        
+        with st.spinner("데이터를 불러오는 중..."):
+            result = fetch_property_data(REGION_MAP[region_name], start_m, end_m)
             
-            if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
-                st.success(f"{selected_region} 데이터를 성공적으로 가져왔습니다.")
+            # 에러 발생 시 출력
+            if isinstance(result, dict) and "error" in result:
+                st.error(result["error"])
+                st.info("💡 팁: API 키가 '활용승인' 상태인지, 혹은 일일 트래픽 초과인지 확인하세요.")
+                return
+
+            # 데이터프레임 변환
+            try:
+                # R-ONE API는 보통 'item' 리스트에 데이터가 담겨 옵니다.
+                items = result.get("item", [])
+                if not items:
+                    st.warning("조회된 데이터가 없습니다. 기간을 조절해보세요.")
+                    return
                 
-                # Data Processing for Chart
-                # Attempt to identify date and value columns automatically
-                date_col = next((c for c in df.columns if 'date' in c.lower() or 'research' in c.lower()), None)
-                val_col = next((c for c in df.columns if 'idx' in c.lower() or 'price' in c.lower()), None)
+                df = pd.DataFrame(items)
                 
-                if date_col and val_col:
-                    df = df.sort_values(by=date_col)
+                # 컬럼명 정리 (API 응답에 따라 수정될 수 있음)
+                # 보통 'research_date'가 날짜, 'indices'가 지수 값입니다.
+                if 'research_date' in df.columns:
+                    df = df.rename(columns={'research_date': '날짜', 'indices': '지수'})
+                    df['지수'] = pd.to_numeric(df['지수'])
                     
-                    # Layout with Metric & Chart
-                    m1, m2 = st.columns(2)
-                    latest_val = float(df[val_col].iloc[-1])
-                    prev_val = float(df[val_col].iloc[0])
-                    delta = round(latest_val - prev_val, 2)
-                    
-                    m1.metric("최근 지수", latest_val, delta=f"{delta}")
-                    m2.metric("조회 기간", f"{start_year} ~ {end_year}")
-                    
-                    # Plotting
-                    fig = px.line(df, x=date_col, y=val_col, 
-                                 title=f"[{selected_region}] 아파트 매매가격지수 추이",
-                                 labels={date_col: "조사년월", val_col: "지수"},
-                                 markers=True,
-                                 template="plotly_white")
+                    # 차트 출력
+                    fig = px.line(df, x='날짜', y='지수', title=f"{region_name} 아파트 매매가격지수 추이")
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    with st.expander("Raw Data 보기"):
-                        st.dataframe(df, use_container_width=True)
+                    st.subheader("상세 데이터")
+                    st.dataframe(df)
                 else:
-                    st.warning("데이터는 수집되었으나 차트 생성용 컬럼을 찾을 수 없습니다.")
-                    st.write("수집된 데이터 컬럼:", list(df.columns))
-                    st.write(df)
-            else:
-                st.error("데이터를 가져오지 못했습니다. API 키의 권한 또는 호출 파라미터를 확인하세요.")
-                if df is not None:
-                    st.json(df) # Show error response from API
+                    st.write("응답 데이터 구조:", result)
+            
+            except Exception as e:
+                st.error(f"데이터 처리 중 오류 발생: {e}")
+                st.write("전체 응답:", result)
 
 if __name__ == "__main__":
     main()
