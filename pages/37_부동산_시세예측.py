@@ -128,49 +128,49 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
         f"&numOfRows=1000"
     )
 
-    try:
-        r = requests.get(url, timeout=10)
-
-        # ==========================
-        # 🔍 디버깅 (첫 달만)
-        # ==========================
-        if ym == months[0]:
-            st.subheader("🧪 국토부 API 응답 디버깅")
-            st.code(r.text[:1000])
-
-        soup = BeautifulSoup(r.text, "xml")
-        header = soup.find("header")
-
-        if header and ym == months[0]:
-            st.write(
-                f"📅 {ym}",
-                "resultCode:", header.find("resultCode").text,
-                "resultMsg:", header.find("resultMsg").text
-            )
-        # ==========================
-
-        if r.status_code != 200:
-            time.sleep(1)
-            continue
-
-        items = soup.find_all("item")
-
-        if not items:
-            continue  # ← break ❌
-
-        for it in items:
-            try:
-                rows.append({
-                    "price": int(it.거래금액.text.replace(",", "")),
-                    "year": int(it.년.text),
-                    "month": int(it.월.text)
-                })
-            except:
+        try:
+            r = requests.get(url, timeout=10)
+    
+            # ==========================
+            # 🔍 디버깅 (첫 달만)
+            # ==========================
+            if ym == months[0]:
+                st.subheader("🧪 국토부 API 응답 디버깅")
+                st.code(r.text[:1000])
+    
+            soup = BeautifulSoup(r.text, "xml")
+            header = soup.find("header")
+    
+            if header and ym == months[0]:
+                st.write(
+                    f"📅 {ym}",
+                    "resultCode:", header.find("resultCode").text,
+                    "resultMsg:", header.find("resultMsg").text
+                )
+            # ==========================
+    
+            if r.status_code != 200:
+                time.sleep(1)
                 continue
-
-    except (ConnectionError, Timeout):
-        time.sleep(2)
-        continue
+    
+            items = soup.find_all("item")
+    
+            if not items:
+                continue  # ← break ❌
+    
+            for it in items:
+                try:
+                    rows.append({
+                        "price": int(it.거래금액.text.replace(",", "")),
+                        "year": int(it.년.text),
+                        "month": int(it.월.text)
+                    })
+                except:
+                    continue
+    
+        except (ConnectionError, Timeout):
+            time.sleep(2)
+            continue
 
     if not rows:
         return pd.DataFrame()
