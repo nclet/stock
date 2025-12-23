@@ -119,70 +119,77 @@ def get_naver_news(query):
 
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
-    # 1. secrets에서 키 가져오기 및 디코딩 처리
-    raw_key = st.secrets.get("MOLIT_KEY", None)
-    if raw_key is None:
+
+    # 1️⃣ 키는 절대 quote 하지 마세요
+    service_key = st.secrets.get("MOLIT_KEY", None)
+    if service_key is None:
         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
-    
-    # 이미 인코딩된 키일 경우를 대비해 디코딩 후 다시 사용하거나, 그대로 사용합니다.
-    # 공공데이터포털 키는 unquote 후 사용하는 것이 가장 안전합니다.
-    service_key = urllib.parse.quote(raw_key, safe="")
-    
+
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
 
-    # 포트 8081은 제외하고 표준 http/https 사용
-    BASE_URL = "https://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    BASE_URL = (
+        "https://openapi.molit.go.kr/"
+        "OpenAPI_ToolInstallPackage/service/rest/"
+        "RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    )
+
     session = create_session()
+
     for ym in months:
-        # 2. URL 직접 결합 (requests의 params 인코딩 오류 방지)
-        url = f"{BASE_URL}?serviceKey={service_key}&LAWD_CD={lawd_cd}&DEAL_YMD={ym}&numOfRows=1000"
+        url = (
+            f"{BASE_URL}"
+            f"?serviceKey={service_key}"
+            f"&LAWD_CD={lawd_cd}"
+            f"&DEAL_YMD={ym}"
+            f"&numOfRows=1000"
+        )
 
         try:
             r = session.get(url, timeout=20)
-            
-            # 디버깅 출력
-            if ym == months[0]:
-                st.subheader("🧪 국토부 API 응답 확인")
-                if "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in r.text:
-                    st.error("❌ API 키가 등록되지 않았거나 인코딩 오류입니다. (공공데이터포털에서 키를 다시 확인하세요)")
-                elif "LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR" in r.text:
-                    st.error("❌ 일일 API 호출 횟수를 초과했습니다.")
-                
+
             soup = BeautifulSoup(r.text, "xml")
+
+            # 🔍 첫 달만 상태 출력
+            if ym == months[0]:
+                header = soup.find("header")
+                if header:
+                    st.subheader("🧪 국토부 API 상태")
+                    st.write(
+                        "resultCode:", header.find("resultCode").text,
+                        "resultMsg:", header.find("resultMsg").text
+                    )
+
             items = soup.find_all("item")
-            
             if not items:
                 continue
 
             for it in items:
                 try:
-                    # 안전한 데이터 추출 방식
-                    price_str = it.find("거래금액").text.replace(",", "").strip()
-                    year_val = it.find("년").text.strip()
-                    month_val = it.find("월").text.strip()
-                    
                     rows.append({
-                        "price": int(price_str),
-                        "year": int(year_val),
-                        "month": int(month_val)
+                        "price": int(it.find("거래금액").text.replace(",", "").strip()),
+                        "year": int(it.find("년").text.strip()),
+                        "month": int(it.find("월").text.strip())
                     })
-                except AttributeError:
+                except Exception:
                     continue
 
         except Exception as e:
-            st.warning(f"⚠️ {ym} 로드 중 오류 발생: {e}")
+            st.warning(f"⚠️ {ym} 로드 중 오류: {e}")
             continue
-            
-        time.sleep(0.5) # 서버 매너 대기시간
+
+        time.sleep(0.5)
 
     if not rows:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(
-        df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01"
+        df["year"].astype(str)
+        + "-"
+        + df["month"].astype(str).str.zfill(2)
+        + "-01"
     )
 
     return df
