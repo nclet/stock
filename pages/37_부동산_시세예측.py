@@ -119,41 +119,58 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     )
 
     for ym in months:
-        params = {
-            "serviceKey": service_key,
-            "LAWD_CD": lawd_cd,
-            "DEAL_YMD": ym,   # ← 정확히 YYYYMM
-            "numOfRows": 1000
-        }
 
-        for attempt in range(3):
+    url = (
+        f"{BASE_URL}"
+        f"?serviceKey={service_key}"
+        f"&LAWD_CD={lawd_cd}"
+        f"&DEAL_YMD={ym}"
+        f"&numOfRows=1000"
+    )
+
+    try:
+        r = requests.get(url, timeout=10)
+
+        # ==========================
+        # 🔍 디버깅 (첫 달만)
+        # ==========================
+        if ym == months[0]:
+            st.subheader("🧪 국토부 API 응답 디버깅")
+            st.code(r.text[:1000])
+
+        soup = BeautifulSoup(r.text, "xml")
+        header = soup.find("header")
+
+        if header and ym == months[0]:
+            st.write(
+                f"📅 {ym}",
+                "resultCode:", header.find("resultCode").text,
+                "resultMsg:", header.find("resultMsg").text
+            )
+        # ==========================
+
+        if r.status_code != 200:
+            time.sleep(1)
+            continue
+
+        items = soup.find_all("item")
+
+        if not items:
+            continue  # ← 중요 (break ❌)
+
+        for it in items:
             try:
-                r = requests.get(BASE_URL, params=params, timeout=10)
+                rows.append({
+                    "price": int(it.거래금액.text.replace(",", "")),
+                    "year": int(it.년.text),
+                    "month": int(it.월.text)
+                })
+            except:
+                continue
 
-                if r.status_code != 200:
-                    time.sleep(1)
-                    continue
-
-                soup = BeautifulSoup(r.text, "xml")
-                items = soup.find_all("item")
-
-                if not items:
-                    break  # 해당 월 거래 없음
-
-                for it in items:
-                    try:
-                        rows.append({
-                            "price": int(it.거래금액.text.replace(",", "")),
-                            "year": int(it.년.text),
-                            "month": int(it.월.text)
-                        })
-                    except:
-                        continue
-
-                break  # 성공
-
-            except (ConnectionError, Timeout):
-                time.sleep(2)
+    except (ConnectionError, Timeout):
+        time.sleep(2)
+        continue
 
     if not rows:
         return pd.DataFrame()
