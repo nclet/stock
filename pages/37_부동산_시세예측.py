@@ -94,7 +94,9 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
 
-    months = pd.period_range(start=start_ym, end=end_ym, freq="M").astype(str)
+    # ✅ YYYYMM 리스트를 정확히 생성
+    months = make_yyyymm_list(start_ym, end_ym)
+
     rows = []
 
     BASE_URL = (
@@ -107,27 +109,25 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
         params = {
             "serviceKey": service_key,
             "LAWD_CD": lawd_cd,
-            "DEAL_YMD": ym.replace("-", ""),
+            "DEAL_YMD": ym,   # ← 정확히 YYYYMM
             "numOfRows": 1000
         }
 
-        success = False
-
-        for attempt in range(3):  # ✅ 최대 3회 재시도
+        for attempt in range(3):
             try:
-                r = requests.get(
-                    BASE_URL,
-                    params=params,
-                    timeout=10
-                )
+                r = requests.get(BASE_URL, params=params, timeout=10)
 
                 if r.status_code != 200:
                     time.sleep(1)
                     continue
 
                 soup = BeautifulSoup(r.text, "xml")
+                items = soup.find_all("item")
 
-                for it in soup.find_all("item"):
+                if not items:
+                    break  # 해당 월 거래 없음
+
+                for it in items:
                     try:
                         rows.append({
                             "price": int(it.거래금액.text.replace(",", "")),
@@ -137,15 +137,10 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
                     except:
                         continue
 
-                success = True
-                break  # 성공하면 retry 탈출
+                break  # 성공
 
             except (ConnectionError, Timeout):
-                time.sleep(2)  # 서버 쉬게 해줌
-
-        if not success:
-            # ❗ 이 달 데이터만 스킵
-            continue
+                time.sleep(2)
 
     if not rows:
         return pd.DataFrame()
@@ -156,6 +151,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     )
 
     return df
+
 # ======================================================
 # UI
 # ======================================================
