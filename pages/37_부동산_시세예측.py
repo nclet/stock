@@ -110,7 +110,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     
     # 이미 인코딩된 키일 경우를 대비해 디코딩 후 다시 사용하거나, 그대로 사용합니다.
     # 공공데이터포털 키는 unquote 후 사용하는 것이 가장 안전합니다.
-    service_key = requests.utils.unquote(raw_key)
+    service_key = urllib.parse.quote(raw_key, safe="")
     
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
