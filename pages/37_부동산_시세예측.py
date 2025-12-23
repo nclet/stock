@@ -24,15 +24,25 @@ st.markdown("**국토교통부 실거래 + 네이버 뉴스 감성 + LightGBM**"
 # ======================================================
 @st.cache_resource
 def load_sentiment_model():
-    token = st.secrets["huggingface"]["token"]
     model_name = "snunlp/KR-FinBert-SC"
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, token=token)
+
+    # ✅ HuggingFace 토큰 (최상위 key: HF_TOKEN)
+    hf_token = st.secrets.get("HF_TOKEN", None)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=hf_token
+    )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        token=hf_token
+    )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+
     return tokenizer, model, device
 
-tokenizer, sentiment_model, device = load_sentiment_model()
 
 def analyze_sentiment(text):
     if not text:
