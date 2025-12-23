@@ -99,7 +99,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
 
     for ym in months:
         url = (
-            "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/"
+            "https://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/"
             "service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
         )
         params = {
