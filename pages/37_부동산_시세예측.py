@@ -158,7 +158,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
             st.warning(f"⚠️ {ym} 로드 중 오류 발생: {e}")
             continue
             
-        time.sleep(0.1) # 서버 매너 대기시간
+        time.sleep(0.5) # 서버 매너 대기시간
 
     if not rows:
         return pd.DataFrame()
