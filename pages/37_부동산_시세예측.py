@@ -20,7 +20,20 @@ from requests.exceptions import ConnectionError, Timeout
 st.set_page_config(page_title="🏘️ 지역별 부동산 가격 예측", layout="wide")
 st.title("🏘️ 지역별 아파트 가격 추세 예측 (3개월)")
 st.markdown("**국토교통부 실거래 + 네이버 뉴스 감성 + LightGBM**")
-
+##=============
+#데이터 기간설정
+#==============
+def make_yyyymm_list(start_ym: str, end_ym: str):
+    """
+    start_ym, end_ym: 'YYYY-MM' 형식
+    return: ['YYYYMM', 'YYYYMM', ...]
+    """
+    dates = pd.date_range(
+        start=f"{start_ym}-01",
+        end=f"{end_ym}-01",
+        freq="MS"  # Month Start
+    )
+    return [d.strftime("%Y%m") for d in dates]
 # ======================================================
 # 감성 분석 모델
 # ======================================================
