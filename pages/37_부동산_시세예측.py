@@ -102,85 +102,73 @@ def get_naver_news(query):
 
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
-
-    service_key = st.secrets.get("MOLIT_KEY", None)
-    if service_key is None:
+    # 1. secrets에서 키 가져오기 및 디코딩 처리
+    raw_key = st.secrets.get("MOLIT_KEY", None)
+    if raw_key is None:
         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
-    service_key = urllib.parse.quote(service_key)
+    
+    # 이미 인코딩된 키일 경우를 대비해 디코딩 후 다시 사용하거나, 그대로 사용합니다.
+    # 공공데이터포털 키는 unquote 후 사용하는 것이 가장 안전합니다.
+    service_key = requests.utils.unquote(raw_key)
+    
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
 
-    BASE_URL = (
-        "https://openapi.molit.go.kr/"
-        "OpenAPI_ToolInstallPackage/service/rest/"
-        "RTMSOBJSvc/getRTMSDataSvcAptTrade"
-    )
+    # 포트 8081은 제외하고 표준 http/https 사용
+    BASE_URL = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
 
     for ym in months:
-
-        url = (
-            f"{BASE_URL}"
-            f"?serviceKey={service_key}"
-            f"&LAWD_CD={lawd_cd}"
-            f"&DEAL_YMD={ym}"
-            f"&numOfRows=1000"
-        )
+        # 2. URL 직접 결합 (requests의 params 인코딩 오류 방지)
+        url = f"{BASE_URL}?serviceKey={service_key}&LAWD_CD={lawd_cd}&DEAL_YMD={ym}&numOfRows=1000"
 
         try:
-            r = requests.get(url, timeout=10)
-
-            # ==========================
-            # 🔍 디버깅 (첫 달만)
-            # ==========================
+            r = requests.get(url, timeout=15)
+            
+            # 디버깅 출력
             if ym == months[0]:
-                st.subheader("🧪 국토부 API 응답 디버깅")
-                st.code(r.text[:1000])
-
+                st.subheader("🧪 국토부 API 응답 확인")
+                if "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in r.text:
+                    st.error("❌ API 키가 등록되지 않았거나 인코딩 오류입니다. (공공데이터포털에서 키를 다시 확인하세요)")
+                elif "LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR" in r.text:
+                    st.error("❌ 일일 API 호출 횟수를 초과했습니다.")
+                
             soup = BeautifulSoup(r.text, "xml")
-            header = soup.find("header")
-
-            if header and ym == months[0]:
-                st.write(
-                    f"📅 {ym}",
-                    "resultCode:", header.find("resultCode").text,
-                    "resultMsg:", header.find("resultMsg").text
-                )
-            # ==========================
-
-            if r.status_code != 200:
-                time.sleep(1)
-                continue
-
             items = soup.find_all("item")
+            
             if not items:
                 continue
 
             for it in items:
                 try:
+                    # 안전한 데이터 추출 방식
+                    price_str = it.find("거래금액").text.replace(",", "").strip()
+                    year_val = it.find("년").text.strip()
+                    month_val = it.find("월").text.strip()
+                    
                     rows.append({
-                        "price": int(it.거래금액.text.replace(",", "")),
-                        "year": int(it.년.text),
-                        "month": int(it.월.text)
+                        "price": int(price_str),
+                        "year": int(year_val),
+                        "month": int(month_val)
                     })
-                except:
+                except AttributeError:
                     continue
 
-        except (ConnectionError, Timeout):
-            time.sleep(2)
+        except Exception as e:
+            st.warning(f"⚠️ {ym} 로드 중 오류 발생: {e}")
             continue
+            
+        time.sleep(0.1) # 서버 매너 대기시간
 
     if not rows:
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(
-        df["year"].astype(str) + "-" + df["month"].astype(str)
+        df["year"].astype(str) + "-" + df["month"].astype(str).str.zfill(2) + "-01"
     )
 
     return df
-
-
 # ======================================================
 # UI
 # ======================================================
