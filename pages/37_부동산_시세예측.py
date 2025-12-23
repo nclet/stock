@@ -86,7 +86,13 @@ def get_naver_news(query):
 # ======================================================
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
-    service_key = st.secrets["MOLIT"]["MOLIT_KEY"]
+
+    # ✅ 공공데이터포털 API 키 (최상위 key)
+    service_key = st.secrets.get("MOLIT_KEY", None)
+
+    if service_key is None:
+        st.error("❌ MOLIT_KEY가 secrets에 설정되어 있지 않습니다.")
+        return pd.DataFrame()
 
     months = pd.period_range(start=start_ym, end=end_ym, freq="M").astype(str)
     rows = []
@@ -103,22 +109,32 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
             "numOfRows": 1000
         }
 
-        r = requests.get(url, params=params)
+        r = requests.get(url, params=params, timeout=10)
+
+        if r.status_code != 200:
+            continue
+
         soup = BeautifulSoup(r.text, "xml")
 
         for it in soup.find_all("item"):
-            rows.append({
-                "price": int(it.거래금액.text.replace(",", "")),
-                "year": int(it.년.text),
-                "month": int(it.월.text)
-            })
+            try:
+                rows.append({
+                    "price": int(it.거래금액.text.replace(",", "")),
+                    "year": int(it.년.text),
+                    "month": int(it.월.text)
+                })
+            except:
+                continue
+
+    if not rows:
+        return pd.DataFrame()
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(
         df["year"].astype(str) + "-" + df["month"].astype(str)
     )
-    return df
 
+    return df
 # ======================================================
 # UI
 # ======================================================
