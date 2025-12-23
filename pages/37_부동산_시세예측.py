@@ -13,6 +13,8 @@ import re
 import urllib.parse
 import time
 from requests.exceptions import ConnectionError, Timeout
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # ======================================================
 # 페이지 설정
@@ -68,6 +70,21 @@ def analyze_sentiment(text):
         outputs = sentiment_model(**inputs)
     probs = torch.softmax(outputs.logits, dim=1)[0]
     return probs[2].item() - probs[0].item()   # 긍정 - 부정
+#
+#세션생성
+#
+def create_session():
+    retry = Retry(
+        total=5,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    return session
+
 
 # ======================================================
 # 네이버 뉴스 API
@@ -117,13 +134,13 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
 
     # 포트 8081은 제외하고 표준 http/https 사용
     BASE_URL = "https://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
-    
+    session = create_session()
     for ym in months:
         # 2. URL 직접 결합 (requests의 params 인코딩 오류 방지)
         url = f"{BASE_URL}?serviceKey={service_key}&LAWD_CD={lawd_cd}&DEAL_YMD={ym}&numOfRows=1000"
 
         try:
-            r = requests.get(url, timeout=15)
+            r = session.get(url, timeout=20)
             
             # 디버깅 출력
             if ym == months[0]:
