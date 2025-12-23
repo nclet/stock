@@ -156,7 +156,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
         items = soup.find_all("item")
 
         if not items:
-            continue  # ← 중요 (break ❌)
+            continue  # ← break ❌
 
         for it in items:
             try:
