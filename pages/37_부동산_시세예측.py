@@ -98,7 +98,8 @@ def get_naver_news(query):
 
 # ======================================================
 # 국토교통부 실거래 API (MOLIT_KEY 적용)
-# ======================================================
+# =====================================================
+
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
 
@@ -107,9 +108,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
 
-    # ✅ YYYYMM 리스트를 정확히 생성
     months = make_yyyymm_list(start_ym, end_ym)
-
     rows = []
 
     BASE_URL = (
@@ -120,27 +119,27 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
 
     for ym in months:
 
-    url = (
-        f"{BASE_URL}"
-        f"?serviceKey={service_key}"
-        f"&LAWD_CD={lawd_cd}"
-        f"&DEAL_YMD={ym}"
-        f"&numOfRows=1000"
-    )
+        url = (
+            f"{BASE_URL}"
+            f"?serviceKey={service_key}"
+            f"&LAWD_CD={lawd_cd}"
+            f"&DEAL_YMD={ym}"
+            f"&numOfRows=1000"
+        )
 
         try:
             r = requests.get(url, timeout=10)
-    
+
             # ==========================
             # 🔍 디버깅 (첫 달만)
             # ==========================
             if ym == months[0]:
                 st.subheader("🧪 국토부 API 응답 디버깅")
                 st.code(r.text[:1000])
-    
+
             soup = BeautifulSoup(r.text, "xml")
             header = soup.find("header")
-    
+
             if header and ym == months[0]:
                 st.write(
                     f"📅 {ym}",
@@ -148,16 +147,15 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
                     "resultMsg:", header.find("resultMsg").text
                 )
             # ==========================
-    
+
             if r.status_code != 200:
                 time.sleep(1)
                 continue
-    
+
             items = soup.find_all("item")
-    
             if not items:
-                continue  # ← break ❌
-    
+                continue
+
             for it in items:
                 try:
                     rows.append({
@@ -167,7 +165,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
                     })
                 except:
                     continue
-    
+
         except (ConnectionError, Timeout):
             time.sleep(2)
             continue
@@ -181,6 +179,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     )
 
     return df
+
 
 # ======================================================
 # UI
