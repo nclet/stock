@@ -116,8 +116,8 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     rows = []
 
     # 포트 8081은 제외하고 표준 http/https 사용
-    BASE_URL = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
-
+    BASE_URL = "https://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    
     for ym in months:
         # 2. URL 직접 결합 (requests의 params 인코딩 오류 방지)
         url = f"{BASE_URL}?serviceKey={service_key}&LAWD_CD={lawd_cd}&DEAL_YMD={ym}&numOfRows=1000"
