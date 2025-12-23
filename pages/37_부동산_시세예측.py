@@ -11,6 +11,8 @@ import shap
 import plotly.express as px
 import re
 import urllib.parse
+import time
+from requests.exceptions import ConnectionError, Timeout
 
 # ======================================================
 # 페이지 설정
@@ -87,21 +89,21 @@ def get_naver_news(query):
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
 
-    # ✅ 공공데이터포털 API 키 (최상위 key)
     service_key = st.secrets.get("MOLIT_KEY", None)
-
     if service_key is None:
-        st.error("❌ MOLIT_KEY가 secrets에 설정되어 있지 않습니다.")
+        st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
 
     months = pd.period_range(start=start_ym, end=end_ym, freq="M").astype(str)
     rows = []
 
+    BASE_URL = (
+        "https://openapi.molit.go.kr/"
+        "OpenAPI_ToolInstallPackage/service/rest/"
+        "RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    )
+
     for ym in months:
-        url = (
-            "https://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/"
-            "service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
-        )
         params = {
             "serviceKey": service_key,
             "LAWD_CD": lawd_cd,
@@ -109,22 +111,41 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
             "numOfRows": 1000
         }
 
-        r = requests.get(url, params=params, timeout=10)
+        success = False
 
-        if r.status_code != 200:
-            continue
-
-        soup = BeautifulSoup(r.text, "xml")
-
-        for it in soup.find_all("item"):
+        for attempt in range(3):  # ✅ 최대 3회 재시도
             try:
-                rows.append({
-                    "price": int(it.거래금액.text.replace(",", "")),
-                    "year": int(it.년.text),
-                    "month": int(it.월.text)
-                })
-            except:
-                continue
+                r = requests.get(
+                    BASE_URL,
+                    params=params,
+                    timeout=10
+                )
+
+                if r.status_code != 200:
+                    time.sleep(1)
+                    continue
+
+                soup = BeautifulSoup(r.text, "xml")
+
+                for it in soup.find_all("item"):
+                    try:
+                        rows.append({
+                            "price": int(it.거래금액.text.replace(",", "")),
+                            "year": int(it.년.text),
+                            "month": int(it.월.text)
+                        })
+                    except:
+                        continue
+
+                success = True
+                break  # 성공하면 retry 탈출
+
+            except (ConnectionError, Timeout):
+                time.sleep(2)  # 서버 쉬게 해줌
+
+        if not success:
+            # ❗ 이 달 데이터만 스킵
+            continue
 
     if not rows:
         return pd.DataFrame()
