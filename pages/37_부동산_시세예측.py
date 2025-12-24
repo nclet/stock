@@ -94,7 +94,7 @@ def get_naver_news(query):
     cs = st.secrets["naver"]["client_secret"]
 
     enc_query = urllib.parse.quote(query)
-    url = f"https://openapi.naver.com/v1/search/news.json?query={enc_query}&display=100&sort=date"
+    url = f"http://openapi.naver.com/v1/search/news.json?query={enc_query}&display=100&sort=date"
     headers = {
         "X-Naver-Client-Id": cid,
         "X-Naver-Client-Secret": cs
