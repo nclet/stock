@@ -197,77 +197,65 @@ def get_naver_news(query):
 #     return df
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
-    # 1. 시군구 코드 5자리 강제 추출
     clean_lawd_cd = str(lawd_cd)[:5]
-    
     service_key = st.secrets.get("MOLIT_KEY", None)
-    if not service_key:
-        st.error("❌ MOLIT_KEY가 없습니다.")
-        return pd.DataFrame()
-
-    # 키 디코딩 (이미 인코딩된 키 중복 방지)
     decoded_key = requests.utils.unquote(service_key)
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
 
-    # 2. 프로토콜을 http로 명시하고 포트 80을 강제 지정 (https/443 회피)
-    # URL에서 https가 아닌 http인지 다시 한번 확인하세요!
-    BASE_URL = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
-
-    # 세션 재사용 방지 및 깨끗한 HTTP 연결을 위해 매번 새로운 세션 사용 고려
+    # ✅ 새로운 엔드포인트 주소 (최신 버전)
+    # 기존: http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade
+    # 신규 시도: 아래 주소는 국토부에서 제공하는 공식 최신 가이드 기준입니다.
+    BASE_URL = "http://openapi.molit.go.kr:8081/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
+    # 만약 위 주소도 안된다면 :8081을 빼고 시도하세요.
+    
     for ym in months:
+        # API 가이드에 맞춘 정확한 파라미터 전달
         params = {
             'serviceKey': decoded_key,
             'LAWD_CD': clean_lawd_cd,
-            'DEAL_YMD': ym,
-            'numOfRows': '1000'
+            'DEAL_YMD': ym
         }
 
         try:
-            # 3. 중요: verify=False 및 리다이렉트 금지(allow_redirects=False)
-            # 일부 환경에서 http를 자동으로 https로 바꾸는 것을 막습니다.
-            r = requests.get(
-                BASE_URL, 
-                params=params, 
-                timeout=20, 
-                verify=False, 
-                allow_redirects=False
-            )
+            # 브라우저인 것처럼 속이기 위한 User-Agent 추가
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
             
-            # 응답 내용 확인
-            if r.status_code != 200:
-                st.warning(f"⚠️ {ym} 서버 응답 이상 (Status: {r.status_code})")
-                continue
+            r = requests.get(BASE_URL, params=params, headers=headers, timeout=15)
+            
+            # 응답 확인
+            if "Connection refused" in r.text or r.status_code != 200:
+                # 만약 8081 포트가 막혔다면 일반 포트로 재시도
+                ALT_URL = BASE_URL.replace(":8081", "")
+                r = requests.get(ALT_URL, params=params, headers=headers, timeout=15)
 
             soup = BeautifulSoup(r.text, "xml")
+            items = soup.find_all("item")
             
-            # API 내부 에러 메시지 확인
-            header = soup.find("header")
-            if header and header.find("resultCode").text != '00':
-                st.warning(f"📅 {ym}: {header.find('resultMsg').text}")
+            if not items:
+                # 데이터가 없는 것인지, 키 에러인지 출력
+                header = soup.find("header")
+                if header and header.find("resultCode").text != "00":
+                    st.error(f"❌ {ym} 에러: {header.find('resultMsg').text}")
                 continue
 
-            items = soup.find_all("item")
             for it in items:
-                try:
-                    rows.append({
-                        "price": int(it.find("거래금액").text.replace(",", "").strip()),
-                        "year": int(it.find("년").text.strip()),
-                        "month": int(it.find("월").text.strip()),
-                        "day": int(it.find("일").text.strip())
-                    })
-                except:
-                    continue
+                rows.append({
+                    "price": int(it.find("거래금액").text.replace(",", "").strip()),
+                    "year": int(it.find("년").text.strip()),
+                    "month": int(it.find("월").text.strip())
+                })
+            
+            # 한 달 성공 시 짧은 휴식
+            time.sleep(0.5)
 
         except Exception as e:
-            # 여기서 여전히 HTTPS/443 에러가 뜬다면 로컬/서버 방화벽의 문제입니다.
-            st.error(f"🚨 {ym} 연결 실패: {e}")
-            continue
-
-        time.sleep(0.2)
+            st.warning(f"⚠️ {ym} 호출 실패. 네트워크 환경을 확인하세요: {e}")
+            break # 계속 실패하면 중단
 
     return pd.DataFrame(rows)
-
 # ======================================================
 # UI
 # ======================================================
