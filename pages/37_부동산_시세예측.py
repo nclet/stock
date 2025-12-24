@@ -125,7 +125,9 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
     if service_key is None:
         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
         return pd.DataFrame()
-
+        
+    decoded_key = requests.utils.unquote(service_key)
+    
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
 
