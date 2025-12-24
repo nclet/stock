@@ -199,7 +199,7 @@ def load_real_estate_data(lawd_cd, start_ym, end_ym):
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    lawd_cd = st.text_input("📍 법정동 코드 (예: 강남구 11680)", "1168010100")
+    lawd_cd = st.text_input("📍 법정동 코드 (예: 강남구 11680)", "11680")
 with col2:
     start_ym = st.text_input("시작 월 (YYYY-MM)", "2020-01")
 with col3:
