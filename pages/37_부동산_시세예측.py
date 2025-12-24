@@ -117,84 +117,157 @@ def get_naver_news(query):
 # 국토교통부 실거래 API (MOLIT_KEY 적용)
 # =====================================================
 
+# @st.cache_data
+# def load_real_estate_data(lawd_cd, start_ym, end_ym):
+
+#     # 1️⃣ 키는 절대 quote 하지 마세요
+#     service_key = st.secrets.get("MOLIT_KEY", None)
+#     if service_key is None:
+#         st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
+#         return pd.DataFrame()
+        
+#     decoded_key = requests.utils.unquote(service_key)
+    
+#     months = make_yyyymm_list(start_ym, end_ym)
+#     rows = []
+
+#     BASE_URL = (
+#         "https://openapi.molit.go.kr/"
+#         "OpenAPI_ToolInstallPackage/service/rest/"
+#         "RTMSOBJSvc/getRTMSDataSvcAptTrade"
+#     )
+
+#     session = create_session()
+
+#     for ym in months:
+#         url = (
+#             f"{BASE_URL}"
+#             f"?serviceKey={service_key}"
+#             f"&LAWD_CD={lawd_cd}"
+#             f"&DEAL_YMD={ym}"
+#             f"&numOfRows=1000"
+#         )
+
+#         try:
+#             r = session.get(url, timeout=20)
+
+#             soup = BeautifulSoup(r.text, "xml")
+
+#             # 🔍 첫 달만 상태 출력
+#             if ym == months[0]:
+#                 header = soup.find("header")
+#                 if header:
+#                     st.subheader("🧪 국토부 API 상태")
+#                     st.write(
+#                         "resultCode:", header.find("resultCode").text,
+#                         "resultMsg:", header.find("resultMsg").text
+#                     )
+
+#             items = soup.find_all("item")
+#             if not items:
+#                 continue
+
+#             for it in items:
+#                 try:
+#                     rows.append({
+#                         "price": int(it.find("거래금액").text.replace(",", "").strip()),
+#                         "year": int(it.find("년").text.strip()),
+#                         "month": int(it.find("월").text.strip())
+#                     })
+#                 except Exception:
+#                     continue
+
+#         except Exception as e:
+#             st.warning(f"⚠️ {ym} 로드 중 오류: {e}")
+#             continue
+
+#         time.sleep(0.5)
+
+#     if not rows:
+#         return pd.DataFrame()
+
+#     df = pd.DataFrame(rows)
+#     df["date"] = pd.to_datetime(
+#         df["year"].astype(str)
+#         + "-"
+#         + df["month"].astype(str).str.zfill(2)
+#         + "-01"
+#     )
+
+#     return df
 @st.cache_data
 def load_real_estate_data(lawd_cd, start_ym, end_ym):
-
-    # 1️⃣ 키는 절대 quote 하지 마세요
-    service_key = st.secrets.get("MOLIT_KEY", None)
-    if service_key is None:
-        st.error("❌ MOLIT_KEY가 secrets에 없습니다.")
-        return pd.DataFrame()
-        
-    decoded_key = requests.utils.unquote(service_key)
+    # 1. 시군구 코드 5자리 강제 추출
+    clean_lawd_cd = str(lawd_cd)[:5]
     
+    service_key = st.secrets.get("MOLIT_KEY", None)
+    if not service_key:
+        st.error("❌ MOLIT_KEY가 없습니다.")
+        return pd.DataFrame()
+
+    # 키 디코딩 (이미 인코딩된 키 중복 방지)
+    decoded_key = requests.utils.unquote(service_key)
     months = make_yyyymm_list(start_ym, end_ym)
     rows = []
 
-    BASE_URL = (
-        "https://openapi.molit.go.kr/"
-        "OpenAPI_ToolInstallPackage/service/rest/"
-        "RTMSOBJSvc/getRTMSDataSvcAptTrade"
-    )
+    # 2. 프로토콜을 http로 명시하고 포트 80을 강제 지정 (https/443 회피)
+    # URL에서 https가 아닌 http인지 다시 한번 확인하세요!
+    BASE_URL = "http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTrade"
 
-    session = create_session()
-
+    # 세션 재사용 방지 및 깨끗한 HTTP 연결을 위해 매번 새로운 세션 사용 고려
     for ym in months:
-        url = (
-            f"{BASE_URL}"
-            f"?serviceKey={service_key}"
-            f"&LAWD_CD={lawd_cd}"
-            f"&DEAL_YMD={ym}"
-            f"&numOfRows=1000"
-        )
+        params = {
+            'serviceKey': decoded_key,
+            'LAWD_CD': clean_lawd_cd,
+            'DEAL_YMD': ym,
+            'numOfRows': '1000'
+        }
 
         try:
-            r = session.get(url, timeout=20)
-
-            soup = BeautifulSoup(r.text, "xml")
-
-            # 🔍 첫 달만 상태 출력
-            if ym == months[0]:
-                header = soup.find("header")
-                if header:
-                    st.subheader("🧪 국토부 API 상태")
-                    st.write(
-                        "resultCode:", header.find("resultCode").text,
-                        "resultMsg:", header.find("resultMsg").text
-                    )
-
-            items = soup.find_all("item")
-            if not items:
+            # 3. 중요: verify=False 및 리다이렉트 금지(allow_redirects=False)
+            # 일부 환경에서 http를 자동으로 https로 바꾸는 것을 막습니다.
+            r = requests.get(
+                BASE_URL, 
+                params=params, 
+                timeout=20, 
+                verify=False, 
+                allow_redirects=False
+            )
+            
+            # 응답 내용 확인
+            if r.status_code != 200:
+                st.warning(f"⚠️ {ym} 서버 응답 이상 (Status: {r.status_code})")
                 continue
 
+            soup = BeautifulSoup(r.text, "xml")
+            
+            # API 내부 에러 메시지 확인
+            header = soup.find("header")
+            if header and header.find("resultCode").text != '00':
+                st.warning(f"📅 {ym}: {header.find('resultMsg').text}")
+                continue
+
+            items = soup.find_all("item")
             for it in items:
                 try:
                     rows.append({
                         "price": int(it.find("거래금액").text.replace(",", "").strip()),
                         "year": int(it.find("년").text.strip()),
-                        "month": int(it.find("월").text.strip())
+                        "month": int(it.find("월").text.strip()),
+                        "day": int(it.find("일").text.strip())
                     })
-                except Exception:
+                except:
                     continue
 
         except Exception as e:
-            st.warning(f"⚠️ {ym} 로드 중 오류: {e}")
+            # 여기서 여전히 HTTPS/443 에러가 뜬다면 로컬/서버 방화벽의 문제입니다.
+            st.error(f"🚨 {ym} 연결 실패: {e}")
             continue
 
-        time.sleep(0.5)
+        time.sleep(0.2)
 
-    if not rows:
-        return pd.DataFrame()
+    return pd.DataFrame(rows)
 
-    df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(
-        df["year"].astype(str)
-        + "-"
-        + df["month"].astype(str).str.zfill(2)
-        + "-01"
-    )
-
-    return df
 # ======================================================
 # UI
 # ======================================================
