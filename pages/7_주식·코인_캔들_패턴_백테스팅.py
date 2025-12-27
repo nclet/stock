@@ -1,195 +1,215 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import datetime
+import matplotlib.pyplot as plt
+import lightgbm as lgb
+import shap
+
 import FinanceDataReader as fdr
 import pyupbit
-import matplotlib.pyplot as plt
-import mplfinance as mpf
-import lightgbm as lgb
-import plotly.express as px
-import datetime
-import requests
-import time
+
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 
 # ======================================================
-# 1. 초기 설정 및 매핑 데이터
+# 1. 캔들 패턴 탐지
 # ======================================================
-st.set_page_config(page_title="AI 캔들 패턴 전략 분석기", layout="wide")
-
-pattern_mapping = {
-    'is_hammer': {'label': '망치형 (상승)', 'initial': '[H]'},
-    'is_inverted_hammer': {'label': '역망치형 (하락)', 'initial': '[IH]'},
-    'is_doji': {'label': '도지형', 'initial': '[D]'},
-    'is_bullish_engulfing': {'label': '상승장악형', 'initial': '[BE]'},
-    'is_bearish_engulfing': {'label': '하락장악형', 'initial': '[BEE]'},
-    'is_piercing_line': {'label': '관통형', 'initial': '[PL]'},
-    'is_dark_cloud_cover': {'label': '흑운형', 'initial': '[DCC]'},
-    'is_three_white_soldiers': {'label': '적삼병', 'initial': '[TWS]'},
-    'is_three_black_crows': {'label': '흑삼병', 'initial': '[TBC]'},
-    'is_shooting_star': {'label': '유성형', 'initial': '[SS]'},
-    'is_hanging_man': {'label': '교수형', 'initial': '[HM]'}
-}
-
-# ======================================================
-# 2. 데이터 수집 및 전처리 (수치적 특징/맥락 추가)
-# ======================================================
-
-@st.cache_data
-def get_data(ticker, start_date, end_date, market, period='일봉'):
-    try:
-        if market in ['한국 주식 (KRX)', '미국 증시 (NYSE/NASDAQ)']:
-            df = fdr.DataReader(ticker, start_date, end_date)
-        else:
-            upbit_map = {'일봉': 'day', '주봉': 'week', '월봉': 'month'}
-            count = (end_date - start_date).days + 1
-            df = pyupbit.get_ohlcv(ticker, interval=upbit_map[period], count=count)
-            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'value']
-        
-        df.index.name = 'Date'
-        return df
-    except Exception as e:
-        st.error(f"데이터 로드 실패: {e}")
-        return None
-
 def find_candle_patterns(df):
-    """캔들 패턴 식별 및 수치적 특징(강도, 맥락) 계산"""
-    d = df.copy()
-    
-    # 1. 캔들 수치 정보 (Factor 추출)
-    d['body_size'] = abs(d['Close'] - d['Open'])
-    d['total_range'] = d['High'] - d['Low'] + 1e-10
-    d['upper_shadow'] = d['High'] - d[['Open', 'Close']].max(axis=1)
-    d['lower_shadow'] = d[['Open', 'Close']].min(axis=1) - d['Low']
-    
-    # 패턴 강도 및 맥락 피처
-    d['body_ratio'] = d['body_size'] / d['total_range']
-    d['upper_shadow_ratio'] = d['upper_shadow'] / d['total_range']
-    d['MA20'] = d['Close'].rolling(window=20).mean()
-    d['disparity'] = (d['Close'] / d['MA20']) * 100  # 추세 맥락: 이격도
-    d['vol_change'] = d['Volume'].pct_change()       # 거래량 변화 맥락
-    
-    # 2. 개별 패턴 로직 (기존 로직 포함)
-    d['is_hammer'] = (d['lower_shadow'] > 2 * d['body_size']) & (d['upper_shadow'] < d['body_size']) & (d['Close'] > d['Open'])
-    d['is_doji'] = d['body_size'] < (d['total_range'] * 0.1)
-    d['is_bullish_engulfing'] = (d['Close'].shift(1) < d['Open'].shift(1)) & (d['Close'] > d['Open']) & \
-                                (d['Open'] < d['Close'].shift(1)) & (d['Close'] > d['Open'].shift(1))
-    # ... (다른 패턴들 생략 가능하나 구조 유지를 위해 핵심만 포함) ...
-    d['is_shooting_star'] = (d['upper_shadow'] > 2 * d['body_size']) & (d['lower_shadow'] < d['body_size']) & (d['Close'] < d['Open'])
-    
-    # 타겟 변수: 5봉 후 수익률
-    d['target_return'] = (d['Close'].shift(-5) / d['Close'] - 1) * 100
-    
-    return d
+    df = df.copy()
+    df['body'] = abs(df['Close'] - df['Open'])
+    df['range'] = df['High'] - df['Low']
+    df['upper_shadow'] = df['High'] - df[['Open', 'Close']].max(axis=1)
+    df['lower_shadow'] = df[['Open', 'Close']].min(axis=1) - df['Low']
+
+    df['is_hammer'] = (df['lower_shadow'] > 2 * df['body']) & (df['upper_shadow'] < df['body'])
+    df['is_doji'] = (df['body'] / df['range'] < 0.05)
+
+    df['is_bullish_engulfing'] = (
+        (df['Close'] > df['Open']) &
+        (df['Close'].shift(1) < df['Open'].shift(1)) &
+        (df['Open'] < df['Close'].shift(1)) &
+        (df['Close'] > df['Open'].shift(1))
+    )
+
+    return df
+
+PATTERN_COLS = [
+    'is_hammer',
+    'is_doji',
+    'is_bullish_engulfing'
+]
 
 # ======================================================
-# 3. LightGBM 모델링 및 예측
+# 2. 수치적 특징
 # ======================================================
+def add_numeric_features(df):
+    df = df.copy()
+    df['body_ratio'] = df['body'] / df['range']
+    df['upper_ratio'] = df['upper_shadow'] / df['range']
+    df['lower_ratio'] = df['lower_shadow'] / df['range']
+    df['volatility'] = df['range'] / df['Close']
+    return df
 
-def train_lgb_model(df, pattern_cols):
-    # 피처 엔지니어링 팩터 통합
-    feature_cols = pattern_cols + ['body_ratio', 'upper_shadow_ratio', 'disparity', 'vol_change']
-    
-    # 학습 데이터 정제
-    df_model = df.dropna(subset=['target_return'] + feature_cols)
-    if len(df_model) < 30:
-        return None, None, None
+# ======================================================
+# 3. 추세 & 맥락
+# ======================================================
+def add_context_features(df):
+    df = df.copy()
+    df['MA20'] = df['Close'].rolling(20).mean()
+    df['MA60'] = df['Close'].rolling(60).mean()
+    df['trend'] = (df['MA20'] > df['MA60']).astype(int)
 
-    X = df_model[feature_cols].astype(float)
-    y = df_model['target_return']
-    
-    # 시계열 분할
-    split = int(len(X) * 0.8)
-    X_train, X_test = X.iloc[:split], X.iloc[split:]
-    y_train, y_test = y.iloc[:split], y.iloc[split:]
-    
-    model = lgb.LGBMRegressor(n_estimators=200, learning_rate=0.03, importance_type='gain', verbose=-1)
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = -delta.clip(upper=0).rolling(14).mean()
+    rs = gain / (loss + 1e-9)
+    df['RSI'] = 100 - (100 / (1 + rs))
+    return df
+
+# ======================================================
+# 4. 패턴 강도
+# ======================================================
+def add_pattern_strength(df):
+    df = df.copy()
+    df['pattern_strength'] = (
+        df['body_ratio'] +
+        df['lower_ratio'] -
+        df['upper_ratio']
+    )
+    return df
+
+# ======================================================
+# 5. 타겟 변수
+# ======================================================
+def add_targets(df):
+    df = df.copy()
+    df['ret_3'] = df['Close'].shift(-3) / df['Close'] - 1
+    df['ret_5'] = df['Close'].shift(-5) / df['Close'] - 1
+    df['ret_10'] = df['Close'].shift(-10) / df['Close'] - 1
+    return df
+
+# ======================================================
+# 6. LightGBM 학습
+# ======================================================
+def train_lgbm(df, target):
+    feature_cols = (
+        PATTERN_COLS +
+        ['body_ratio', 'upper_ratio', 'lower_ratio',
+         'volatility', 'trend', 'RSI', 'pattern_strength']
+    )
+
+    df = df.dropna()
+    X = df[feature_cols]
+    y = df[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, shuffle=False, test_size=0.2
+    )
+
+    model = lgb.LGBMRegressor(
+        n_estimators=500,
+        learning_rate=0.01,
+        num_leaves=31
+    )
     model.fit(X_train, y_train)
-    
-    # 현재 시점 예측
-    current_x = X.iloc[[-1]]
-    prediction = model.predict(current_x)[0]
-    
-    # 중요도 계산
-    importances = pd.DataFrame({'feature': feature_cols, 'importance': model.feature_importances_})
-    importances = importances.sort_values('importance', ascending=False)
-    
-    return prediction, importances, y_test
+
+    preds = model.predict(X_test)
+    rmse = mean_squared_error(y_test, preds, squared=False)
+
+    return model, rmse, X, y
 
 # ======================================================
-# 4. Streamlit UI 및 시각화
+# 7. 패턴 승률 리포트
 # ======================================================
+def pattern_report(df):
+    rows = []
+    for p in PATTERN_COLS:
+        trades = df[df[p]]
+        if len(trades) > 10:
+            winrate = (trades['ret_5'] > 0).mean() * 100
+            rows.append({
+                'Pattern': p,
+                'Count': len(trades),
+                'WinRate(%)': winrate
+            })
+    return pd.DataFrame(rows).sort_values('WinRate(%)', ascending=False)
 
-st.markdown("<h1 style='text-align: center;'>🚀 AI 캔들 패턴 & 수익률 예측 시스템</h1>", unsafe_allow_html=True)
+# ======================================================
+# 8. Streamlit UI
+# ======================================================
+st.set_page_config(layout="wide")
+st.title("📊 AI 캔들 패턴 수익률 예측기 (LightGBM)")
 
-# 사이드바 설정
-st.sidebar.header("🔍 분석 설정")
-market = st.sidebar.selectbox("시장 선택", ['한국 주식 (KRX)', '코인 (Upbit)'])
-ticker = st.sidebar.text_input("티커 입력", "005930" if market == '한국 주식 (KRX)' else "KRW-BTC")
-start_date = st.sidebar.date_input("시작일", datetime.date.today() - datetime.timedelta(days=365))
-end_date = st.sidebar.date_input("종료일", datetime.date.today())
+market = st.radio("시장 선택", ["KRX 주식", "미국 주식", "코인(Upbit)"], horizontal=True)
+ticker = st.text_input("티커", "AAPL")
 
-selected_patterns = st.sidebar.multiselect(
-    "적용할 캔들 패턴", 
-    list(pattern_mapping.keys()), 
-    default=['is_hammer', 'is_bullish_engulfing', 'is_doji']
-)
+target_map = {
+    "3봉 수익률": "ret_3",
+    "5봉 수익률": "ret_5",
+    "10봉 수익률": "ret_10"
+}
+target_label = st.selectbox("예측 수익률 기준", list(target_map.keys()))
+target_col = target_map[target_label]
 
-if st.sidebar.button("분석 실행"):
-    df_raw = get_data(ticker, start_date, end_date, market)
-    
-    if df_raw is not None:
-        df = find_candle_patterns(df_raw)
-        
-        # --- 1. 차트 시각화 ---
-        st.subheader("📈 캔들 차트 분석")
-        mc = mpf.make_marketcolors(up='red', down='blue', inherit=True)
-        s = mpf.make_mpf_style(marketcolors=mc, gridcolor='lightgray')
-        fig, ax = mpf.plot(df, type='candle', style=s, volume=True, returnfig=True, figratio=(12, 6))
-        st.pyplot(fig)
+if st.button("🚀 분석 실행"):
 
-        # --- 2. AI 예측 리포트 ---
-        st.divider()
-        st.subheader("🤖 LightGBM AI 수익률 예측")
-        
-        pred, importance, y_test = train_lgb_model(df, selected_patterns)
-        
-        if pred is not None:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.metric("5봉 후 예상 수익률", f"{pred:+.2f}%")
-                # 히스토그램 시각화
-                fig_hist = px.histogram(y_test, nbins=20, title="과거 유사 패턴 수익률 분포", labels={'value': '수익률(%)'})
-                fig_hist.add_vline(x=pred, line_dash="dash", line_color="red", annotation_text="현재 예측치")
-                st.plotly_chart(fig_hist, use_container_width=True)
-            
-            with col2:
-                st.write("🎯 **AI 결정 요인 (Feature Importance)**")
-                st.bar_chart(importance.set_index('feature').head(5))
-                
-            # --- 3. 패턴별 승률 리포트 ---
-            st.divider()
-            st.subheader("📊 패턴별 과거 성과 요약")
-            report_data = []
-            for pat in selected_patterns:
-                temp_df = df[df[pat] == True]
-                if not temp_df.empty:
-                    win_rate = (temp_df['target_return'] > 0).mean() * 100
-                    avg_ret = temp_df['target_return'].mean()
-                    report_data.append({'패턴명': pattern_mapping[pat]['label'], '발생수': len(temp_df), '과거 승률': f"{win_rate:.1f}%", '평균 수익': f"{avg_ret:+.2f}%"})
-            
-            if report_data:
-                st.table(pd.DataFrame(report_data))
+    with st.spinner("데이터 로딩 중..."):
+        if market == "코인(Upbit)":
+            df = pyupbit.get_ohlcv(ticker, count=500)
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'Value']
         else:
-            st.warning("예측 모델을 생성하기 위한 데이터가 부족합니다.")
+            df = fdr.DataReader(ticker)
 
-# --- 실시간 스캐너 섹션 (UI 가이드) ---
-with st.expander("🔍 실시간 시장 패턴 스캐너 (Beta)"):
-    st.write("현재 시장에서 강력한 패턴이 감지된 종목입니다.")
-    st.info("이 기능은 추가적인 종목 리스트 루프 구현이 필요합니다. (현재는 데모 텍스트)")
-    st.write("- **삼성전자(005930)**: 망치형 발생 (AI 신뢰도: 78%)")
-    st.write("- **비트코인(BTC)**: 상승장악형 발생 (AI 신뢰도: 65%)")
+    df = find_candle_patterns(df)
+    df = add_numeric_features(df)
+    df = add_context_features(df)
+    df = add_pattern_strength(df)
+    df = add_targets(df)
+
+    model, rmse, X, y = train_lgbm(df, target_col)
+
+    st.success(f"모델 학습 완료 | RMSE: {rmse:.4f}")
+
+    # ======================================================
+    # 예측
+    # ======================================================
+    latest_X = X.iloc[[-1]]
+    pred = model.predict(latest_X)[0]
+
+    st.metric("📈 예상 수익률", f"{pred*100:.2f}%")
+
+    # ======================================================
+    # 수익률 분포
+    # ======================================================
+    st.subheader("📊 수익률 분포")
+    fig, ax = plt.subplots()
+    ax.hist(y * 100, bins=30)
+    ax.axvline(pred * 100, color='red', linestyle='--', label='Prediction')
+    ax.legend()
+    st.pyplot(fig)
+
+    # ======================================================
+    # 패턴 리포트
+    # ======================================================
+    st.subheader("🏆 패턴별 승률 리포트")
+    report = pattern_report(df)
+    st.dataframe(report)
+
+    # ======================================================
+    # SHAP
+    # ======================================================
+    st.subheader("🔍 SHAP 기여도")
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X.iloc[[-1]])
+
+    shap_df = pd.DataFrame({
+        'Feature': X.columns,
+        'SHAP': shap_values[0]
+    }).sort_values('SHAP', key=abs, ascending=False)
+
+    st.dataframe(shap_df)
+
 
 # # Streamlit을 사용한 웹 애플리케이션 제작에 필요한 라이브러리
 # import streamlit as st
