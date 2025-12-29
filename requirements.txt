@@ -27,7 +27,6 @@ lightgbm
 plotly
 pykrx
 ta==0.10.1 
-ta==0.10.1 
 PyTrends
 shap
 catboost
