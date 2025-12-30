@@ -57,7 +57,7 @@ def calculate_advanced_factors(df):
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['Disparity'] = (df['Close'] / df['MA20']) * 100
     
-    # 4. 백테스팅용: 5거래일 후 수익률 (Forward Return)
+    # 4. 백테스팅용: 5거래일 후 수익률
     df['Next_5d_Return'] = (df['Close'].shift(-5) / df['Close'] - 1) * 100
     
     return df
@@ -76,25 +76,21 @@ def find_candle_patterns(df):
         upper_shadow = high_p - max(open_p, close_p)
         lower_shadow = min(open_p, close_p) - low_p
         
-        # 신뢰도 조건 예시: 거래량이 평균 이상이고, 캔들 몸통이 어느 정도 클 때
+        # 신뢰도 조건: 거래량 1.2배 이상
         is_reliable = df.iloc[i]['Vol_Ratio'] > 1.2
         
-        # 망치형 (바닥권 신호)
         if body_length > 0 and lower_shadow > 2 * body_length and upper_shadow < body_length:
-            if close_p > open_p and df.iloc[i]['Disparity'] < 100: # 이격도가 낮을 때만
+            if close_p > open_p and df.iloc[i]['Disparity'] < 100:
                 df.at[df.index[i], 'is_hammer'] = True
         
-        # 상승장악형
         if (prev_close < prev_open and close_p > open_p and 
             open_p < prev_close and close_p > prev_open and is_reliable):
             df.at[df.index[i], 'is_bullish_engulfing'] = True
 
-        # 하락장악형
         if (prev_close > prev_open and close_p < open_p and 
             open_p > prev_close and close_p < prev_open and is_reliable):
             df.at[df.index[i], 'is_bearish_engulfing'] = True
 
-        # 유성형 (고점 신호)
         if body_length > 0 and upper_shadow > 2 * body_length and lower_shadow < body_length:
             if close_p < open_p and df.iloc[i]['Disparity'] > 100:
                 df.at[df.index[i], 'is_shooting_star'] = True
@@ -102,15 +98,20 @@ def find_candle_patterns(df):
     return df
 
 # ---------------------------------------------------------------------------------
-# 2. UI 및 메인 로직
+# 2. UI 및 메인 로직 (본문 위주 구성)
 # ---------------------------------------------------------------------------------
-st.set_page_config(page_title="심화 캔들 패턴 백테스터", layout="wide")
-st.title("📈 심화 캔들 패턴 & 백테스팅 분석기")
+st.set_page_config(page_title="심화 캔들 패턴 분석기", layout="wide")
+st.markdown("<h1 style='text-align: center;'>📈 심화 캔들 패턴 & 백테스팅 분석기</h1>", unsafe_allow_html=True)
 
-# 사이드바 설정
-st.sidebar.header("설정")
-market_choice = st.sidebar.radio("시장 선택", ['한국 주식 (KRX)', '미국 주식 (NASDAQ)', '코인 (Upbit)'])
-period = st.sidebar.selectbox("봉 주기", ['일봉', '주봉'])
+# --- 1. 분석 옵션 (본문 구성) ---
+st.subheader("1. 시장 및 종목 설정")
+col1, col2, col3 = st.columns([1, 1, 2])
+
+with col1:
+    market_choice = st.radio("분석 시장", ['한국 주식 (KRX)', '미국 주식 (NASDAQ)', '코인 (Upbit)'])
+
+with col2:
+    period = st.radio("봉 주기", ['일봉', '주봉'])
 
 # 데이터 로드
 if '주식' in market_choice:
@@ -119,58 +120,80 @@ if '주식' in market_choice:
 else:
     listing = get_coin_listing()
 
-selected_label = st.selectbox("종목 선택", listing['label'].tolist())
-ticker = listing[listing['label'] == selected_label]['Code'].values[0]
+with col3:
+    if not listing.empty:
+        selected_label = st.selectbox("종목 선택", listing['label'].tolist())
+        ticker = listing[listing['label'] == selected_label]['Code'].values[0]
 
-# 날짜 설정
-start_date = st.sidebar.date_input("시작일", datetime.date.today() - datetime.timedelta(days=365))
-end_date = st.sidebar.date_input("종료일", datetime.date.today())
+# --- 2. 날짜 설정 (본문 구성) ---
+st.subheader("2. 분석 기간 설정")
+col4, col5 = st.columns(2)
+with col4:
+    start_date = st.date_input("시작일", datetime.date.today() - datetime.timedelta(days=365))
+with col5:
+    end_date = st.date_input("종료일", datetime.date.today())
 
-if st.button("데이터 분석 및 백테스팅 시작"):
-    # 데이터 가져오기 (이전 코드의 get_data 함수 로직 포함)
-    if '주식' in market_choice:
-        df = fdr.DataReader(ticker, start_date, end_date)
-    else:
-        interval = 'day' if period == '일봉' else 'week'
-        df = pyupbit.get_ohlcv(ticker, interval=interval, count=200)
+st.divider()
 
-    if df is not None and not df.empty:
-        # 팩터 계산 및 패턴 매칭
-        df = calculate_advanced_factors(df)
-        df = find_candle_patterns(df)
-        
-        # --- 백테스팅 통계 섹션 ---
-        st.subheader("📊 패턴별 5일 후 승률 리포트")
-        pattern_cols = ['is_hammer', 'is_bullish_engulfing', 'is_bearish_engulfing', 'is_shooting_star']
-        cols = st.columns(len(pattern_cols))
-        
-        for idx, p_col in enumerate(pattern_cols):
-            p_data = df[df[p_col] == True]
-            if not p_data.empty:
-                win_rate = (p_data['Next_5d_Return'] > 0).mean() * 100
-                avg_ret = p_data['Next_5d_Return'].mean()
-                cols[idx].metric(p_col.replace('is_', '').upper(), f"{len(p_data)}회 발생", f"{win_rate:.1f}% 승률")
-                cols[idx].write(f"평균 수익: {avg_ret:.2f}%")
-            else:
-                cols[idx].write(f"{p_col} 발생 없음")
+if st.button("🚀 데이터 분석 및 백테스팅 시작", use_container_width=True, type="primary"):
+    with st.spinner('데이터를 분석 중입니다...'):
+        # 데이터 가져오기
+        if '주식' in market_choice:
+            df = fdr.DataReader(ticker, start_date, end_date)
+        else:
+            interval = 'day' if period == '일봉' else 'week'
+            df = pyupbit.get_ohlcv(ticker, interval=interval, count=400) # 넉넉히 가져옴
 
-        # --- 차트 시각화 ---
-        st.subheader("🕯️ 캔들 패턴 시각화 (거래량/RSI 포함)")
-        
-        # 패턴 마커 표시용 addplot
-        apds = []
-        if df['is_bullish_engulfing'].any():
-            apds.append(mpf.make_addplot(df['Low']*0.98, type='scatter', markersize=100, marker='^', color='green', scatter_limit=None))
-        if df['is_bearish_engulfing'].any():
-            apds.append(mpf.make_addplot(df['High']*1.02, type='scatter', markersize=100, marker='v', color='red', scatter_limit=None))
+        if df is not None and not df.empty:
+            # 팩터 계산 및 패턴 매칭
+            df = calculate_advanced_factors(df)
+            df = find_candle_patterns(df)
             
-        fig, ax = mpf.plot(df, type='candle', volume=True, addplot=apds, 
-                           style='filled_candles', figratio=(12, 8), returnfig=True,
-                           title=f"{selected_label} Analysis")
-        st.pyplot(fig)
-        
-        # 데이터프레임 확인
-        with st.expander("상세 데이터 보기"):
-            st.dataframe(df[['Open', 'High', 'Low', 'Close', 'Vol_Ratio', 'Disparity', 'Next_5d_Return']].dropna())
-    else:
-        st.error("데이터를 불러오지 못했습니다.")
+            # --- 3. 백테스팅 통계 섹션 ---
+            st.subheader("📊 패턴별 5일 후 승률 리포트")
+            pattern_cols = ['is_hammer', 'is_bullish_engulfing', 'is_bearish_engulfing', 'is_shooting_star']
+            stat_cols = st.columns(len(pattern_cols))
+            
+            has_any_pattern = False
+            for idx, p_col in enumerate(pattern_cols):
+                p_data = df[df[p_col] == True].copy()
+                if not p_data.empty:
+                    has_any_pattern = True
+                    # 유효한 수익률 데이터(마지막 5일 제외)만 계산
+                    valid_p_data = p_data.dropna(subset=['Next_5d_Return'])
+                    if not valid_p_data.empty:
+                        win_rate = (valid_p_data['Next_5d_Return'] > 0).mean() * 100
+                        avg_ret = valid_p_data['Next_5d_Return'].mean()
+                        stat_cols[idx].metric(p_col.replace('is_', '').upper(), f"{len(p_data)}회", f"{win_rate:.1f}% 승률")
+                        stat_cols[idx].caption(f"평균 수익: {avg_ret:.2f}%")
+                    else:
+                        stat_cols[idx].write(f"{p_col}\n데이터 부족")
+                else:
+                    stat_cols[idx].write(f"{p_col}\n발견 안됨")
+
+            # --- 4. 차트 시각화 ---
+            st.subheader("🕯️ 캔들 패턴 시각화 (마커 표시)")
+            
+            apds = []
+            # 오류 수정한 마커 추가 부분 (scatter_limit 제거)
+            if df['is_bullish_engulfing'].any():
+                bull_data = df['Low'] * 0.97
+                bull_data[~df['is_bullish_engulfing']] = np.nan
+                apds.append(mpf.make_addplot(bull_data, type='scatter', markersize=120, marker='^', color='green'))
+            
+            if df['is_bearish_engulfing'].any():
+                bear_data = df['High'] * 1.03
+                bear_data[~df['is_bearish_engulfing']] = np.nan
+                apds.append(mpf.make_addplot(bear_data, type='scatter', markersize=120, marker='v', color='red'))
+            
+            # 차트 그리기
+            if not df.empty:
+                fig, axlist = mpf.plot(df, type='candle', volume=True, addplot=apds, 
+                                   style='charles', figratio=(16, 9), returnfig=True,
+                                   title=f"\n{selected_label} Analysis")
+                st.pyplot(fig)
+            
+            with st.expander("📝 분석 상세 데이터 확인"):
+                st.dataframe(df.tail(20))
+        else:
+            st.error("데이터를 불러오지 못했습니다. 종목 코드나 기간을 확인해주세요.")
